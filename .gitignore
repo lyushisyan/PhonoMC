@@ -1,0 +1,10 @@
+.DS_Store
+.vscode/
+
+# Project artifacts
+build/
+results/
+
+# Python caches
+**/__pycache__/
+.pytest_cache/
