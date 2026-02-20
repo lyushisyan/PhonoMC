@@ -1164,4 +1164,24 @@ void Simulation::run_timestep() {
         update_heat_flux_and_conductivity(geometry);
         append_convergence_row();
     }
+    int total_iters = args_.iterations;
+    int print_interval = std::max(1, total_iters / 100);
+
+    if (current_timestep_ % print_interval == 0 || current_timestep_ == total_iters) {
+        double progress = (static_cast<double>(current_timestep_) / total_iters) * 100.0;
+        
+        std::cout << "--- Progress: " << std::fixed << std::setprecision(1) << progress << "% ---" << std::endl;
+        
+        std::cout << "Temperature Profile (K): ";
+        for (double t : subvolume_temperatures_) {
+            std::cout << std::setprecision(2) << t << " ";
+        }
+        std::cout << std::endl;
+
+        if (args_.compute_thermal_conductivity) {
+            std::cout << "Current Conductivity (Fit): " << thermal_conductivity_fit_ << " W/mK" << std::endl;
+            std::cout << "Current Conductivity (End): " << thermal_conductivity_endpoints_ << " W/mK" << std::endl;
+        }
+        std::cout << "-------------------------" << std::endl;
+    }
 }
