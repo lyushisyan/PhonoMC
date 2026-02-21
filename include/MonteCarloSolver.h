@@ -8,12 +8,12 @@
 #include <utility>
 #include <vector>
 
-class Geometry;
-class Phonon;
+class SimulationDomain;
+class PhononMaterial;
 
-class Simulation {
+class MonteCarloSolver {
 public:
-    Simulation(const SimulationConfig& args, const Geometry& geometry, const Phonon& phonon);
+    MonteCarloSolver(const SimulationConfig& args, const SimulationDomain& geometry, const PhononMaterial& phonon);
 
     void run_timestep();
     int current_timestep() const { return current_timestep_; }
@@ -21,34 +21,34 @@ public:
 private:
     using Vec3 = std::array<double, 3>;
 
-    void initialize_particles(const Geometry& geometry, const Phonon& phonon);
-    void initialize_particle_modes(const Phonon& phonon);
-    void initialize_particle_temperatures(const Geometry& geometry);
-    void initialize_particle_velocities(const Phonon& phonon);
-    void initialize_reservoir_injection(const Geometry& geometry, const Phonon& phonon);
-    void initialize_rough_boundary_scattering(const Geometry& geometry, const Phonon& phonon);
-    void initialize_local_heat_source(const Geometry& geometry);
+    void initialize_particles(const SimulationDomain& geometry, const PhononMaterial& phonon);
+    void initialize_particle_modes(const PhononMaterial& phonon);
+    void initialize_particle_temperatures(const SimulationDomain& geometry);
+    void initialize_particle_velocities(const PhononMaterial& phonon);
+    void initialize_reservoir_injection(const SimulationDomain& geometry, const PhononMaterial& phonon);
+    void initialize_rough_boundary_scattering(const SimulationDomain& geometry, const PhononMaterial& phonon);
+    void initialize_local_heat_source(const SimulationDomain& geometry);
     void apply_local_heat_source();
     int sample_diffuse_active_mode(int rough_idx, int in_ai) const;
     std::array<int, 2> select_reflected_mode(
-        const Geometry& geometry,
-        const Phonon& phonon,
+        const SimulationDomain& geometry,
+        const PhononMaterial& phonon,
         int rough_idx,
         const std::array<int, 2>& in_mode,
         const Vec3& collision_pos,
         double& out_occupation,
         double in_occupation) const;
-    void update_collision_cache(const Geometry& geometry, const std::vector<int>& indices);
-    int classify_subvolume(const Geometry& geometry, const Vec3& p) const;
-    void process_collision(const Geometry& geometry, int i);
+    void update_collision_cache(const SimulationDomain& geometry, const std::vector<int>& indices);
+    int nearest_subvolume_index(const SimulationDomain& geometry, const Vec3& p) const;
+    void process_boundary_collision(const SimulationDomain& geometry, int i);
     void remove_absorbed_particles();
-    std::vector<std::pair<int, double>> inject_particles_from_reservoirs(const Geometry& geometry, const Phonon& phonon);
-    void advance_particle(const Geometry& geometry, const Phonon& phonon, int i, double dt_remaining);
-    void update_particle_temperatures(const Geometry& geometry, const Phonon& phonon);
-    void update_subvolume_energy_density(const Geometry& geometry, const Phonon& phonon);
-    void apply_lifetime_scattering(const Phonon& phonon);
-    void update_heat_flux_and_conductivity(const Geometry& geometry);
-    double compute_roughness_specularity(const Geometry& geometry, const Phonon& phonon, int i, int facet) const;
+    std::vector<std::pair<int, double>> inject_particles_from_reservoirs(const SimulationDomain& geometry, const PhononMaterial& phonon);
+    void advance_particle(const SimulationDomain& geometry, const PhononMaterial& phonon, int i, double dt_remaining);
+    void update_particle_temperatures(const SimulationDomain& geometry, const PhononMaterial& phonon);
+    void update_subvolume_energy_density(const SimulationDomain& geometry, const PhononMaterial& phonon);
+    void apply_lifetime_scattering(const PhononMaterial& phonon);
+    void update_heat_flux_and_conductivity(const SimulationDomain& geometry);
+    double compute_roughness_specularity(const SimulationDomain& geometry, const PhononMaterial& phonon, int i, int facet) const;
     void write_convergence_header();
     void append_convergence_row() const;
 
@@ -60,8 +60,8 @@ private:
     Vec3 random_unit_vector();
 
     SimulationConfig args_;
-    const Geometry* geometry_ = nullptr;
-    const Phonon* phonon_ = nullptr;
+    const SimulationDomain* geometry_ = nullptr;
+    const PhononMaterial* phonon_ = nullptr;
     mutable std::mt19937_64 rng_ {std::random_device{}()};
     int particle_count_ = 0;
     double time_step_ = 1.0;

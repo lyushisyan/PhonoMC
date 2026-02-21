@@ -1,7 +1,7 @@
-#include "Simulation.h"
+#include "MonteCarloSolver.h"
 
-#include "Geometry.h"
-#include "Phonon.h"
+#include "SimulationDomain.h"
+#include "PhononMaterial.h"
 
 #include <algorithm>
 #include <cmath>
@@ -17,20 +17,20 @@
 #include <omp.h>
 #endif
 
-Simulation::Vec3 Simulation::add(const Vec3& a, const Vec3& b) { return {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; }
-Simulation::Vec3 Simulation::sub(const Vec3& a, const Vec3& b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
-Simulation::Vec3 Simulation::mul(const Vec3& a, double s) { return {a[0] * s, a[1] * s, a[2] * s}; }
-double Simulation::dot(const Vec3& a, const Vec3& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
-double Simulation::norm(const Vec3& a) { return std::sqrt(dot(a, a)); }
+MonteCarloSolver::Vec3 MonteCarloSolver::add(const Vec3& a, const Vec3& b) { return {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; }
+MonteCarloSolver::Vec3 MonteCarloSolver::sub(const Vec3& a, const Vec3& b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
+MonteCarloSolver::Vec3 MonteCarloSolver::mul(const Vec3& a, double s) { return {a[0] * s, a[1] * s, a[2] * s}; }
+double MonteCarloSolver::dot(const Vec3& a, const Vec3& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+double MonteCarloSolver::norm(const Vec3& a) { return std::sqrt(dot(a, a)); }
 
-Simulation::Simulation(const SimulationConfig& args, const Geometry& geometry, const Phonon& phonon)
+MonteCarloSolver::MonteCarloSolver(const SimulationConfig& args, const SimulationDomain& geometry, const PhononMaterial& phonon)
     : args_(args), geometry_(&geometry), phonon_(&phonon) {
     particle_count_ = std::max(1, static_cast<int>(std::llround(args_.particle_count)));
     time_step_ = std::max(1e-12, args_.time_step);
     push_eps_ = 1e-10 * std::max(time_step_, 1.0);
     particle_density_ = static_cast<double>(particle_count_) / std::max(geometry.volume(), 1e-12);
 
-    std::cout << "Simulation initialized: particle_count=" << particle_count_
+    std::cout << "MonteCarloSolver initialized: particle_count=" << particle_count_
               << ", time_step=" << time_step_
               << ", density=" << particle_density_ << '\n';
     std::cout << "Thermal conductivity estimation: "
@@ -53,7 +53,7 @@ Simulation::Simulation(const SimulationConfig& args, const Geometry& geometry, c
     append_convergence_row();
 }
 
-void Simulation::initialize_particles(const Geometry& geometry, const Phonon& phonon) {
+void MonteCarloSolver::initialize_particles(const SimulationDomain& geometry, const PhononMaterial& phonon) {
     const auto& mesh = geometry.mesh();
     particle_positions_ = mesh.sample_volume_points(particle_count_);
     particle_subvolume_id_.assign(static_cast<size_t>(particle_count_), 0);
@@ -61,7 +61,7 @@ void Simulation::initialize_particles(const Geometry& geometry, const Phonon& ph
 #pragma omp parallel for
 #endif
     for (int i = 0; i < particle_count_; ++i) {
-        particle_subvolume_id_[i] = classify_subvolume(geometry, particle_positions_[i]);
+        particle_subvolume_id_[i] = nearest_subvolume_index(geometry, particle_positions_[i]);
     }
 
     initialize_particle_modes(phonon);
@@ -97,14 +97,14 @@ void Simulation::initialize_particles(const Geometry& geometry, const Phonon& ph
     update_particle_temperatures(geometry, phonon);
 }
 
-void Simulation::initialize_particle_modes(const Phonon& phonon) {
+void MonteCarloSolver::initialize_particle_modes(const PhononMaterial& phonon) {
     particle_modes_.resize(static_cast<size_t>(particle_count_));
     for (int i = 0; i < particle_count_; ++i) {
         particle_modes_[i] = phonon.sample_active_mode(rng_);
     }
 }
 
-void Simulation::initialize_particle_temperatures(const Geometry& geometry) {
+void MonteCarloSolver::initialize_particle_temperatures(const SimulationDomain& geometry) {
     particle_temperatures_.assign(static_cast<size_t>(particle_count_), 300.0);
     const auto& res_vals = geometry.reservoir_values();
 
@@ -171,7 +171,7 @@ void Simulation::initialize_particle_temperatures(const Geometry& geometry) {
     }
 }
 
-Simulation::Vec3 Simulation::random_unit_vector() {
+MonteCarloSolver::Vec3 MonteCarloSolver::random_unit_vector() {
     std::normal_distribution<double> N(0.0, 1.0);
     Vec3 v {N(rng_), N(rng_), N(rng_)};
     const double n = norm(v);
@@ -181,7 +181,7 @@ Simulation::Vec3 Simulation::random_unit_vector() {
     return mul(v, 1.0 / n);
 }
 
-void Simulation::initialize_particle_velocities(const Phonon& phonon) {
+void MonteCarloSolver::initialize_particle_velocities(const PhononMaterial& phonon) {
     particle_velocities_.resize(static_cast<size_t>(particle_count_));
 #ifdef _OPENMP
 #pragma omp parallel for
@@ -191,7 +191,7 @@ void Simulation::initialize_particle_velocities(const Phonon& phonon) {
     }
 }
 
-void Simulation::initialize_reservoir_injection(const Geometry& geometry, const Phonon& phonon) {
+void MonteCarloSolver::initialize_reservoir_injection(const SimulationDomain& geometry, const PhononMaterial& phonon) {
     reservoir_facets_ = geometry.reservoir_facets();
     reservoir_temperatures_.clear();
     reservoir_temperatures_.reserve(reservoir_facets_.size());
@@ -229,7 +229,7 @@ void Simulation::initialize_reservoir_injection(const Geometry& geometry, const 
     }
 }
 
-void Simulation::initialize_rough_boundary_scattering(const Geometry& geometry, const Phonon& phonon) {
+void MonteCarloSolver::initialize_rough_boundary_scattering(const SimulationDomain& geometry, const PhononMaterial& phonon) {
     const auto& mesh = geometry.mesh();
     const int nfacets = mesh.facet_count();
     facet_to_rough_data_.assign(static_cast<size_t>(nfacets), -1);
@@ -347,7 +347,7 @@ void Simulation::initialize_rough_boundary_scattering(const Geometry& geometry, 
     }
 }
 
-void Simulation::initialize_local_heat_source(const Geometry& geometry) {
+void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geometry) {
     local_heat_source_enabled_ = false;
     local_heat_source_subvolume_mask_.clear();
     local_heat_source_power_density_wm3_ = args_.heat_source_power_density;
@@ -415,7 +415,7 @@ void Simulation::initialize_local_heat_source(const Geometry& geometry) {
               << ", power_density=" << local_heat_source_power_density_wm3_ << " W/m^3\n";
 }
 
-void Simulation::apply_local_heat_source() {
+void MonteCarloSolver::apply_local_heat_source() {
     if (!local_heat_source_enabled_) {
         return;
     }
@@ -431,7 +431,7 @@ void Simulation::apply_local_heat_source() {
     }
 }
 
-int Simulation::sample_diffuse_active_mode(int rough_idx, int in_ai) const {
+int MonteCarloSolver::sample_diffuse_active_mode(int rough_idx, int in_ai) const {
     const int na = (phonon_ != nullptr) ? phonon_->active_mode_count() : 0;
     if (na <= 0) {
         return 0;
@@ -460,9 +460,9 @@ int Simulation::sample_diffuse_active_mode(int rough_idx, int in_ai) const {
     return U(rng_);
 }
 
-std::array<int, 2> Simulation::select_reflected_mode(
-    const Geometry& geometry,
-    const Phonon& phonon,
+std::array<int, 2> MonteCarloSolver::select_reflected_mode(
+    const SimulationDomain& geometry,
+    const PhononMaterial& phonon,
     int rough_idx,
     const std::array<int, 2>& in_mode,
     const Vec3& collision_pos,
@@ -494,14 +494,14 @@ std::array<int, 2> Simulation::select_reflected_mode(
     const int out_ai = sample_diffuse_active_mode(rough_idx, in_ai);
     const std::array<int, 2> out_mode = phonon.active_mode_at(out_ai);
     const int nsv = std::max(1, geometry.subvolume_count());
-    const int sv = std::clamp(classify_subvolume(geometry, collision_pos), 0, nsv - 1);
+    const int sv = std::clamp(nearest_subvolume_index(geometry, collision_pos), 0, nsv - 1);
     const double Tdiff = (sv >= 0 && sv < static_cast<int>(subvolume_temperatures_.size()))
         ? subvolume_temperatures_[static_cast<size_t>(sv)] : 300.0;
     out_occupation = phonon.bose_occupation(Tdiff, out_mode);
     return out_mode;
 }
 
-int Simulation::classify_subvolume(const Geometry& geometry, const Vec3& p) const {
+int MonteCarloSolver::nearest_subvolume_index(const SimulationDomain& geometry, const Vec3& p) const {
     const auto& centers = geometry.subvolume_centers();
     if (centers.empty()) {
         return 0;
@@ -519,7 +519,7 @@ int Simulation::classify_subvolume(const Geometry& geometry, const Vec3& p) cons
     return best;
 }
 
-void Simulation::update_collision_cache(const Geometry& geometry, const std::vector<int>& indices) {
+void MonteCarloSolver::update_collision_cache(const SimulationDomain& geometry, const std::vector<int>& indices) {
     const auto& mesh = geometry.mesh();
     const int nidx = static_cast<int>(indices.size());
 #ifdef _OPENMP
@@ -543,7 +543,7 @@ void Simulation::update_collision_cache(const Geometry& geometry, const std::vec
     }
 }
 
-void Simulation::process_collision(const Geometry& geometry, int i) {
+void MonteCarloSolver::process_boundary_collision(const SimulationDomain& geometry, int i) {
     const int facet = cached_collision_facets_[i];
     const char cond = cached_collision_conditions_[i];
 
@@ -604,10 +604,10 @@ void Simulation::process_collision(const Geometry& geometry, int i) {
     }
 
     particle_positions_[i] = add(particle_positions_[i], mul(particle_velocities_[i], push_eps_ / std::max(norm(particle_velocities_[i]), 1e-12)));
-    particle_subvolume_id_[i] = classify_subvolume(geometry, particle_positions_[i]);
+    particle_subvolume_id_[i] = nearest_subvolume_index(geometry, particle_positions_[i]);
 }
 
-double Simulation::compute_roughness_specularity(const Geometry& geometry, const Phonon& phonon, int i, int facet) const {
+double MonteCarloSolver::compute_roughness_specularity(const SimulationDomain& geometry, const PhononMaterial& phonon, int i, int facet) const {
     const double eta = std::max(0.0, geometry.roughness_for_facet(facet, 0.0));
     const double speed = std::max(1e-12, norm(particle_velocities_[i]));
     const Vec3 n = geometry.mesh().facet_normals()[facet];
@@ -618,7 +618,7 @@ double Simulation::compute_roughness_specularity(const Geometry& geometry, const
     return std::clamp(p, 0.0, 1.0);
 }
 
-void Simulation::remove_absorbed_particles() {
+void MonteCarloSolver::remove_absorbed_particles() {
     if (particle_alive_flags_.empty()) {
         return;
     }
@@ -695,7 +695,7 @@ void Simulation::remove_absorbed_particles() {
     particle_count_ = static_cast<int>(alive_count);
 }
 
-std::vector<std::pair<int, double>> Simulation::inject_particles_from_reservoirs(const Geometry& geometry, const Phonon& phonon) {
+std::vector<std::pair<int, double>> MonteCarloSolver::inject_particles_from_reservoirs(const SimulationDomain& geometry, const PhononMaterial& phonon) {
     std::vector<std::pair<int, double>> inserted;
     if (reservoir_count_ <= 0 || reservoir_modes_.empty()) {
         return inserted;
@@ -757,7 +757,7 @@ std::vector<std::pair<int, double>> Simulation::inject_particles_from_reservoirs
             particle_omega_.push_back(phonon.mode_angular_frequency(mode));
             particle_occupation_.push_back(phonon.bose_occupation(Tres, mode));
             particle_energies_.push_back(0.0);
-            particle_subvolume_id_.push_back(classify_subvolume(geometry, pos));
+            particle_subvolume_id_.push_back(nearest_subvolume_index(geometry, pos));
             cached_collision_facets_.push_back(-1);
             cached_collision_conditions_.push_back('P');
             particle_alive_flags_.push_back(static_cast<std::uint8_t>(1));
@@ -768,7 +768,7 @@ std::vector<std::pair<int, double>> Simulation::inject_particles_from_reservoirs
     return inserted;
 }
 
-void Simulation::update_subvolume_energy_density(const Geometry& geometry, const Phonon& phonon) {
+void MonteCarloSolver::update_subvolume_energy_density(const SimulationDomain& geometry, const PhononMaterial& phonon) {
     const int nsv = std::max(1, geometry.subvolume_count());
     subvolume_energy_density_.assign(static_cast<size_t>(nsv), 0.0);
 
@@ -823,7 +823,7 @@ void Simulation::update_subvolume_energy_density(const Geometry& geometry, const
     }
 }
 
-void Simulation::update_particle_temperatures(const Geometry& geometry, const Phonon& phonon) {
+void MonteCarloSolver::update_particle_temperatures(const SimulationDomain& geometry, const PhononMaterial& phonon) {
     const int nsv = std::max(1, geometry.subvolume_count());
     subvolume_particle_counts_.assign(static_cast<size_t>(nsv), 0);
 #ifdef _OPENMP
@@ -837,7 +837,7 @@ void Simulation::update_particle_temperatures(const Geometry& geometry, const Ph
         auto& local_counts = count_tls[static_cast<size_t>(tid)];
 #pragma omp for
         for (int i = 0; i < particle_count_; ++i) {
-            particle_subvolume_id_[i] = classify_subvolume(geometry, particle_positions_[i]);
+            particle_subvolume_id_[i] = nearest_subvolume_index(geometry, particle_positions_[i]);
             const int sv = std::clamp(particle_subvolume_id_[i], 0, nsv - 1);
             local_counts[static_cast<size_t>(sv)] += 1;
         }
@@ -849,7 +849,7 @@ void Simulation::update_particle_temperatures(const Geometry& geometry, const Ph
     }
 #else
     for (int i = 0; i < particle_count_; ++i) {
-        particle_subvolume_id_[i] = classify_subvolume(geometry, particle_positions_[i]);
+        particle_subvolume_id_[i] = nearest_subvolume_index(geometry, particle_positions_[i]);
         const int sv = std::clamp(particle_subvolume_id_[i], 0, nsv - 1);
         subvolume_particle_counts_[static_cast<size_t>(sv)] += 1;
     }
@@ -874,7 +874,7 @@ void Simulation::update_particle_temperatures(const Geometry& geometry, const Ph
     }
 }
 
-void Simulation::apply_lifetime_scattering(const Phonon& phonon) {
+void MonteCarloSolver::apply_lifetime_scattering(const PhononMaterial& phonon) {
 #ifdef _OPENMP
 #pragma omp parallel for
 #endif
@@ -890,7 +890,7 @@ void Simulation::apply_lifetime_scattering(const Phonon& phonon) {
     }
 }
 
-void Simulation::update_heat_flux_and_conductivity(const Geometry& geometry) {
+void MonteCarloSolver::update_heat_flux_and_conductivity(const SimulationDomain& geometry) {
     const int nsv = std::max(1, geometry.subvolume_count());
     subvolume_heat_flux_.assign(static_cast<size_t>(nsv), {0.0, 0.0, 0.0});
 
@@ -1058,7 +1058,7 @@ void Simulation::update_heat_flux_and_conductivity(const Geometry& geometry) {
     thermal_conductivity_ = thermal_conductivity_endpoints_;
 }
 
-void Simulation::advance_particle(const Geometry& geometry, const Phonon& phonon, int i, double dt_remaining) {
+void MonteCarloSolver::advance_particle(const SimulationDomain& geometry, const PhononMaterial& phonon, int i, double dt_remaining) {
     if (i < 0 || i >= particle_count_) {
         return;
     }
@@ -1080,7 +1080,7 @@ void Simulation::advance_particle(const Geometry& geometry, const Phonon& phonon
             // Move to collision and process boundary event.
             particle_positions_[i] = cached_collision_positions_[i];
             remaining -= std::max(0.0, t_hit);
-            process_collision(geometry, i);
+            process_boundary_collision(geometry, i);
             if (particle_alive_flags_[static_cast<size_t>(i)] == 0) {
                 break;
             }
@@ -1094,7 +1094,7 @@ void Simulation::advance_particle(const Geometry& geometry, const Phonon& phonon
     (void) phonon;
 }
 
-void Simulation::write_convergence_header() {
+void MonteCarloSolver::write_convergence_header() {
     if (args_.results_base_folder.empty()) {
         return;
     }
@@ -1107,7 +1107,7 @@ void Simulation::write_convergence_header() {
     out << " heatflux kappa_fit kappa_end\n";
 }
 
-void Simulation::append_convergence_row() const {
+void MonteCarloSolver::append_convergence_row() const {
     if (args_.results_base_folder.empty()) {
         return;
     }
@@ -1120,21 +1120,21 @@ void Simulation::append_convergence_row() const {
     out << " " << average_heat_flux_along_axis_ << " " << thermal_conductivity_fit_ << " " << thermal_conductivity_endpoints_ << '\n';
 }
 
-void Simulation::run_timestep() {
+void MonteCarloSolver::run_timestep() {
     if (geometry_ == nullptr) {
-        throw std::runtime_error("Simulation geometry is not set.");
+        throw std::runtime_error("MonteCarloSolver geometry is not set.");
     }
     if (phonon_ == nullptr) {
-        throw std::runtime_error("Simulation phonon is not set.");
+        throw std::runtime_error("MonteCarloSolver phonon is not set.");
     }
-    const Geometry& geometry = *geometry_;
-    const Phonon& phonon = *phonon_;
+    const SimulationDomain& geometry = *geometry_;
+    const PhononMaterial& phonon = *phonon_;
 
     const int n_before = particle_count_;
     for (int i = 0; i < n_before; ++i) {
         advance_particle(geometry, phonon, i, time_step_);
         if (i < particle_count_ && i < static_cast<int>(particle_alive_flags_.size()) && particle_alive_flags_[static_cast<size_t>(i)] != 0) {
-            particle_subvolume_id_[i] = classify_subvolume(geometry, particle_positions_[i]);
+            particle_subvolume_id_[i] = nearest_subvolume_index(geometry, particle_positions_[i]);
         }
     }
     remove_absorbed_particles();

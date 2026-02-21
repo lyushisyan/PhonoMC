@@ -1,7 +1,7 @@
 #include "SimulationConfig.h"
-#include "Geometry.h"
-#include "Phonon.h"
-#include "Simulation.h"
+#include "SimulationDomain.h"
+#include "PhononMaterial.h"
+#include "MonteCarloSolver.h"
 
 #include <chrono>
 #include <exception>
@@ -70,9 +70,9 @@ int main(int argc, char** argv) {
 
         const auto start = std::chrono::steady_clock::now();
 
-        Geometry geo(args);
-        Phonon phonons(args, 0);
-        Simulation pop(args, geo, phonons);
+        SimulationDomain geo(args);
+        PhononMaterial phonons(args, 0);
+        MonteCarloSolver pop(args, geo, phonons);
 
         while (pop.current_timestep() < args.iterations) {
             pop.run_timestep();

@@ -1,4 +1,4 @@
-#include "Phonon.h"
+#include "PhononMaterial.h"
 
 #include <H5Cpp.h>
 
@@ -84,17 +84,17 @@ double vec_norm(const Vec3& v) {
 }
 }  // namespace
 
-Phonon::Phonon(const SimulationConfig& args, int mat_index) {
+PhononMaterial::PhononMaterial(const SimulationConfig& args, int mat_index) {
     std::string err;
     if (!load_hdf5_data(args, mat_index, &err)) {
         std::cerr << "Warning: failed to load HDF5 phonon data (" << err << "). Falling back to synthetic mode bank.\n";
         build_fallback_modes(args);
     }
     initialize_temperature_lookup();
-    std::cout << "Phonon initialized: active_mode_count=" << active_mode_count_ << '\n';
+    std::cout << "PhononMaterial initialized: active_mode_count=" << active_mode_count_ << '\n';
 }
 
-int Phonon::nearest_index(const std::vector<double>& arr, double x) {
+int PhononMaterial::nearest_index(const std::vector<double>& arr, double x) {
     if (arr.empty()) {
         return 0;
     }
@@ -110,18 +110,18 @@ int Phonon::nearest_index(const std::vector<double>& arr, double x) {
     return best;
 }
 
-int Phonon::flatten_mode_index(const Mode& mode) const {
+int PhononMaterial::flatten_mode_index(const Mode& mode) const {
     return mode[0] * branch_count_ + mode[1];
 }
 
-Phonon::Mode Phonon::active_mode_at(int active_index) const {
+PhononMaterial::Mode PhononMaterial::active_mode_at(int active_index) const {
     if (active_index < 0 || active_index >= static_cast<int>(active_mode_list_.size())) {
         return {0, 0};
     }
     return active_mode_list_[static_cast<size_t>(active_index)];
 }
 
-int Phonon::active_index_for_mode(const Mode& mode) const {
+int PhononMaterial::active_index_for_mode(const Mode& mode) const {
     const int fi = flatten_mode_index(mode);
     if (fi < 0 || fi >= static_cast<int>(flat_to_active_index_.size())) {
         return -1;
@@ -129,7 +129,7 @@ int Phonon::active_index_for_mode(const Mode& mode) const {
     return flat_to_active_index_[static_cast<size_t>(fi)];
 }
 
-int Phonon::degenerate_partner_branch(const Mode& mode) const {
+int PhononMaterial::degenerate_partner_branch(const Mode& mode) const {
     const int fi = flatten_mode_index(mode);
     if (fi < 0 || fi >= static_cast<int>(degenerate_partner_branch_data_.size())) {
         return -1;
@@ -137,7 +137,7 @@ int Phonon::degenerate_partner_branch(const Mode& mode) const {
     return degenerate_partner_branch_data_[static_cast<size_t>(fi)];
 }
 
-double Phonon::lerp(double x0, double x1, double y0, double y1, double x) {
+double PhononMaterial::lerp(double x0, double x1, double y0, double y1, double x) {
     if (std::abs(x1 - x0) <= 1e-18) {
         return y0;
     }
@@ -145,7 +145,7 @@ double Phonon::lerp(double x0, double x1, double y0, double y1, double x) {
     return y0 * (1.0 - t) + y1 * t;
 }
 
-double Phonon::interp_linear_clamped(const std::vector<double>& xs, const std::vector<double>& ys, double x) {
+double PhononMaterial::interp_linear_clamped(const std::vector<double>& xs, const std::vector<double>& ys, double x) {
     if (xs.empty() || ys.empty()) {
         return 0.0;
     }
@@ -164,7 +164,7 @@ double Phonon::interp_linear_clamped(const std::vector<double>& xs, const std::v
     return lerp(xs[lo], xs[hi], ys[lo], ys[hi], x);
 }
 
-bool Phonon::load_poscar_lattice_volume(const std::string& folder, std::string* err) {
+bool PhononMaterial::load_poscar_lattice_volume(const std::string& folder, std::string* err) {
     try {
         namespace fs = std::filesystem;
         const fs::path poscar = fs::path(folder) / "POSCAR";
@@ -226,7 +226,7 @@ bool Phonon::load_poscar_lattice_volume(const std::string& folder, std::string* 
     }
 }
 
-bool Phonon::load_hdf5_data(const SimulationConfig& args, int mat_index, std::string* err) {
+bool PhononMaterial::load_hdf5_data(const SimulationConfig& args, int mat_index, std::string* err) {
     try {
         (void) mat_index;
         namespace fs = std::filesystem;
@@ -244,7 +244,7 @@ bool Phonon::load_hdf5_data(const SimulationConfig& args, int mat_index, std::st
         folder = folder.lexically_normal();
         material_folder_path_ = folder.string();
         if (!material_folder_path_.empty()) {
-            std::cout << "Phonon material folder: " << material_folder_path_ << '\n';
+            std::cout << "PhononMaterial material folder: " << material_folder_path_ << '\n';
         }
         std::string poscar_err;
         if (!load_poscar_lattice_volume(material_folder_path_, &poscar_err)) {
@@ -270,7 +270,7 @@ bool Phonon::load_hdf5_data(const SimulationConfig& args, int mat_index, std::st
         if (!fs::exists(hdf_path)) {
             throw std::runtime_error("No HDF5 file found under material folder: " + folder.string());
         }
-        std::cout << "Phonon HDF5 file: " << hdf_path.string() << '\n';
+        std::cout << "PhononMaterial HDF5 file: " << hdf_path.string() << '\n';
 
         H5::H5File file(hdf_path.string(), H5F_ACC_RDONLY);
 
@@ -389,9 +389,9 @@ bool Phonon::load_hdf5_data(const SimulationConfig& args, int mat_index, std::st
     }
 }
 
-void Phonon::build_fallback_modes(const SimulationConfig& args) {
+void PhononMaterial::build_fallback_modes(const SimulationConfig& args) {
     if (!args.material_folder.empty()) {
-        std::cout << "Phonon material folder: " << args.material_folder << '\n';
+        std::cout << "PhononMaterial material folder: " << args.material_folder << '\n';
     }
     const int n_q = 64;
     qpoint_count_ = n_q;
@@ -432,7 +432,7 @@ void Phonon::build_fallback_modes(const SimulationConfig& args) {
     build_degenerate_mode_map();
 }
 
-Phonon::Vec3 Phonon::random_unit_vector(std::mt19937_64& rng) {
+PhononMaterial::Vec3 PhononMaterial::random_unit_vector(std::mt19937_64& rng) {
     std::normal_distribution<double> N(0.0, 1.0);
     Vec3 v {N(rng), N(rng), N(rng)};
     const double n = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
@@ -442,15 +442,15 @@ Phonon::Vec3 Phonon::random_unit_vector(std::mt19937_64& rng) {
     return {v[0] / n, v[1] / n, v[2] / n};
 }
 
-Phonon::Mode Phonon::sample_active_mode(std::mt19937_64& rng) const {
+PhononMaterial::Mode PhononMaterial::sample_active_mode(std::mt19937_64& rng) const {
     if (active_mode_list_.empty()) {
-        throw std::runtime_error("No active modes in Phonon.");
+        throw std::runtime_error("No active modes in PhononMaterial.");
     }
     std::uniform_int_distribution<int> pick(0, static_cast<int>(active_mode_list_.size()) - 1);
     return active_mode_list_[static_cast<size_t>(pick(rng))];
 }
 
-Phonon::Vec3 Phonon::mode_group_velocity(const Mode& mode) const {
+PhononMaterial::Vec3 PhononMaterial::mode_group_velocity(const Mode& mode) const {
     const int m = flatten_mode_index(mode);
     if (m < 0 || m >= static_cast<int>(mode_group_velocity_data_.size())) {
         return {0.0, 0.0, 0.0};
@@ -458,7 +458,7 @@ Phonon::Vec3 Phonon::mode_group_velocity(const Mode& mode) const {
     return mode_group_velocity_data_[static_cast<size_t>(m)];
 }
 
-double Phonon::mode_angular_frequency(const Mode& mode) const {
+double PhononMaterial::mode_angular_frequency(const Mode& mode) const {
     const int m = flatten_mode_index(mode);
     if (m < 0 || m >= static_cast<int>(mode_angular_frequency_data_.size())) {
         return 1.0;
@@ -466,7 +466,7 @@ double Phonon::mode_angular_frequency(const Mode& mode) const {
     return mode_angular_frequency_data_[static_cast<size_t>(m)];
 }
 
-double Phonon::mode_wavevector_norm(const Mode& mode) const {
+double PhononMaterial::mode_wavevector_norm(const Mode& mode) const {
     const int m = flatten_mode_index(mode);
     if (m < 0 || m >= static_cast<int>(mode_wavevector_norm_data_.size())) {
         return 0.0;
@@ -474,7 +474,7 @@ double Phonon::mode_wavevector_norm(const Mode& mode) const {
     return mode_wavevector_norm_data_[static_cast<size_t>(m)];
 }
 
-double Phonon::mode_frequency_window(const Mode& mode) const {
+double PhononMaterial::mode_frequency_window(const Mode& mode) const {
     const int m = flatten_mode_index(mode);
     if (m < 0 || m >= static_cast<int>(mode_frequency_window_data_.size())) {
         return 0.0;
@@ -482,7 +482,7 @@ double Phonon::mode_frequency_window(const Mode& mode) const {
     return mode_frequency_window_data_[static_cast<size_t>(m)];
 }
 
-void Phonon::build_degenerate_mode_map() {
+void PhononMaterial::build_degenerate_mode_map() {
     const int nm = qpoint_count_ * branch_count_;
     degenerate_partner_branch_data_.assign(static_cast<size_t>(std::max(0, nm)), -1);
     if (qpoint_count_ <= 0 || branch_count_ <= 1) {
@@ -504,7 +504,7 @@ void Phonon::build_degenerate_mode_map() {
     }
 }
 
-double Phonon::bose_occupation(double temperature, const Mode& mode) const {
+double PhononMaterial::bose_occupation(double temperature, const Mode& mode) const {
     const double w = mode_angular_frequency(mode);
     if (temperature <= 0.0 || w <= 0.0) {
         return 0.0;
@@ -517,11 +517,11 @@ double Phonon::bose_occupation(double temperature, const Mode& mode) const {
     return 1.0 / std::max(ex - 1.0, 1e-12);
 }
 
-double Phonon::mode_energy(double temperature, const Mode& mode) const {
+double PhononMaterial::mode_energy(double temperature, const Mode& mode) const {
     return hbar_ * mode_angular_frequency(mode) * (bose_occupation(temperature, mode) + 0.5);
 }
 
-double Phonon::mode_lifetime(double temperature, const Mode& mode) const {
+double PhononMaterial::mode_lifetime(double temperature, const Mode& mode) const {
     if (gamma_table_.empty() || temperature_samples_.empty()) {
         const double T = std::max(1.0, temperature);
         const double w = std::max(1e-9, mode_angular_frequency(mode));
@@ -563,17 +563,17 @@ double Phonon::mode_lifetime(double temperature, const Mode& mode) const {
     return lerp(temperature_samples_[lo], temperature_samples_[hi], tau0, tau1, temperature);
 }
 
-double Phonon::normalize_to_energy_density(double x) const {
+double PhononMaterial::normalize_to_energy_density(double x) const {
     const double den = std::max(1.0, static_cast<double>(qpoint_count_) * unit_cell_volume_);
     return x / den;
 }
 
-Phonon::Vec3 Phonon::normalize_to_energy_density(const Vec3& x) const {
+PhononMaterial::Vec3 PhononMaterial::normalize_to_energy_density(const Vec3& x) const {
     const double den = std::max(1.0, static_cast<double>(qpoint_count_) * unit_cell_volume_);
     return {x[0] / den, x[1] / den, x[2] / den};
 }
 
-double Phonon::crystal_energy_density(double temperature) const {
+double PhononMaterial::crystal_energy_density(double temperature) const {
     double e = 0.0;
     for (const Mode& mode : active_mode_list_) {
         const double w = mode_angular_frequency(mode);
@@ -586,11 +586,11 @@ double Phonon::crystal_energy_density(double temperature) const {
     return normalize_to_energy_density(e) + zero_point_energy_density_;
 }
 
-double Phonon::temperature_from_energy_density(double energy_density) const {
+double PhononMaterial::temperature_from_energy_density(double energy_density) const {
     return interp_linear_clamped(energy_lookup_table_, temperature_lookup_table_, energy_density);
 }
 
-void Phonon::initialize_temperature_lookup() {
+void PhononMaterial::initialize_temperature_lookup() {
     zero_point_energy_density_ = 0.0;
     for (double w : mode_angular_frequency_data_) {
         zero_point_energy_density_ += 0.5 * hbar_ * std::max(0.0, w);

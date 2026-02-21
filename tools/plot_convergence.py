@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot convergence diagnostics from epmc convergence.txt files.
+"""Plot convergence diagnostics from ntmc convergence.txt files.
 
 Per-case outputs:
 - heatflux_convergence.png
@@ -263,7 +263,7 @@ def _plot_summary(cases: List[Dict[str, np.ndarray]], summary_dir: Path, dpi: in
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Plot convergence and steady-state temperature from epmc results.")
+    parser = argparse.ArgumentParser(description="Plot convergence and steady-state temperature from ntmc results.")
     parser.add_argument("result_dirs", nargs="+", help="Result directories containing convergence.txt")
     parser.add_argument("--tail", type=int, default=50, help="Number of last records for steady-state averaging")
     parser.add_argument("--error", choices=["sem", "std"], default="sem", help="Error bar type for steady temperature")

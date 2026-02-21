@@ -1,17 +1,17 @@
 #pragma once
 
 #include "SimulationConfig.h"
-#include "Mesh.h"
+#include "SurfaceMesh.h"
 
 #include <array>
 #include <string>
 #include <vector>
 
-class Geometry {
+class SimulationDomain {
 public:
-    explicit Geometry(const SimulationConfig& args);
+    explicit SimulationDomain(const SimulationConfig& args);
 
-    const Mesh& mesh() const { return mesh_; }
+    const SurfaceMesh& mesh() const { return mesh_; }
     int subvolume_count() const { return subvolume_count_; }
     double volume() const { return volume_; }
     const std::array<double, 3>& bounds_min() const { return bounds_min_; }
@@ -31,17 +31,17 @@ public:
     double roughness_for_facet(int facet, double fallback = 0.0) const;
 
 private:
-    void build_mesh(const SimulationConfig& args);
-    void sync_mesh_properties();
+    void build_surface_mesh(const SimulationConfig& args);
+    void sync_surface_mesh_properties();
     void assign_boundary_conditions(const SimulationConfig& args);
     void build_periodic_connections(const SimulationConfig& args);
     void initialize_subvolumes(const SimulationConfig& args);
     void initialize_slice_subvolumes(const SimulationConfig& args);
     void initialize_grid_subvolumes(const SimulationConfig& args);
     void build_subvolume_connections();
-    void write_geometry_summary(const SimulationConfig& args) const;
+    void write_domain_summary(const SimulationConfig& args) const;
 
-    Mesh mesh_;
+    SurfaceMesh mesh_;
     std::array<double, 3> bounds_min_ {0.0, 0.0, 0.0};
     std::array<double, 3> bounds_max_ {1.0, 1.0, 1.0};
 

@@ -7,12 +7,12 @@
 #include <random>
 #include <vector>
 
-class Phonon {
+class PhononMaterial {
 public:
     using Vec3 = std::array<double, 3>;
     using Mode = std::array<int, 2>;
 
-    Phonon(const SimulationConfig& args, int mat_index);
+    PhononMaterial(const SimulationConfig& args, int mat_index);
 
     int active_mode_count() const { return active_mode_count_; }
     int qpoint_count() const { return qpoint_count_; }

@@ -1,4 +1,4 @@
-#include "Mesh.h"
+#include "SurfaceMesh.h"
 
 #include <algorithm>
 #include <cmath>
@@ -18,7 +18,7 @@
 #include <unordered_map>
 
 namespace {
-using Vec3 = Mesh::Vec3;
+using Vec3 = SurfaceMesh::Vec3;
 
 Vec3 add(const Vec3& a, const Vec3& b) { return {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; }
 Vec3 sub(const Vec3& a, const Vec3& b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
@@ -163,21 +163,21 @@ bool ray_intersects_triangle(const Vec3& orig, const Vec3& dir, const Vec3& a, c
 }
 }  // namespace
 
-Mesh::Mesh(std::vector<Vec3> vertices, std::vector<Tri> faces) {
-    set_geometry_mesh(std::move(vertices), std::move(faces));
+SurfaceMesh::SurfaceMesh(std::vector<Vec3> vertices, std::vector<Tri> faces) {
+    set_surface_mesh_data(std::move(vertices), std::move(faces));
 }
 
-void Mesh::set_geometry_mesh(std::vector<Vec3> vertices, std::vector<Tri> faces) {
+void SurfaceMesh::set_surface_mesh_data(std::vector<Vec3> vertices, std::vector<Tri> faces) {
     vertices_ = std::move(vertices);
     faces_ = std::move(faces);
     if (vertices_.empty() || faces_.empty()) {
-        throw std::runtime_error("Mesh requires non-empty vertices and faces.");
+        throw std::runtime_error("SurfaceMesh requires non-empty vertices and faces.");
     }
     clear_tetrahedra_cache();
     rebuild_cached_properties();
 }
 
-void Mesh::shift_to_origin() {
+void SurfaceMesh::shift_to_origin() {
     compute_bounding_box();
     for (auto& v : vertices_) {
         v = sub(v, bounds_min_);
@@ -185,7 +185,7 @@ void Mesh::shift_to_origin() {
     rebuild_cached_properties();
 }
 
-void Mesh::rebuild_cached_properties() {
+void SurfaceMesh::rebuild_cached_properties() {
     clear_tetrahedra_cache();
     compute_bounding_box();
     compute_edge_list();
@@ -197,12 +197,12 @@ void Mesh::rebuild_cached_properties() {
     compute_enclosed_volume();
 }
 
-void Mesh::clear_tetrahedra_cache() {
+void SurfaceMesh::clear_tetrahedra_cache() {
     simplices_.clear();
     simplices_ready_ = false;
 }
 
-void Mesh::compute_bounding_box() {
+void SurfaceMesh::compute_bounding_box() {
     bounds_min_ = vertices_.front();
     bounds_max_ = vertices_.front();
     for (const auto& v : vertices_) {
@@ -211,7 +211,7 @@ void Mesh::compute_bounding_box() {
     }
 }
 
-void Mesh::compute_edge_list() {
+void SurfaceMesh::compute_edge_list() {
     std::map<std::pair<int, int>, int> edge_map;
     for (const auto& f : faces_) {
         const std::array<std::array<int, 2>, 3> e {
@@ -245,7 +245,7 @@ void Mesh::compute_edge_list() {
     }
 }
 
-void Mesh::compute_face_metrics() {
+void SurfaceMesh::compute_face_metrics() {
     face_normals_.assign(faces_.size(), Vec3 {0.0, 0.0, 0.0});
     face_centroids_.assign(faces_.size(), Vec3 {0.0, 0.0, 0.0});
     face_areas_.assign(faces_.size(), 0.0);
@@ -267,7 +267,7 @@ void Mesh::compute_face_metrics() {
     }
 }
 
-void Mesh::compute_face_neighbors() {
+void SurfaceMesh::compute_face_neighbors() {
     face_adjacency_.clear();
     for (const auto& ef : edges_faces_) {
         if (ef.size() < 2) {
@@ -290,7 +290,7 @@ void Mesh::compute_face_neighbors() {
     face_adjacency_.erase(std::unique(face_adjacency_.begin(), face_adjacency_.end()), face_adjacency_.end());
 }
 
-void Mesh::compute_facet_groups() {
+void SurfaceMesh::compute_facet_groups() {
     face_to_facet_.assign(faces_.size(), -1);
     facets_.clear();
 
@@ -373,7 +373,7 @@ void Mesh::compute_facet_groups() {
     }
 }
 
-void Mesh::compute_facet_neighbors() {
+void SurfaceMesh::compute_facet_neighbors() {
     facets_adjacency_.clear();
     for (const auto& adj : face_adjacency_) {
         const int fa = face_to_facet_[adj[0]];
@@ -394,7 +394,7 @@ void Mesh::compute_facet_neighbors() {
     facets_adjacency_.erase(std::unique(facets_adjacency_.begin(), facets_adjacency_.end()), facets_adjacency_.end());
 }
 
-void Mesh::compute_interface_faces() {
+void SurfaceMesh::compute_interface_faces() {
     interfaces_.clear();
     interfacets_.clear();
 
@@ -428,7 +428,7 @@ void Mesh::compute_interface_faces() {
     interfaces_.erase(std::unique(interfaces_.begin(), interfaces_.end()), interfaces_.end());
 }
 
-void Mesh::compute_enclosed_volume() {
+void SurfaceMesh::compute_enclosed_volume() {
     const Vec3 center = mul(add(bounds_min_, bounds_max_), 0.5);
     double v = 0.0;
     for (const auto& f : faces_) {
@@ -440,14 +440,14 @@ void Mesh::compute_enclosed_volume() {
     volume_ = v;
 }
 
-void Mesh::ensure_volume_tetrahedra() const {
+void SurfaceMesh::ensure_volume_tetrahedra() const {
     if (simplices_ready_) {
         return;
     }
-    const_cast<Mesh*>(this)->build_volume_tetrahedra();
+    const_cast<SurfaceMesh*>(this)->build_volume_tetrahedra();
 }
 
-void Mesh::build_volume_tetrahedra() {
+void SurfaceMesh::build_volume_tetrahedra() {
     simplices_.clear();
     auto build_star_fallback = [this]() {
         Vec3 center {0.0, 0.0, 0.0};
@@ -455,7 +455,7 @@ void Mesh::build_volume_tetrahedra() {
             center = add(center, v);
         }
         center = mul(center, 1.0 / static_cast<double>(vertices_.size()));
-        if (!contains_point_naive(center)) {
+        if (!contains_point_ray_cast(center)) {
             center = mul(add(bounds_min_, bounds_max_), 0.5);
         }
         for (const auto& f : faces_) {
@@ -514,7 +514,7 @@ void Mesh::build_volume_tetrahedra() {
                     bounds_min_[1] + (static_cast<double>(iy) + 0.5) * ext[1] / static_cast<double>(ny),
                     bounds_min_[2] + (static_cast<double>(iz) + 0.5) * ext[2] / static_cast<double>(nz)
                 };
-                if (!contains_point_naive(p)) {
+                if (!contains_point_ray_cast(p)) {
                     continue;
                 }
                 const auto cp = nearest_point(p);
@@ -569,7 +569,7 @@ void Mesh::build_volume_tetrahedra() {
     namespace fs = std::filesystem;
     std::mt19937_64 tmp_rng(std::random_device{}());
     const auto tmp_tag = std::to_string(static_cast<unsigned long long>(tmp_rng()));
-    const fs::path tmp = fs::temp_directory_path() / ("epmc_qhull_" + tmp_tag + ".txt");
+    const fs::path tmp = fs::temp_directory_path() / ("ntmc_qhull_" + tmp_tag + ".txt");
     {
         std::ofstream in(tmp);
         in << "3 " << uniq_points.size() << '\n';
@@ -625,7 +625,7 @@ void Mesh::build_volume_tetrahedra() {
         const Vec3 c = uniq_points[i2];
         const Vec3 d = uniq_points[i3];
         const Vec3 centroid = mul(add(add(a, b), add(c, d)), 0.25);
-        if (!contains_point_naive(centroid)) {
+        if (!contains_point_ray_cast(centroid)) {
             continue;
         }
         const double vol = std::abs(dot(sub(a, d), cross(sub(b, d), sub(c, d)))) / 6.0;
@@ -656,7 +656,7 @@ void Mesh::build_volume_tetrahedra() {
     simplices_ready_ = true;
 }
 
-int Mesh::nearest_facet(const Vec3& p) const {
+int SurfaceMesh::nearest_facet(const Vec3& p) const {
     const auto fq = nearest_face(p);
     if (fq.index < 0) {
         return -1;
@@ -664,7 +664,7 @@ int Mesh::nearest_facet(const Vec3& p) const {
     return face_to_facet_[fq.index];
 }
 
-Mesh::FaceQuery Mesh::nearest_face(const Vec3& p) const {
+SurfaceMesh::FaceQuery SurfaceMesh::nearest_face(const Vec3& p) const {
     FaceQuery q;
     q.index = -1;
     q.distance = std::numeric_limits<double>::infinity();
@@ -682,7 +682,7 @@ Mesh::FaceQuery Mesh::nearest_face(const Vec3& p) const {
     return q;
 }
 
-std::vector<Mesh::FaceQuery> Mesh::nearest_face(const std::vector<Vec3>& p) const {
+std::vector<SurfaceMesh::FaceQuery> SurfaceMesh::nearest_face(const std::vector<Vec3>& p) const {
     std::vector<FaceQuery> out;
     out.reserve(p.size());
     for (const auto& pt : p) {
@@ -691,7 +691,7 @@ std::vector<Mesh::FaceQuery> Mesh::nearest_face(const std::vector<Vec3>& p) cons
     return out;
 }
 
-Mesh::EdgeQuery Mesh::nearest_edge(const Vec3& p) const {
+SurfaceMesh::EdgeQuery SurfaceMesh::nearest_edge(const Vec3& p) const {
     EdgeQuery q;
     q.index = -1;
     q.distance = std::numeric_limits<double>::infinity();
@@ -718,7 +718,7 @@ Mesh::EdgeQuery Mesh::nearest_edge(const Vec3& p) const {
     return q;
 }
 
-std::vector<Mesh::EdgeQuery> Mesh::nearest_edge(const std::vector<Vec3>& p) const {
+std::vector<SurfaceMesh::EdgeQuery> SurfaceMesh::nearest_edge(const std::vector<Vec3>& p) const {
     std::vector<EdgeQuery> out;
     out.reserve(p.size());
     for (const auto& pt : p) {
@@ -727,7 +727,7 @@ std::vector<Mesh::EdgeQuery> Mesh::nearest_edge(const std::vector<Vec3>& p) cons
     return out;
 }
 
-Mesh::PointQuery Mesh::nearest_point(const Vec3& p) const {
+SurfaceMesh::PointQuery SurfaceMesh::nearest_point(const Vec3& p) const {
     const auto fq = nearest_face(p);
     const auto eq = nearest_edge(p);
     PointQuery out;
@@ -743,7 +743,7 @@ Mesh::PointQuery Mesh::nearest_point(const Vec3& p) const {
     return out;
 }
 
-std::vector<Mesh::PointQuery> Mesh::nearest_point(const std::vector<Vec3>& p) const {
+std::vector<SurfaceMesh::PointQuery> SurfaceMesh::nearest_point(const std::vector<Vec3>& p) const {
     std::vector<PointQuery> out;
     out.reserve(p.size());
     for (const auto& pt : p) {
@@ -752,7 +752,7 @@ std::vector<Mesh::PointQuery> Mesh::nearest_point(const std::vector<Vec3>& p) co
     return out;
 }
 
-bool Mesh::contains_point_naive(const Vec3& p) const {
+bool SurfaceMesh::contains_point_ray_cast(const Vec3& p) const {
     // Ray casting in +x direction.
     const Vec3 dir {1.0, 0.0, 0.0};
     int hits = 0;
@@ -765,10 +765,10 @@ bool Mesh::contains_point_naive(const Vec3& p) const {
     return (hits % 2) == 1;
 }
 
-bool Mesh::contains_point(const Vec3& p) const {
+bool SurfaceMesh::contains_point(const Vec3& p) const {
     ensure_volume_tetrahedra();
     if (simplices_.empty()) {
-        return contains_point_naive(p);
+        return contains_point_ray_cast(p);
     }
     constexpr double tol = 1e-10;
     for (const auto& s : simplices_) {
@@ -789,7 +789,7 @@ bool Mesh::contains_point(const Vec3& p) const {
     return false;
 }
 
-std::vector<bool> Mesh::contains_point(const std::vector<Vec3>& p) const {
+std::vector<bool> SurfaceMesh::contains_point(const std::vector<Vec3>& p) const {
     std::vector<bool> out;
     out.reserve(p.size());
     for (const auto& pt : p) {
@@ -798,7 +798,7 @@ std::vector<bool> Mesh::contains_point(const std::vector<Vec3>& p) const {
     return out;
 }
 
-std::tuple<Vec3, double, int> Mesh::trace_boundary_intersection(const Vec3& x, const Vec3& v) const {
+std::tuple<Vec3, double, int> SurfaceMesh::trace_boundary_intersection(const Vec3& x, const Vec3& v) const {
     constexpr double eps = 1e-10;
     double best_t = std::numeric_limits<double>::infinity();
     int best_face = -1;
@@ -835,7 +835,7 @@ std::tuple<Vec3, double, int> Mesh::trace_boundary_intersection(const Vec3& x, c
     return {best_p, best_t, face_to_facet_[best_face]};
 }
 
-std::tuple<std::vector<Vec3>, std::vector<double>, std::vector<int>, std::vector<int>> Mesh::trace_boundary_intersections(
+std::tuple<std::vector<Vec3>, std::vector<double>, std::vector<int>, std::vector<int>> SurfaceMesh::trace_boundary_intersections(
     const std::vector<Vec3>& x,
     const std::vector<Vec3>& v) const {
     if (x.size() != v.size()) {
@@ -876,7 +876,7 @@ std::tuple<std::vector<Vec3>, std::vector<double>, std::vector<int>, std::vector
     return {xc, tc, fc, ic};
 }
 
-std::vector<Vec3> Mesh::sample_surface_points(int n, const std::vector<int>& facets) const {
+std::vector<Vec3> SurfaceMesh::sample_surface_points(int n, const std::vector<int>& facets) const {
     if (n <= 0) {
         return {};
     }
@@ -932,7 +932,7 @@ std::vector<Vec3> Mesh::sample_surface_points(int n, const std::vector<int>& fac
     return out;
 }
 
-std::vector<Vec3> Mesh::sample_volume_points_naive(int n) const {
+std::vector<Vec3> SurfaceMesh::sample_volume_points_naive(int n) const {
     if (n <= 0) {
         return {};
     }
@@ -948,7 +948,7 @@ std::vector<Vec3> Mesh::sample_volume_points_naive(int n) const {
     while (static_cast<int>(out.size()) < n && trials < max_trials) {
         ++trials;
         const Vec3 p {ux(rng), uy(rng), uz(rng)};
-        if (contains_point_naive(p)) {
+        if (contains_point_ray_cast(p)) {
             out.push_back(p);
         }
     }
@@ -958,7 +958,7 @@ std::vector<Vec3> Mesh::sample_volume_points_naive(int n) const {
     return out;
 }
 
-std::vector<Vec3> Mesh::sample_volume_points(int n) const {
+std::vector<Vec3> SurfaceMesh::sample_volume_points(int n) const {
     if (n <= 0) {
         return {};
     }
@@ -1004,14 +1004,14 @@ std::vector<Vec3> Mesh::sample_volume_points(int n) const {
     return out;
 }
 
-int Mesh::facet_index_for_face(int face_index) const {
+int SurfaceMesh::facet_index_for_face(int face_index) const {
     if (face_index < 0 || face_index >= static_cast<int>(face_to_facet_.size())) {
         return -1;
     }
     return face_to_facet_[face_index];
 }
 
-std::vector<int> Mesh::facet_indices_for_faces(const std::vector<int>& face_indices) const {
+std::vector<int> SurfaceMesh::facet_indices_for_faces(const std::vector<int>& face_indices) const {
     std::vector<int> out;
     out.reserve(face_indices.size());
     for (const int idx : face_indices) {
@@ -1020,7 +1020,7 @@ std::vector<int> Mesh::facet_indices_for_faces(const std::vector<int>& face_indi
     return out;
 }
 
-void Mesh::erase_vertices(const std::vector<int>& indices) {
+void SurfaceMesh::erase_vertices(const std::vector<int>& indices) {
     if (indices.empty()) {
         return;
     }
@@ -1050,7 +1050,7 @@ void Mesh::erase_vertices(const std::vector<int>& indices) {
     rebuild_cached_properties();
 }
 
-void Mesh::erase_faces(const std::vector<int>& indices) {
+void SurfaceMesh::erase_faces(const std::vector<int>& indices) {
     if (indices.empty()) {
         return;
     }
@@ -1069,7 +1069,7 @@ void Mesh::erase_faces(const std::vector<int>& indices) {
     rebuild_cached_properties();
 }
 
-void Mesh::remove_unreferenced_vertices() {
+void SurfaceMesh::remove_unreferenced_vertices() {
     std::vector<bool> used(vertices_.size(), false);
     for (const auto& f : faces_) {
         used[f[0]] = true;
@@ -1087,7 +1087,7 @@ void Mesh::remove_unreferenced_vertices() {
     }
 }
 
-void Mesh::merge_duplicate_vertices(double tol) {
+void SurfaceMesh::merge_duplicate_vertices(double tol) {
     if (vertices_.empty() || faces_.empty()) {
         return;
     }
@@ -1141,7 +1141,7 @@ void Mesh::merge_duplicate_vertices(double tol) {
     rebuild_cached_properties();
 }
 
-void Mesh::write_stl(const std::string& path, const std::string& name) const {
+void SurfaceMesh::write_stl(const std::string& path, const std::string& name) const {
     namespace fs = std::filesystem;
     fs::create_directories(path);
     const fs::path out_path = fs::path(path) / (name + ".stl");

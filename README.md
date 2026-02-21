@@ -1,6 +1,6 @@
-# EPMC (Energy Phonon Monte Carlo) 仿真框架
+# NTMC (Nano Thermal Monte Carlo) 仿真框架
 
-EPMC 是一个基于 C++ 开发的、利用声子蒙特卡洛（Phonon Monte Carlo）方法模拟半导体材料（如 Si, Ge, SiN）中声子输运过程的仿真框架。该工具支持复杂几何结构，并能通过 HDF5 文件加载真实的声子色散和散射数据，用于预测微纳尺度的热流分布和等效热导率。
+NTMC 是一个基于 C++ 开发的、利用声子蒙特卡洛（Phonon Monte Carlo）方法模拟半导体材料（如 Si, Ge, SiN）中声子输运过程的仿真框架。该工具支持复杂几何结构，并能通过 HDF5 文件加载真实的声子色散和散射数据，用于预测微纳尺度的热流分布和等效热导率。
 
 ## 核心功能
 
@@ -45,7 +45,7 @@ EPMC 是一个基于 C++ 开发的、利用声子蒙特卡洛（Phonon Monte Car
    make -j
    ```
 
-编译完成后，可执行文件 `epmc` 将生成在 `build` 文件夹中。
+编译完成后，可执行文件 `ntmc` 将生成在 `build` 文件夹中。
 
 ## 使用方法
 
@@ -53,14 +53,14 @@ EPMC 是一个基于 C++ 开发的、利用声子蒙特卡洛（Phonon Monte Car
 
    在项目根目录下运行，并指定配置文件（TOML 格式）：
    ```bash
-   ./build/epmc input_cross_100nm.toml
+   ./build/ntmc input_cross_100nm.toml
    ```
 
 2. **手动指定并行线程数**
    
    如果需要使用 64 核，可以运行：
    ```bash
-   OMP_NUM_THREADS=64 ./build/epmc input_cross_100nm.toml
+   OMP_NUM_THREADS=64 ./build/ntmc input_cross_100nm.toml
    ```
 
 ## 输出文件说明

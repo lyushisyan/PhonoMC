@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot 3D temperature distribution from EPMC convergence output."""
+"""Plot 3D temperature distribution from NTMC convergence output."""
 
 from __future__ import annotations
 
@@ -379,7 +379,7 @@ def _infer_block_size(centers: np.ndarray, scale: float) -> np.ndarray:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Plot 3D subvolume temperature from EPMC convergence output.")
+    parser = argparse.ArgumentParser(description="Plot 3D subvolume temperature from NTMC convergence output.")
     parser.add_argument("--input", required=True, help="Input TOML path")
     parser.add_argument("--results", default="", help="Results folder path (optional, auto-detect latest if omitted)")
     parser.add_argument("--tail", type=int, default=50, help="Average over last N rows")

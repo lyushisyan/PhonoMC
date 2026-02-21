@@ -5,7 +5,7 @@
 #include <tuple>
 #include <vector>
 
-class Mesh {
+class SurfaceMesh {
 public:
     using Vec3 = std::array<double, 3>;
     using Tri = std::array<int, 3>;
@@ -32,10 +32,10 @@ public:
         bool from_edge = false;
     };
 
-    Mesh() = default;
-    Mesh(std::vector<Vec3> vertices, std::vector<Tri> faces);
+    SurfaceMesh() = default;
+    SurfaceMesh(std::vector<Vec3> vertices, std::vector<Tri> faces);
 
-    void set_geometry_mesh(std::vector<Vec3> vertices, std::vector<Tri> faces);
+    void set_surface_mesh_data(std::vector<Vec3> vertices, std::vector<Tri> faces);
     void shift_to_origin();
 
     const std::vector<Vec3>& vertices() const { return vertices_; }
@@ -67,7 +67,7 @@ public:
     int nearest_facet(const Vec3& p) const;
     bool contains_point(const Vec3& p) const;
     std::vector<bool> contains_point(const std::vector<Vec3>& p) const;
-    bool contains_point_naive(const Vec3& p) const;
+    bool contains_point_ray_cast(const Vec3& p) const;
     std::tuple<Vec3, double, int> trace_boundary_intersection(const Vec3& x, const Vec3& v) const;
     std::tuple<std::vector<Vec3>, std::vector<double>, std::vector<int>, std::vector<int>> trace_boundary_intersections(
         const std::vector<Vec3>& x,

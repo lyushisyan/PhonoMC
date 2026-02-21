@@ -1,4 +1,4 @@
-#include "Geometry.h"
+#include "SimulationDomain.h"
 
 #include <algorithm>
 #include <cctype>
@@ -246,7 +246,7 @@ std::vector<Vec3> parse_points(const std::vector<std::string>& tokens, const std
     return pts;
 }
 
-std::vector<double> facet_boundary_edge_lengths(const Mesh& mesh, int facet) {
+std::vector<double> facet_boundary_edge_lengths(const SurfaceMesh& mesh, int facet) {
     std::vector<double> out;
     if (facet < 0 || facet >= static_cast<int>(mesh.facet_boundary_edges().size())) {
         return out;
@@ -267,21 +267,21 @@ std::vector<double> facet_boundary_edge_lengths(const Mesh& mesh, int facet) {
 }
 }  // namespace
 
-Geometry::Geometry(const SimulationConfig& args) {
-    build_mesh(args);
-    sync_mesh_properties();
+SimulationDomain::SimulationDomain(const SimulationConfig& args) {
+    build_surface_mesh(args);
+    sync_surface_mesh_properties();
     assign_boundary_conditions(args);
     build_periodic_connections(args);
     initialize_subvolumes(args);
     build_subvolume_connections();
-    write_geometry_summary(args);
+    write_domain_summary(args);
 
-    std::cout << "Geometry initialized: volume=" << volume_
+    std::cout << "SimulationDomain initialized: volume=" << volume_
               << ", facets=" << facet_count_
               << ", subvolumes=" << subvolume_count_ << '\n';
 }
 
-void Geometry::build_mesh(const SimulationConfig& args) {
+void SimulationDomain::build_surface_mesh(const SimulationConfig& args) {
     std::vector<Vec3> vertices;
     std::vector<Tri> faces;
 
@@ -360,11 +360,11 @@ void Geometry::build_mesh(const SimulationConfig& args) {
         faces = std::move(loaded.second);
     }
 
-    mesh_.set_geometry_mesh(std::move(vertices), std::move(faces));
+    mesh_.set_surface_mesh_data(std::move(vertices), std::move(faces));
     mesh_.shift_to_origin();
 }
 
-void Geometry::sync_mesh_properties() {
+void SimulationDomain::sync_surface_mesh_properties() {
     bounds_min_ = mesh_.bounds_min();
     bounds_max_ = mesh_.bounds_max();
     volume_ = mesh_.volume();
@@ -373,7 +373,7 @@ void Geometry::sync_mesh_properties() {
     periodic_shift_.assign(static_cast<size_t>(facet_count_), {0.0, 0.0, 0.0});
 }
 
-void Geometry::assign_boundary_conditions(const SimulationConfig& args) {
+void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) {
     if (facet_count_ == 0) {
         return;
     }
@@ -456,7 +456,7 @@ void Geometry::assign_boundary_conditions(const SimulationConfig& args) {
     }
 }
 
-void Geometry::build_periodic_connections(const SimulationConfig& args) {
+void SimulationDomain::build_periodic_connections(const SimulationConfig& args) {
     connected_facets_.clear();
     if (args.periodic_pair_positions.empty()) {
         return;
@@ -522,7 +522,7 @@ void Geometry::build_periodic_connections(const SimulationConfig& args) {
     }
 }
 
-void Geometry::initialize_subvolumes(const SimulationConfig& args) {
+void SimulationDomain::initialize_subvolumes(const SimulationConfig& args) {
     if (args.subvolume_layout.empty()) {
         subvolume_count_ = 1;
         subvolume_centers_ = {mul(add(bounds_min_, bounds_max_), 0.5)};
@@ -538,7 +538,7 @@ void Geometry::initialize_subvolumes(const SimulationConfig& args) {
     }
 }
 
-void Geometry::initialize_slice_subvolumes(const SimulationConfig& args) {
+void SimulationDomain::initialize_slice_subvolumes(const SimulationConfig& args) {
     if (args.subvolume_layout.size() < 3) {
         throw std::runtime_error("slice subvolume layout requires: slice N axis");
     }
@@ -557,7 +557,7 @@ void Geometry::initialize_slice_subvolumes(const SimulationConfig& args) {
     subvolume_volumes_.assign(static_cast<size_t>(subvolume_count_), volume_ / static_cast<double>(subvolume_count_));
 }
 
-void Geometry::initialize_grid_subvolumes(const SimulationConfig& args) {
+void SimulationDomain::initialize_grid_subvolumes(const SimulationConfig& args) {
     if (args.subvolume_layout.size() < 4) {
         throw std::runtime_error("grid subvolume layout requires: grid nx ny nz");
     }
@@ -591,7 +591,7 @@ void Geometry::initialize_grid_subvolumes(const SimulationConfig& args) {
     subvolume_volumes_.assign(static_cast<size_t>(subvolume_count_), volume_ / static_cast<double>(subvolume_count_));
 }
 
-void Geometry::build_subvolume_connections() {
+void SimulationDomain::build_subvolume_connections() {
     subvolume_connections_.clear();
     if (subvolume_count_ <= 1) {
         return;
@@ -629,7 +629,7 @@ void Geometry::build_subvolume_connections() {
     }
 }
 
-void Geometry::write_geometry_summary(const SimulationConfig& args) const {
+void SimulationDomain::write_domain_summary(const SimulationConfig& args) const {
     if (args.results_base_folder.empty()) {
         return;
     }
@@ -663,14 +663,14 @@ void Geometry::write_geometry_summary(const SimulationConfig& args) const {
     }
 }
 
-char Geometry::facet_boundary_condition(int facet) const {
+char SimulationDomain::facet_boundary_condition(int facet) const {
     if (facet < 0 || facet >= static_cast<int>(facet_boundary_conditions_.size())) {
         return 'P';
     }
     return facet_boundary_conditions_[facet];
 }
 
-double Geometry::reservoir_value_for_facet(int facet, double fallback) const {
+double SimulationDomain::reservoir_value_for_facet(int facet, double fallback) const {
     for (size_t i = 0; i < reservoir_facets_.size(); ++i) {
         if (reservoir_facets_[i] == facet) {
             if (i < reservoir_values_.size() && !std::isnan(reservoir_values_[i])) {
@@ -682,29 +682,29 @@ double Geometry::reservoir_value_for_facet(int facet, double fallback) const {
     return fallback;
 }
 
-bool Geometry::has_periodic_pair(int facet) const {
+bool SimulationDomain::has_periodic_pair(int facet) const {
     return facet >= 0 && facet < static_cast<int>(periodic_pair_.size()) && periodic_pair_[facet] >= 0;
 }
 
-int Geometry::periodic_pair_facet(int facet) const {
+int SimulationDomain::periodic_pair_facet(int facet) const {
     if (!has_periodic_pair(facet)) {
         return -1;
     }
     return periodic_pair_[facet];
 }
 
-std::array<double, 3> Geometry::periodic_shift_for_facet(int facet) const {
+std::array<double, 3> SimulationDomain::periodic_shift_for_facet(int facet) const {
     if (!has_periodic_pair(facet)) {
         return {0.0, 0.0, 0.0};
     }
     return periodic_shift_[facet];
 }
 
-bool Geometry::is_rough_facet(int facet) const {
+bool SimulationDomain::is_rough_facet(int facet) const {
     return std::find(rough_facets_.begin(), rough_facets_.end(), facet) != rough_facets_.end();
 }
 
-double Geometry::roughness_for_facet(int facet, double fallback) const {
+double SimulationDomain::roughness_for_facet(int facet, double fallback) const {
     for (size_t i = 0; i < rough_facets_.size(); ++i) {
         if (rough_facets_[i] == facet) {
             if (i < roughness_values_.size() && !std::isnan(roughness_values_[i])) {
