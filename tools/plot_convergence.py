@@ -103,7 +103,7 @@ def _plot_case(result_dir: Path, tail: int, err_mode: str, dpi: int) -> Dict[str
         raise ValueError(f"Cannot find temperature columns (T_sv_*) in {conv}")
 
     # 1) Heatflux convergence
-    fig, ax = plt.subplots(figsize=(7, 4), dpi=dpi)
+    fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
     ax.plot(x, cols[hf_col], lw=1.4)
     ax.set_xlabel("Timestep")
     ax.set_ylabel("Heat Flux (W/m^2)")
@@ -114,9 +114,15 @@ def _plot_case(result_dir: Path, tail: int, err_mode: str, dpi: int) -> Dict[str
     plt.close(fig)
 
     # 2) Kappa convergence
-    fig, ax = plt.subplots(figsize=(7, 4), dpi=dpi)
+    fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
     if kfit_col is not None:
         ax.plot(x, cols[kfit_col], lw=1.4, label=kfit_col)
+        # --- 修改 1: y轴最大值设置为 kappa_fit 最终值的 1.5 倍 ---
+        if cols[kfit_col].size > 0:
+            final_kappa = cols[kfit_col][-1]
+            if not np.isnan(final_kappa) and final_kappa > 0:
+                ax.set_ylim(0, final_kappa * 1.5)
+                
     if kend_col is not None:
         ax.plot(x, cols[kend_col], lw=1.4, label=kend_col)
     ax.set_xlabel("Timestep")
@@ -130,10 +136,15 @@ def _plot_case(result_dir: Path, tail: int, err_mode: str, dpi: int) -> Dict[str
     plt.close(fig)
 
     # 3) Temperature convergence
-    fig, ax = plt.subplots(figsize=(8, 4.5), dpi=dpi)
-    cmap = plt.get_cmap("tab10")
+    fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
+    # --- 修改 2: 使用渐变色 (如 viridis) 代替 tab10 ---
+    cmap = plt.get_cmap("viridis") 
+    n_lines = len(temp_cols)
     for i, c in enumerate(temp_cols):
-        ax.plot(x, cols[c], lw=1.0, color=cmap(i % 10), label=c)
+        # 根据子体积索引分配渐变色
+        color = cmap(i / (n_lines - 1)) if n_lines > 1 else cmap(0.5)
+        ax.plot(x, cols[c], lw=1.0, color=color, label=c)
+    
     ax.set_xlabel("Timestep")
     ax.set_ylabel("Temperature (K)")
     ax.set_title(f"Subvolume Temperature Convergence: {result_dir.name}")
@@ -156,11 +167,17 @@ def _plot_case(result_dir: Path, tail: int, err_mode: str, dpi: int) -> Dict[str
     else:
         err = std
 
-    idx = np.arange(len(temp_cols))
-    fig, ax = plt.subplots(figsize=(7, 4), dpi=dpi)
-    ax.errorbar(idx, mean, yerr=err, fmt="o-", capsize=4, lw=1.2)
+    # --- 修改 3: 横坐标索引加 1 (从 1 开始) ---
+    idx = np.arange(1, len(temp_cols) + 1)
+    
+    fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
+    ax.errorbar(idx, mean, yerr=err, fmt="o-", capsize=4, lw=1.2, mfc='none', mec='C0', mew=1.2)
     ax.set_xlabel("Subvolume Index")
     ax.set_ylabel("Temperature (K)")
+    
+    # --- 修改 4: 纵坐标设置默认 299 到 301 ---
+    ax.set_ylim(299, 301)
+    
     ax.set_title(f"Steady Temperature (last {n_tail} steps): {result_dir.name}")
     ax.grid(alpha=0.3)
     fig.tight_layout()
@@ -171,7 +188,7 @@ def _plot_case(result_dir: Path, tail: int, err_mode: str, dpi: int) -> Dict[str
     with csv_path.open("w", encoding="utf-8") as f:
         f.write("subvolume,mean_T,error,std\n")
         for i in range(len(temp_cols)):
-            f.write(f"{i},{mean[i]:.10g},{err[i]:.10g},{std[i]:.10g}\n")
+            f.write(f"{i+1},{mean[i]:.10g},{err[i]:.10g},{std[i]:.10g}\n")
 
     return {
         "name": np.array([result_dir.name]),

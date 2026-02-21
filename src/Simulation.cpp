@@ -1099,7 +1099,7 @@ void Simulation::write_convergence_header() {
         return;
     }
     std::ofstream out(std::filesystem::path(args_.results_base_folder) / "convergence.txt", std::ios::trunc);
-    out << "# timestep";
+    out << "# timestep time_ps"; 
     const int nsv = static_cast<int>(subvolume_temperatures_.size());
     for (int i = 0; i < nsv; ++i) {
         out << " T_sv_" << i;
@@ -1112,7 +1112,8 @@ void Simulation::append_convergence_row() const {
         return;
     }
     std::ofstream out(std::filesystem::path(args_.results_base_folder) / "convergence.txt", std::ios::app);
-    out << current_timestep_;
+    // 修改点：在第一列后增加 elapsed_time_
+    out << current_timestep_ << " " << elapsed_time_; 
     for (double tsv : subvolume_temperatures_) {
         out << " " << tsv;
     }
