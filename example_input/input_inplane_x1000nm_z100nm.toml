@@ -12,9 +12,9 @@ grid_xyz = [10, 1, 1]
 [boundary]
 boundary_position = [[0, 0.5, 0.5], [1, 0.5, 0.5], [0.5, 0, 0.5], [0.5, 1, 0.5], [0.5, 0.5, 0], [0.5, 0.5, 1]]
 boundary_conditions = ["T", "T", "P", "P", "R", "R"]
-boundary_values = [302, 298, 0.5, 0.5]
+boundary_values = [301, 299, 1.0, 1.0]
 periodic_pair = [[0.5, 0, 0.5], [0.5, 1, 0.5]]
 
 [io]
 material_folder = "Material/Si/"
-output_folder = "results/Inplane_x1000nm_yz100nm/"
+output_folder = "results/Inplane_x1000nm_z100nm/"
