@@ -1,6 +1,7 @@
 #include "SimulationConfig.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <filesystem>

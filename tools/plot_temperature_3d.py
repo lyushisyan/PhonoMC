@@ -334,12 +334,18 @@ def _build_centers_from_grid(cfg: dict, input_path: Path) -> np.ndarray:
 def _load_centers_csv(path: Path) -> np.ndarray:
     if not path.exists():
         raise FileNotFoundError(path)
+    header = path.read_text(encoding="utf-8").splitlines()[0].strip().lower()
+    is_nm = ("x_nm" in header) and ("y_nm" in header) and ("z_nm" in header)
     data = np.loadtxt(path, delimiter=",", skiprows=1)
     if data.ndim == 1:
         data = data.reshape(1, -1)
     if data.shape[1] < 4:
         raise ValueError(f"Invalid centers csv format: {path}")
-    return data[:, 1:4]
+    centers = data[:, 1:4]
+    if is_nm:
+        # Solver internals and mesh overlays use Angstrom.
+        centers = centers * 10.0
+    return centers
 
 
 def _set_equal_axes(ax, xyz: np.ndarray) -> None:

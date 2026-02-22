@@ -727,12 +727,17 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
     out << "grid_centers_csv = " << (fs::path(args.output_folder) / "grid_centers.csv").string() << '\n';
 
     std::ofstream centers_out(fs::path(args.output_folder) / "grid_centers.csv");
-    centers_out << "index,x,y,z,volume\n";
+    centers_out << "index,x_nm,y_nm,z_nm,volume_nm3\n";
     const size_t n = grid_centers_.size();
     for (size_t i = 0; i < n; ++i) {
         const auto& c = grid_centers_[i];
         const double v = (i < grid_volumes_.size()) ? grid_volumes_[i] : 0.0;
-        centers_out << i << "," << c[0] << "," << c[1] << "," << c[2] << "," << v << "\n";
+        // Internal length unit is Angstrom; export centers in nm for user-facing outputs.
+        centers_out << i << ","
+                    << (c[0] / 10.0) << ","
+                    << (c[1] / 10.0) << ","
+                    << (c[2] / 10.0) << ","
+                    << (v / 1000.0) << "\n";
     }
 }
 

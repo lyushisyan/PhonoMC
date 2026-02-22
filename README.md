@@ -71,4 +71,4 @@ NTMC 是一个基于 C++ 开发的、利用声子蒙特卡洛（Phonon Monte Car
 
   `summary.txt`: 综合摘要，包含关键输入参数与几何/网格/边界统计信息。
 
-  `grid_centers.csv`: 用于后处理，记录各网格区间的中心位置。
+  `grid_centers.csv`: 用于后处理，记录各网格区间的中心位置（nm）。
