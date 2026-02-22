@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -87,7 +88,16 @@ double vec_norm(const Vec3& v) {
 PhononMaterial::PhononMaterial(const SimulationConfig& args, int mat_index) {
     std::string err;
     if (!load_hdf5_data(args, mat_index, &err)) {
-        std::cerr << "Warning: failed to load HDF5 phonon data (" << err << "). Falling back to synthetic mode bank.\n";
+        const char* allow_fallback = std::getenv("NTMC_ALLOW_SYNTHETIC_MATERIAL");
+        const bool use_synthetic = (allow_fallback != nullptr) && (std::string(allow_fallback) == "1");
+        if (!use_synthetic) {
+            throw std::runtime_error(
+                "Failed to load HDF5 phonon data (" + err + "). "
+                "Simulation is aborted to avoid invalid thermal conductivity results. "
+                "Fix material_folder / HDF5 / POSCAR paths, or set NTMC_ALLOW_SYNTHETIC_MATERIAL=1 for test-only fallback.");
+        }
+        std::cerr << "Warning: failed to load HDF5 phonon data (" << err
+                  << "). NTMC_ALLOW_SYNTHETIC_MATERIAL=1 is set, falling back to synthetic mode bank.\n";
         build_fallback_modes(args);
     }
     initialize_temperature_lookup();

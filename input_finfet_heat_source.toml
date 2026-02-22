@@ -30,7 +30,7 @@ periodic_pair = [
 ]
 
 [io]
-material_folder = "Material/Si/"
+material_folder = "material/Si/"
 output_folder = "results/FinFET_HeatSource_A/"
 
 [heat_source]
