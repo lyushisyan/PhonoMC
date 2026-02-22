@@ -37,9 +37,9 @@ def _resolve_results_dir(input_path: Path, cfg: dict, explicit: str | None) -> P
         return p
 
     io_cfg = cfg.get("io", {})
-    base = io_cfg.get("results_folder")
+    base = io_cfg.get("output_folder")
     if not base:
-        raise ValueError("`[io].results_folder` not found in input TOML, and --results was not provided.")
+        raise ValueError("`[io].output_folder` not found in input TOML, and --results was not provided.")
     base_path = Path(base)
     if not base_path.is_absolute():
         base_path = (input_path.parent / base_path).resolve()
@@ -269,15 +269,12 @@ def _contains_point_mesh(point: np.ndarray, vertices: np.ndarray, faces: np.ndar
 
 def _build_centers_from_grid(cfg: dict, input_path: Path) -> np.ndarray:
     sim = cfg.get("simulation", {})
-    mode = sim.get("subvolumes_mode")
-    if mode != "grid":
-        raise ValueError("This plotting script currently supports `subvolumes_mode = \"grid\"`.")
-    g = sim.get("subvolumes_grid")
+    g = sim.get("grid_xyz")
     if not isinstance(g, list) or len(g) != 3:
-        raise ValueError("`subvolumes_grid` must be [nx, ny, nz].")
+        raise ValueError("`grid_xyz` must be [nx, ny, nz].")
     nx, ny, nz = int(g[0]), int(g[1]), int(g[2])
     if nx <= 0 or ny <= 0 or nz <= 0:
-        raise ValueError("subvolumes_grid entries must be positive.")
+        raise ValueError("grid_xyz entries must be positive.")
 
     geo = cfg.get("geometry", {})
     model = geo.get("model")
@@ -285,11 +282,12 @@ def _build_centers_from_grid(cfg: dict, input_path: Path) -> np.ndarray:
         raise ValueError("Missing `[geometry].model` in input TOML.")
 
     if model == "box":
-        dims = geo.get("dimensions")
+        dims = geo.get("sizes")
         if not isinstance(dims, list) or len(dims) != 3:
-            raise ValueError("Box model requires `dimensions = [Lx, Ly, Lz]`.")
+            raise ValueError("Box model requires `sizes = [Lx, Ly, Lz]`.")
         bmin = np.array([0.0, 0.0, 0.0], dtype=float)
-        bmax = np.array([float(dims[0]), float(dims[1]), float(dims[2])], dtype=float)
+        # Input sizes are in nm; solver converts to Angstrom internally.
+        bmax = np.array([float(dims[0]), float(dims[1]), float(dims[2])], dtype=float) * 10.0
         ext = bmax - bmin
         centers: List[Vec3] = []
         for ix in range(nx):
@@ -309,6 +307,9 @@ def _build_centers_from_grid(cfg: dict, input_path: Path) -> np.ndarray:
         p2 = (input_path.parent / mesh_path).resolve()
         mesh_path = p1 if p1.exists() else p2
     vertices, faces = _load_mesh(mesh_path)
+    if mesh_path.suffix.lower() == ".stl":
+        # STL geometry is in nm; solver converts to Angstrom internally.
+        vertices = vertices * 10.0
     bmin = vertices.min(axis=0)
     bmax = vertices.max(axis=0)
     ext = bmax - bmin
@@ -379,7 +380,7 @@ def _infer_block_size(centers: np.ndarray, scale: float) -> np.ndarray:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Plot 3D subvolume temperature from NTMC convergence output.")
+    parser = argparse.ArgumentParser(description="Plot 3D grid temperature from NTMC convergence output.")
     parser.add_argument("--input", required=True, help="Input TOML path")
     parser.add_argument("--results", default="", help="Results folder path (optional, auto-detect latest if omitted)")
     parser.add_argument("--tail", type=int, default=50, help="Average over last N rows")
@@ -397,14 +398,14 @@ def main() -> int:
     conv_path = results_dir / "convergence.txt"
     ts, temps, _rest, temp_cols = _load_convergence(conv_path)
     if temps.shape[1] == 0:
-        raise ValueError("No subvolume temperature columns found in convergence.txt.")
+        raise ValueError("No grid temperature columns found in convergence.txt.")
 
     tail_n = max(1, min(args.tail, temps.shape[0]))
     temps_tail = temps[-tail_n:, :]
     t_mean = temps_tail.mean(axis=0)
     t_std = temps_tail.std(axis=0, ddof=1 if tail_n > 1 else 0)
 
-    centers_csv = results_dir / "subvolume_centers.csv"
+    centers_csv = results_dir / "grid_centers.csv"
     if centers_csv.exists():
         centers = _load_centers_csv(centers_csv)
     else:
@@ -474,7 +475,7 @@ def main() -> int:
     print(f"[ok] results_dir: {results_dir}")
     print(f"[ok] convergence: {conv_path}")
     print(f"[ok] tail rows: {tail_n}")
-    print(f"[ok] subvolumes: {len(temp_cols)}")
+    print(f"[ok] grids: {len(temp_cols)}")
     print(f"[ok] csv: {out_csv}")
     print(f"[ok] png: {out_png}")
     return 0

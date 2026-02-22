@@ -34,7 +34,7 @@ MonteCarloSolver::MonteCarloSolver(const SimulationConfig& args, const Simulatio
               << ", time_step=" << time_step_
               << ", density=" << particle_density_ << '\n';
     std::cout << "Thermal conductivity estimation: "
-              << (args_.compute_thermal_conductivity ? "enabled" : "disabled")
+              << (args_.compute_kappa ? "enabled" : "disabled")
               << '\n';
 #ifdef _OPENMP
     std::cout << "OpenMP enabled: max_threads=" << omp_get_max_threads() << '\n';
@@ -42,8 +42,8 @@ MonteCarloSolver::MonteCarloSolver(const SimulationConfig& args, const Simulatio
     std::cout << "OpenMP enabled: no\n";
 #endif
 
-    if (!args_.results_base_folder.empty()) {
-        std::filesystem::create_directories(args_.results_base_folder);
+    if (!args_.output_folder.empty()) {
+        std::filesystem::create_directories(args_.output_folder);
     }
 
     initialize_particles(geometry, phonon);
@@ -56,12 +56,12 @@ MonteCarloSolver::MonteCarloSolver(const SimulationConfig& args, const Simulatio
 void MonteCarloSolver::initialize_particles(const SimulationDomain& geometry, const PhononMaterial& phonon) {
     const auto& mesh = geometry.mesh();
     particle_positions_ = mesh.sample_volume_points(particle_count_);
-    particle_subvolume_id_.assign(static_cast<size_t>(particle_count_), 0);
+    particle_grid_id_.assign(static_cast<size_t>(particle_count_), 0);
 #ifdef _OPENMP
 #pragma omp parallel for
 #endif
     for (int i = 0; i < particle_count_; ++i) {
-        particle_subvolume_id_[i] = nearest_subvolume_index(geometry, particle_positions_[i]);
+        particle_grid_id_[i] = nearest_grid_index(geometry, particle_positions_[i]);
     }
 
     initialize_particle_modes(phonon);
@@ -74,10 +74,10 @@ void MonteCarloSolver::initialize_particles(const SimulationDomain& geometry, co
     particle_energies_.resize(static_cast<size_t>(particle_count_));
     particle_alive_flags_.assign(static_cast<size_t>(particle_count_), static_cast<std::uint8_t>(1));
     const double tmin = particle_temperatures_.empty() ? 300.0 : *std::min_element(particle_temperatures_.begin(), particle_temperatures_.end());
-    const int nsv = std::max(1, geometry.subvolume_count());
-    subvolume_temperatures_.assign(static_cast<size_t>(nsv), tmin);
-    subvolume_particle_counts_.assign(static_cast<size_t>(nsv), 0);
-    subvolume_energy_density_.assign(static_cast<size_t>(nsv), 0.0);
+    const int nsv = std::max(1, geometry.grid_count());
+    grid_temperatures_.assign(static_cast<size_t>(nsv), tmin);
+    grid_particle_counts_.assign(static_cast<size_t>(nsv), 0);
+    grid_energy_density_.assign(static_cast<size_t>(nsv), 0.0);
 #ifdef _OPENMP
 #pragma omp parallel for
 #endif
@@ -123,51 +123,16 @@ void MonteCarloSolver::initialize_particle_temperatures(const SimulationDomain& 
     }
     const double tmean = 0.5 * (tmin + tmax);
     std::string key = "cold";
-    if (!args_.initial_temperature_profile.empty()) {
-        key = args_.initial_temperature_profile.front();
+    if (!args_.initial_temperature.empty()) {
+        key = args_.initial_temperature.front();
     }
 
     if (key == "cold") {
         std::fill(particle_temperatures_.begin(), particle_temperatures_.end(), tmin);
-    } else if (key == "hot") {
-        std::fill(particle_temperatures_.begin(), particle_temperatures_.end(), tmax);
     } else if (key == "mean") {
         std::fill(particle_temperatures_.begin(), particle_temperatures_.end(), tmean);
-    } else if (key == "random") {
-        std::uniform_real_distribution<double> U(tmin, tmax);
-        for (auto& t : particle_temperatures_) {
-            t = U(rng_);
-        }
-    } else if (key == "linear") {
-        const auto& centers = geometry.subvolume_centers();
-        int axis = 0;
-        if (!args_.subvolume_layout.empty() && args_.subvolume_layout.front() == "slice" && args_.subvolume_layout.size() >= 3) {
-            axis = std::clamp(std::stoi(args_.subvolume_layout[2]), 0, 2);
-        } else if (!centers.empty()) {
-            Vec3 mn = centers.front();
-            Vec3 mx = centers.front();
-            for (const auto& c : centers) {
-                for (int k = 0; k < 3; ++k) {
-                    mn[k] = std::min(mn[k], c[k]);
-                    mx[k] = std::max(mx[k], c[k]);
-                }
-            }
-            const Vec3 ex = sub(mx, mn);
-            axis = static_cast<int>(std::max_element(ex.begin(), ex.end()) - ex.begin());
-        }
-        double pmin = particle_positions_.front()[axis];
-        double pmax = particle_positions_.front()[axis];
-        for (const auto& p : particle_positions_) {
-            pmin = std::min(pmin, p[axis]);
-            pmax = std::max(pmax, p[axis]);
-        }
-        const double den = std::max(1e-12, pmax - pmin);
-        for (int i = 0; i < particle_count_; ++i) {
-            const double s = (particle_positions_[i][axis] - pmin) / den;
-            particle_temperatures_[i] = tmin + (tmax - tmin) * s;
-        }
     } else {
-        std::fill(particle_temperatures_.begin(), particle_temperatures_.end(), tmean);
+        throw std::runtime_error("initial_temperature only supports: cold, mean");
     }
 }
 
@@ -349,7 +314,7 @@ void MonteCarloSolver::initialize_rough_boundary_scattering(const SimulationDoma
 
 void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geometry) {
     local_heat_source_enabled_ = false;
-    local_heat_source_subvolume_mask_.clear();
+    local_heat_source_grid_mask_.clear();
     local_heat_source_power_density_wm3_ = args_.heat_source_power_density;
 
     if (!args_.heat_source_enabled) {
@@ -371,17 +336,13 @@ void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geom
         args_.heat_source_max[0], args_.heat_source_max[1], args_.heat_source_max[2]
     };
 
-    const std::string mode = args_.heat_source_mode;
-    if (mode == "relative") {
-        const auto& bmin = geometry.bounds_min();
-        const auto& bmax = geometry.bounds_max();
-        const Vec3 ext {bmax[0] - bmin[0], bmax[1] - bmin[1], bmax[2] - bmin[2]};
-        for (int k = 0; k < 3; ++k) {
-            local_heat_source_min_[k] = bmin[k] + local_heat_source_min_[k] * ext[k];
-            local_heat_source_max_[k] = bmin[k] + local_heat_source_max_[k] * ext[k];
-        }
-    } else if (mode != "absolute") {
-        throw std::runtime_error("Unsupported heat_source_mode. Use relative or absolute.");
+    // Heat source coordinates are always interpreted as relative [0, 1] box fractions.
+    const auto& bmin = geometry.bounds_min();
+    const auto& bmax = geometry.bounds_max();
+    const Vec3 ext {bmax[0] - bmin[0], bmax[1] - bmin[1], bmax[2] - bmin[2]};
+    for (int k = 0; k < 3; ++k) {
+        local_heat_source_min_[k] = bmin[k] + local_heat_source_min_[k] * ext[k];
+        local_heat_source_max_[k] = bmin[k] + local_heat_source_max_[k] * ext[k];
     }
 
     for (int k = 0; k < 3; ++k) {
@@ -390,8 +351,8 @@ void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geom
         }
     }
 
-    const auto& centers = geometry.subvolume_centers();
-    local_heat_source_subvolume_mask_.assign(centers.size(), static_cast<std::uint8_t>(0));
+    const auto& centers = geometry.grid_centers();
+    local_heat_source_grid_mask_.assign(centers.size(), static_cast<std::uint8_t>(0));
     int selected = 0;
     for (size_t i = 0; i < centers.size(); ++i) {
         const Vec3 c = centers[i];
@@ -400,18 +361,18 @@ void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geom
             c[1] >= local_heat_source_min_[1] && c[1] <= local_heat_source_max_[1] &&
             c[2] >= local_heat_source_min_[2] && c[2] <= local_heat_source_max_[2];
         if (inside) {
-            local_heat_source_subvolume_mask_[i] = static_cast<std::uint8_t>(1);
+            local_heat_source_grid_mask_[i] = static_cast<std::uint8_t>(1);
             ++selected;
         }
     }
 
     if (selected == 0) {
-        std::cerr << "Warning: heat source region does not include any subvolume center. Ignoring local heat source.\n";
+        std::cerr << "Warning: heat source region does not include any grid center. Ignoring local heat source.\n";
         return;
     }
 
     local_heat_source_enabled_ = true;
-    std::cout << "Local heat source enabled: selected_subvolumes=" << selected
+    std::cout << "Local heat source enabled: selected_grids=" << selected
               << ", power_density=" << local_heat_source_power_density_wm3_ << " W/m^3\n";
 }
 
@@ -423,10 +384,10 @@ void MonteCarloSolver::apply_local_heat_source() {
     if (!std::isfinite(delta_e) || std::abs(delta_e) <= 0.0) {
         return;
     }
-    const size_t n = std::min(subvolume_energy_density_.size(), local_heat_source_subvolume_mask_.size());
+    const size_t n = std::min(grid_energy_density_.size(), local_heat_source_grid_mask_.size());
     for (size_t i = 0; i < n; ++i) {
-        if (local_heat_source_subvolume_mask_[i] != 0) {
-            subvolume_energy_density_[i] += delta_e;
+        if (local_heat_source_grid_mask_[i] != 0) {
+            grid_energy_density_[i] += delta_e;
         }
     }
 }
@@ -493,16 +454,16 @@ std::array<int, 2> MonteCarloSolver::select_reflected_mode(
 
     const int out_ai = sample_diffuse_active_mode(rough_idx, in_ai);
     const std::array<int, 2> out_mode = phonon.active_mode_at(out_ai);
-    const int nsv = std::max(1, geometry.subvolume_count());
-    const int sv = std::clamp(nearest_subvolume_index(geometry, collision_pos), 0, nsv - 1);
-    const double Tdiff = (sv >= 0 && sv < static_cast<int>(subvolume_temperatures_.size()))
-        ? subvolume_temperatures_[static_cast<size_t>(sv)] : 300.0;
+    const int nsv = std::max(1, geometry.grid_count());
+    const int sv = std::clamp(nearest_grid_index(geometry, collision_pos), 0, nsv - 1);
+    const double Tdiff = (sv >= 0 && sv < static_cast<int>(grid_temperatures_.size()))
+        ? grid_temperatures_[static_cast<size_t>(sv)] : 300.0;
     out_occupation = phonon.bose_occupation(Tdiff, out_mode);
     return out_mode;
 }
 
-int MonteCarloSolver::nearest_subvolume_index(const SimulationDomain& geometry, const Vec3& p) const {
-    const auto& centers = geometry.subvolume_centers();
+int MonteCarloSolver::nearest_grid_index(const SimulationDomain& geometry, const Vec3& p) const {
+    const auto& centers = geometry.grid_centers();
     if (centers.empty()) {
         return 0;
     }
@@ -604,7 +565,7 @@ void MonteCarloSolver::process_boundary_collision(const SimulationDomain& geomet
     }
 
     particle_positions_[i] = add(particle_positions_[i], mul(particle_velocities_[i], push_eps_ / std::max(norm(particle_velocities_[i]), 1e-12)));
-    particle_subvolume_id_[i] = nearest_subvolume_index(geometry, particle_positions_[i]);
+    particle_grid_id_[i] = nearest_grid_index(geometry, particle_positions_[i]);
 }
 
 double MonteCarloSolver::compute_roughness_specularity(const SimulationDomain& geometry, const PhononMaterial& phonon, int i, int facet) const {
@@ -688,7 +649,7 @@ void MonteCarloSolver::remove_absorbed_particles() {
     remap_vecd(particle_omega_);
     remap_vecd(particle_occupation_);
     remap_vecd(particle_energies_);
-    remap_veci(particle_subvolume_id_);
+    remap_veci(particle_grid_id_);
     remap_veci(cached_collision_facets_);
     remap_vecc(cached_collision_conditions_);
     particle_alive_flags_.assign(alive_count, static_cast<std::uint8_t>(1));
@@ -757,7 +718,7 @@ std::vector<std::pair<int, double>> MonteCarloSolver::inject_particles_from_rese
             particle_omega_.push_back(phonon.mode_angular_frequency(mode));
             particle_occupation_.push_back(phonon.bose_occupation(Tres, mode));
             particle_energies_.push_back(0.0);
-            particle_subvolume_id_.push_back(nearest_subvolume_index(geometry, pos));
+            particle_grid_id_.push_back(nearest_grid_index(geometry, pos));
             cached_collision_facets_.push_back(-1);
             cached_collision_conditions_.push_back('P');
             particle_alive_flags_.push_back(static_cast<std::uint8_t>(1));
@@ -768,9 +729,9 @@ std::vector<std::pair<int, double>> MonteCarloSolver::inject_particles_from_rese
     return inserted;
 }
 
-void MonteCarloSolver::update_subvolume_energy_density(const SimulationDomain& geometry, const PhononMaterial& phonon) {
-    const int nsv = std::max(1, geometry.subvolume_count());
-    subvolume_energy_density_.assign(static_cast<size_t>(nsv), 0.0);
+void MonteCarloSolver::update_grid_energy_density(const SimulationDomain& geometry, const PhononMaterial& phonon) {
+    const int nsv = std::max(1, geometry.grid_count());
+    grid_energy_density_.assign(static_cast<size_t>(nsv), 0.0);
 
 #ifdef _OPENMP
     const int thread_count = omp_get_max_threads();
@@ -783,8 +744,8 @@ void MonteCarloSolver::update_subvolume_energy_density(const SimulationDomain& g
         auto& local_energy = energy_tls[static_cast<size_t>(tid)];
 #pragma omp for
         for (int i = 0; i < particle_count_; ++i) {
-            const int sv = std::clamp(particle_subvolume_id_[i], 0, nsv - 1);
-            const double n_eq = phonon.bose_occupation(subvolume_temperatures_[static_cast<size_t>(sv)], particle_modes_[i]);
+            const int sv = std::clamp(particle_grid_id_[i], 0, nsv - 1);
+            const double n_eq = phonon.bose_occupation(grid_temperatures_[static_cast<size_t>(sv)], particle_modes_[i]);
             const double dn = particle_occupation_[i] - n_eq;
             particle_omega_[i] = phonon.mode_angular_frequency(particle_modes_[i]);
             particle_energies_[i] = 6.582119569e-4 * particle_omega_[i] * dn;  // hbar[eV*ps] * mode_angular_frequency[rad/ps] => eV
@@ -793,17 +754,17 @@ void MonteCarloSolver::update_subvolume_energy_density(const SimulationDomain& g
     }
     for (const auto& local : energy_tls) {
         for (int sv = 0; sv < nsv; ++sv) {
-            subvolume_energy_density_[static_cast<size_t>(sv)] += local[static_cast<size_t>(sv)];
+            grid_energy_density_[static_cast<size_t>(sv)] += local[static_cast<size_t>(sv)];
         }
     }
 #else
     for (int i = 0; i < particle_count_; ++i) {
-        const int sv = std::clamp(particle_subvolume_id_[i], 0, nsv - 1);
-        const double n_eq = phonon.bose_occupation(subvolume_temperatures_[static_cast<size_t>(sv)], particle_modes_[i]);
+        const int sv = std::clamp(particle_grid_id_[i], 0, nsv - 1);
+        const double n_eq = phonon.bose_occupation(grid_temperatures_[static_cast<size_t>(sv)], particle_modes_[i]);
         const double dn = particle_occupation_[i] - n_eq;
         particle_omega_[i] = phonon.mode_angular_frequency(particle_modes_[i]);
         particle_energies_[i] = 6.582119569e-4 * particle_omega_[i] * dn;  // hbar[eV*ps] * mode_angular_frequency[rad/ps] => eV
-        subvolume_energy_density_[static_cast<size_t>(sv)] += particle_energies_[i];
+        grid_energy_density_[static_cast<size_t>(sv)] += particle_energies_[i];
     }
 #endif
 
@@ -811,21 +772,21 @@ void MonteCarloSolver::update_subvolume_energy_density(const SimulationDomain& g
 #pragma omp parallel for
 #endif
     for (int sv = 0; sv < nsv; ++sv) {
-        const int np = subvolume_particle_counts_[static_cast<size_t>(sv)];
+        const int np = grid_particle_counts_[static_cast<size_t>(sv)];
         double norm_fac = 0.0;
         if (np > 0) {
             norm_fac = static_cast<double>(phonon.active_mode_count()) / static_cast<double>(np);
         }
-        double e = subvolume_energy_density_[static_cast<size_t>(sv)] * norm_fac;
+        double e = grid_energy_density_[static_cast<size_t>(sv)] * norm_fac;
         e = phonon.normalize_to_energy_density(e);
-        e += phonon.crystal_energy_density(subvolume_temperatures_[static_cast<size_t>(sv)]);
-        subvolume_energy_density_[static_cast<size_t>(sv)] = e;
+        e += phonon.crystal_energy_density(grid_temperatures_[static_cast<size_t>(sv)]);
+        grid_energy_density_[static_cast<size_t>(sv)] = e;
     }
 }
 
 void MonteCarloSolver::update_particle_temperatures(const SimulationDomain& geometry, const PhononMaterial& phonon) {
-    const int nsv = std::max(1, geometry.subvolume_count());
-    subvolume_particle_counts_.assign(static_cast<size_t>(nsv), 0);
+    const int nsv = std::max(1, geometry.grid_count());
+    grid_particle_counts_.assign(static_cast<size_t>(nsv), 0);
 #ifdef _OPENMP
     const int thread_count = omp_get_max_threads();
     std::vector<std::vector<int>> count_tls(
@@ -837,40 +798,40 @@ void MonteCarloSolver::update_particle_temperatures(const SimulationDomain& geom
         auto& local_counts = count_tls[static_cast<size_t>(tid)];
 #pragma omp for
         for (int i = 0; i < particle_count_; ++i) {
-            particle_subvolume_id_[i] = nearest_subvolume_index(geometry, particle_positions_[i]);
-            const int sv = std::clamp(particle_subvolume_id_[i], 0, nsv - 1);
+            particle_grid_id_[i] = nearest_grid_index(geometry, particle_positions_[i]);
+            const int sv = std::clamp(particle_grid_id_[i], 0, nsv - 1);
             local_counts[static_cast<size_t>(sv)] += 1;
         }
     }
     for (const auto& local : count_tls) {
         for (int sv = 0; sv < nsv; ++sv) {
-            subvolume_particle_counts_[static_cast<size_t>(sv)] += local[static_cast<size_t>(sv)];
+            grid_particle_counts_[static_cast<size_t>(sv)] += local[static_cast<size_t>(sv)];
         }
     }
 #else
     for (int i = 0; i < particle_count_; ++i) {
-        particle_subvolume_id_[i] = nearest_subvolume_index(geometry, particle_positions_[i]);
-        const int sv = std::clamp(particle_subvolume_id_[i], 0, nsv - 1);
-        subvolume_particle_counts_[static_cast<size_t>(sv)] += 1;
+        particle_grid_id_[i] = nearest_grid_index(geometry, particle_positions_[i]);
+        const int sv = std::clamp(particle_grid_id_[i], 0, nsv - 1);
+        grid_particle_counts_[static_cast<size_t>(sv)] += 1;
     }
 #endif
 
-    update_subvolume_energy_density(geometry, phonon);
+    update_grid_energy_density(geometry, phonon);
     apply_local_heat_source();
 
 #ifdef _OPENMP
 #pragma omp parallel for
 #endif
     for (int sv = 0; sv < nsv; ++sv) {
-        subvolume_temperatures_[static_cast<size_t>(sv)] =
-            phonon.temperature_from_energy_density(subvolume_energy_density_[static_cast<size_t>(sv)]);
+        grid_temperatures_[static_cast<size_t>(sv)] =
+            phonon.temperature_from_energy_density(grid_energy_density_[static_cast<size_t>(sv)]);
     }
 #ifdef _OPENMP
 #pragma omp parallel for
 #endif
     for (int i = 0; i < particle_count_; ++i) {
-        const int sv = std::clamp(particle_subvolume_id_[i], 0, nsv - 1);
-        particle_temperatures_[i] = subvolume_temperatures_[static_cast<size_t>(sv)];
+        const int sv = std::clamp(particle_grid_id_[i], 0, nsv - 1);
+        particle_temperatures_[i] = grid_temperatures_[static_cast<size_t>(sv)];
     }
 }
 
@@ -891,8 +852,8 @@ void MonteCarloSolver::apply_lifetime_scattering(const PhononMaterial& phonon) {
 }
 
 void MonteCarloSolver::update_heat_flux_and_conductivity(const SimulationDomain& geometry) {
-    const int nsv = std::max(1, geometry.subvolume_count());
-    subvolume_heat_flux_.assign(static_cast<size_t>(nsv), {0.0, 0.0, 0.0});
+    const int nsv = std::max(1, geometry.grid_count());
+    grid_heat_flux_.assign(static_cast<size_t>(nsv), {0.0, 0.0, 0.0});
 
 #ifdef _OPENMP
     const int thread_count = omp_get_max_threads();
@@ -905,22 +866,22 @@ void MonteCarloSolver::update_heat_flux_and_conductivity(const SimulationDomain&
         auto& local_flux = flux_tls[static_cast<size_t>(tid)];
 #pragma omp for
         for (int i = 0; i < particle_count_; ++i) {
-            const int sv = std::clamp(particle_subvolume_id_[i], 0, nsv - 1);
+            const int sv = std::clamp(particle_grid_id_[i], 0, nsv - 1);
             local_flux[static_cast<size_t>(sv)] =
                 add(local_flux[static_cast<size_t>(sv)], mul(particle_velocities_[i], particle_energies_[i]));
         }
     }
     for (const auto& local : flux_tls) {
         for (int sv = 0; sv < nsv; ++sv) {
-            subvolume_heat_flux_[static_cast<size_t>(sv)] =
-                add(subvolume_heat_flux_[static_cast<size_t>(sv)], local[static_cast<size_t>(sv)]);
+            grid_heat_flux_[static_cast<size_t>(sv)] =
+                add(grid_heat_flux_[static_cast<size_t>(sv)], local[static_cast<size_t>(sv)]);
         }
     }
 #else
     for (int i = 0; i < particle_count_; ++i) {
-        const int sv = std::clamp(particle_subvolume_id_[i], 0, nsv - 1);
-        subvolume_heat_flux_[static_cast<size_t>(sv)] =
-            add(subvolume_heat_flux_[static_cast<size_t>(sv)], mul(particle_velocities_[i], particle_energies_[i]));
+        const int sv = std::clamp(particle_grid_id_[i], 0, nsv - 1);
+        grid_heat_flux_[static_cast<size_t>(sv)] =
+            add(grid_heat_flux_[static_cast<size_t>(sv)], mul(particle_velocities_[i], particle_energies_[i]));
     }
 #endif
 
@@ -928,21 +889,28 @@ void MonteCarloSolver::update_heat_flux_and_conductivity(const SimulationDomain&
 #pragma omp parallel for
 #endif
     for (int sv = 0; sv < nsv; ++sv) {
-        const int np = subvolume_particle_counts_[static_cast<size_t>(sv)];
+        const int np = grid_particle_counts_[static_cast<size_t>(sv)];
         double norm_fac = 0.0;
         if (np > 0 && phonon_ != nullptr) {
             norm_fac = static_cast<double>(phonon_->active_mode_count()) / static_cast<double>(np);
         }
-        subvolume_heat_flux_[static_cast<size_t>(sv)] = mul(subvolume_heat_flux_[static_cast<size_t>(sv)], norm_fac);
+        grid_heat_flux_[static_cast<size_t>(sv)] = mul(grid_heat_flux_[static_cast<size_t>(sv)], norm_fac);
         if (phonon_ != nullptr) {
-            subvolume_heat_flux_[static_cast<size_t>(sv)] = phonon_->normalize_to_energy_density(subvolume_heat_flux_[static_cast<size_t>(sv)]);
+            grid_heat_flux_[static_cast<size_t>(sv)] = phonon_->normalize_to_energy_density(grid_heat_flux_[static_cast<size_t>(sv)]);
         }
-        subvolume_heat_flux_[static_cast<size_t>(sv)] = mul(subvolume_heat_flux_[static_cast<size_t>(sv)], evpsa2_to_wm2_);
+        grid_heat_flux_[static_cast<size_t>(sv)] = mul(grid_heat_flux_[static_cast<size_t>(sv)], evpsa2_to_wm2_);
     }
 
     int axis = 0;
-    if (!args_.subvolume_layout.empty() && args_.subvolume_layout.front() == "slice" && args_.subvolume_layout.size() >= 3) {
-        axis = std::clamp(std::stoi(args_.subvolume_layout[2]), 0, 2);
+    if (!args_.grid_layout.empty() && args_.grid_layout.front() == "grid" && args_.grid_layout.size() >= 4) {
+        const int nx = std::max(1, std::stoi(args_.grid_layout[1]));
+        const int ny = std::max(1, std::stoi(args_.grid_layout[2]));
+        const int nz = std::max(1, std::stoi(args_.grid_layout[3]));
+        if (ny > nx && ny >= nz) {
+            axis = 1;
+        } else if (nz > nx && nz > ny) {
+            axis = 2;
+        }
     }
 
     std::vector<double> phi(static_cast<size_t>(nsv), 0.0);
@@ -950,20 +918,20 @@ void MonteCarloSolver::update_heat_flux_and_conductivity(const SimulationDomain&
 #pragma omp parallel for
 #endif
     for (int sv = 0; sv < nsv; ++sv) {
-        phi[static_cast<size_t>(sv)] = subvolume_heat_flux_[static_cast<size_t>(sv)][axis];
+        phi[static_cast<size_t>(sv)] = grid_heat_flux_[static_cast<size_t>(sv)][axis];
     }
 
-    const int total_np = std::max(1, std::accumulate(subvolume_particle_counts_.begin(), subvolume_particle_counts_.end(), 0));
+    const int total_np = std::max(1, std::accumulate(grid_particle_counts_.begin(), grid_particle_counts_.end(), 0));
     double phi_weighted = 0.0;
 #ifdef _OPENMP
 #pragma omp parallel for reduction(+:phi_weighted)
 #endif
     for (int sv = 0; sv < nsv; ++sv) {
-        phi_weighted += phi[static_cast<size_t>(sv)] * static_cast<double>(subvolume_particle_counts_[static_cast<size_t>(sv)]);
+        phi_weighted += phi[static_cast<size_t>(sv)] * static_cast<double>(grid_particle_counts_[static_cast<size_t>(sv)]);
     }
     average_heat_flux_along_axis_ = phi_weighted / static_cast<double>(total_np);
 
-    if (!args_.compute_thermal_conductivity) {
+    if (!args_.compute_kappa) {
         thermal_conductivity_fit_ = 0.0;
         thermal_conductivity_endpoints_ = 0.0;
         thermal_conductivity_ = 0.0;
@@ -972,10 +940,10 @@ void MonteCarloSolver::update_heat_flux_and_conductivity(const SimulationDomain&
 
     std::vector<double> T(static_cast<size_t>(nsv + 2), 0.0);
     for (int sv = 0; sv < nsv; ++sv) {
-        T[static_cast<size_t>(sv + 1)] = subvolume_temperatures_[static_cast<size_t>(sv)];
+        T[static_cast<size_t>(sv + 1)] = grid_temperatures_[static_cast<size_t>(sv)];
     }
-    double T_left = subvolume_temperatures_.front();
-    double T_right = subvolume_temperatures_.back();
+    double T_left = grid_temperatures_.front();
+    double T_right = grid_temperatures_.back();
     const auto& rf = geometry.reservoir_facets();
     if (rf.size() >= 2) {
         const auto& fcent = geometry.mesh().facet_centroids();
@@ -1010,8 +978,8 @@ void MonteCarloSolver::update_heat_flux_and_conductivity(const SimulationDomain&
         thermal_conductivity_endpoints_ = 0.0;
     }
 
-    // Method 2: linear fit on middle subvolume_layout.
-    const auto& centers = geometry.subvolume_centers();
+    // Method 2: linear fit on middle grids.
+    const auto& centers = geometry.grid_centers();
     int i0 = 0;
     int i1 = nsv - 1;
     if (nsv >= 6) {
@@ -1031,7 +999,7 @@ void MonteCarloSolver::update_heat_flux_and_conductivity(const SimulationDomain&
     int nfit = 0;
     for (int i = i0; i <= i1 && i < static_cast<int>(centers.size()); ++i) {
         const double x = centers[static_cast<size_t>(i)][axis] * angstrom_to_meter_;
-        const double tt = subvolume_temperatures_[static_cast<size_t>(i)];
+        const double tt = grid_temperatures_[static_cast<size_t>(i)];
         sx += x;
         st += tt;
         sxx += x * x;
@@ -1040,8 +1008,8 @@ void MonteCarloSolver::update_heat_flux_and_conductivity(const SimulationDomain&
     }
     double grad_fit = 0.0;
     const double dT_window = std::abs(
-        subvolume_temperatures_[static_cast<size_t>(std::clamp(i1, 0, nsv - 1))] -
-        subvolume_temperatures_[static_cast<size_t>(std::clamp(i0, 0, nsv - 1))]);
+        grid_temperatures_[static_cast<size_t>(std::clamp(i1, 0, nsv - 1))] -
+        grid_temperatures_[static_cast<size_t>(std::clamp(i0, 0, nsv - 1))]);
     if (nfit >= 2) {
         const double den = static_cast<double>(nfit) * sxx - sx * sx;
         if (std::abs(den) > 1e-30 && dT_window > 1e-6) {
@@ -1095,26 +1063,26 @@ void MonteCarloSolver::advance_particle(const SimulationDomain& geometry, const 
 }
 
 void MonteCarloSolver::write_convergence_header() {
-    if (args_.results_base_folder.empty()) {
+    if (args_.output_folder.empty()) {
         return;
     }
-    std::ofstream out(std::filesystem::path(args_.results_base_folder) / "convergence.txt", std::ios::trunc);
+    std::ofstream out(std::filesystem::path(args_.output_folder) / "convergence.txt", std::ios::trunc);
     out << "# timestep time_ps"; 
-    const int nsv = static_cast<int>(subvolume_temperatures_.size());
-    for (int i = 0; i < nsv; ++i) {
-        out << " T_sv_" << i;
+    const int ngrid = static_cast<int>(grid_temperatures_.size());
+    for (int i = 0; i < ngrid; ++i) {
+        out << " T_" << (i + 1);
     }
     out << " heatflux kappa_fit kappa_end\n";
 }
 
 void MonteCarloSolver::append_convergence_row() const {
-    if (args_.results_base_folder.empty()) {
+    if (args_.output_folder.empty()) {
         return;
     }
-    std::ofstream out(std::filesystem::path(args_.results_base_folder) / "convergence.txt", std::ios::app);
+    std::ofstream out(std::filesystem::path(args_.output_folder) / "convergence.txt", std::ios::app);
     // 修改点：在第一列后增加 elapsed_time_
     out << current_timestep_ << " " << elapsed_time_; 
-    for (double tsv : subvolume_temperatures_) {
+    for (double tsv : grid_temperatures_) {
         out << " " << tsv;
     }
     out << " " << average_heat_flux_along_axis_ << " " << thermal_conductivity_fit_ << " " << thermal_conductivity_endpoints_ << '\n';
@@ -1134,7 +1102,7 @@ void MonteCarloSolver::run_timestep() {
     for (int i = 0; i < n_before; ++i) {
         advance_particle(geometry, phonon, i, time_step_);
         if (i < particle_count_ && i < static_cast<int>(particle_alive_flags_.size()) && particle_alive_flags_[static_cast<size_t>(i)] != 0) {
-            particle_subvolume_id_[i] = nearest_subvolume_index(geometry, particle_positions_[i]);
+            particle_grid_id_[i] = nearest_grid_index(geometry, particle_positions_[i]);
         }
     }
     remove_absorbed_particles();
@@ -1174,12 +1142,12 @@ void MonteCarloSolver::run_timestep() {
         std::cout << "--- Progress: " << std::fixed << std::setprecision(1) << progress << "% ---" << std::endl;
         
         std::cout << "Temperature Profile (K): ";
-        for (double t : subvolume_temperatures_) {
+        for (double t : grid_temperatures_) {
             std::cout << std::setprecision(2) << t << " ";
         }
         std::cout << std::endl;
 
-        if (args_.compute_thermal_conductivity) {
+        if (args_.compute_kappa) {
             std::cout << "Current Conductivity (Fit): " << thermal_conductivity_fit_ << " W/mK" << std::endl;
             std::cout << "Current Conductivity (End): " << thermal_conductivity_endpoints_ << " W/mK" << std::endl;
         }

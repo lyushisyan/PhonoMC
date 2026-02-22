@@ -55,18 +55,18 @@ int main(int argc, char** argv) {
         }
 
         SimulationConfig args = load_simulation_config(input_file);
-        if (args.heat_source_enabled && args.compute_thermal_conductivity) {
+        if (args.heat_source_enabled && args.compute_kappa) {
             std::cout << "Config note: heat_source.enabled=true, so thermal conductivity estimation is disabled for this run.\n";
-            args.compute_thermal_conductivity = false;
+            args.compute_kappa = false;
         }
-        if (!args.results_base_folder.empty()) {
-            fs::path r(args.results_base_folder);
+        if (!args.output_folder.empty()) {
+            fs::path r(args.output_folder);
             if (!r.is_absolute()) {
-                args.results_base_folder = (fs::path(args.input_directory) / r).lexically_normal().string();
+                args.output_folder = (fs::path(args.input_directory) / r).lexically_normal().string();
             }
         }
-        args.results_base_folder = create_indexed_results_folder(args.results_base_folder);
-        std::cout << "Results folder: " << args.results_base_folder << '\n';
+        args.output_folder = create_indexed_output_folder(args.output_folder);
+        std::cout << "Results folder: " << args.output_folder << '\n';
 
         const auto start = std::chrono::steady_clock::now();
 

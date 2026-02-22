@@ -350,134 +350,89 @@ SimulationConfig parse_toml_file(const std::string& path) {
     if (auto v = get_first_value(kv, {"geometry.model", "model"}); v.has_value()) {
         args.model = unquote(*v);
     }
-    if (auto v = get_first_value(kv, {"geometry.dimensions", "dimensions"}); v.has_value()) {
-        args.dimensions = parse_number_array(*v);
+    if (auto v = get_first_value(kv, {"geometry.sizes", "sizes"}); v.has_value()) {
+        args.sizes = parse_number_array(*v);
+        // Input geometry sizes are in nm; convert to internal Angstrom.
+        for (double& x : args.sizes) {
+            x *= 10.0;
+        }
     }
-    if (auto v = get_first_value(kv, {"simulation.particle_count", "particle_count", "simulation.particles", "particles"}); v.has_value()) {
+    if (auto v = get_first_value(kv, {"simulation.particle_count", "particle_count"}); v.has_value()) {
         args.particle_count = parse_double_scalar(*v);
     }
-    if (auto v = get_first_value(kv, {"simulation.time_step", "time_step", "simulation.timestep", "timestep"}); v.has_value()) {
+    if (auto v = get_first_value(kv, {"simulation.time_step", "time_step"}); v.has_value()) {
         args.time_step = parse_double_scalar(*v);
     }
     if (auto v = get_first_value(kv, {"simulation.iterations", "iterations"}); v.has_value()) {
         args.iterations = parse_int_scalar(*v);
     }
     if (auto v = get_first_value(kv, {
-            "simulation.compute_thermal_conductivity",
-            "simulation.calculate_thermal_conductivity",
-            "simulation.calc_kappa",
-            "compute_thermal_conductivity",
-            "calculate_thermal_conductivity",
-            "calc_kappa"}); v.has_value()) {
-        args.compute_thermal_conductivity = parse_bool_scalar(*v);
+            "simulation.compute_kappa",
+            "compute_kappa"}); v.has_value()) {
+        args.compute_kappa = parse_bool_scalar(*v);
     }
 
-    if (auto v = get_first_value(kv, {"simulation.initial_temperature_profile", "initial_temperature_profile", "simulation.temp_dist", "temp_dist"}); v.has_value()) {
+    if (auto v = get_first_value(kv, {"simulation.initial_temperature", "initial_temperature"}); v.has_value()) {
         const std::string t = trim(*v);
         if (!t.empty() && t.front() == '[') {
-            args.initial_temperature_profile = parse_string_array(t);
+            args.initial_temperature = parse_string_array(t);
         } else {
-            args.initial_temperature_profile = {unquote(t)};
+            args.initial_temperature = {unquote(t)};
         }
     }
 
-    if (auto v = get_first_value(kv, {"simulation.subvolume_layout", "subvolume_layout", "simulation.subvolumes", "subvolumes"}); v.has_value()) {
-        args.subvolume_layout = parse_string_array(*v);
+    if (const auto gv = get_first_value(kv, {"simulation.grid_xyz", "grid_xyz"}); gv.has_value()) {
+        const auto gd = parse_number_array(*gv);
+        if (gd.size() != 3) {
+            throw std::runtime_error("grid_xyz must contain 3 values [nx, ny, nz].");
+        }
+        args.grid_layout = {
+            "grid",
+            std::to_string(static_cast<int>(std::llround(gd[0]))),
+            std::to_string(static_cast<int>(std::llround(gd[1]))),
+            std::to_string(static_cast<int>(std::llround(gd[2])))
+        };
     } else {
-        const auto mode_v = get_first_value(kv, {"simulation.subvolumes_mode", "subvolumes_mode"});
-        if (mode_v.has_value()) {
-            const std::string mode = to_lower(unquote(*mode_v));
-            if (mode == "slice") {
-                const auto n_v = get_first_value(kv, {"simulation.subvolumes_count", "simulation.subvolumes_n", "subvolumes_count", "subvolumes_n"});
-                const auto axis_v = get_first_value(kv, {"simulation.subvolumes_axis", "subvolumes_axis"});
-                if (!n_v.has_value() || !axis_v.has_value()) {
-                    throw std::runtime_error("TOML slice subvolume layout requires subvolumes_count and subvolumes_axis.");
-                }
-                args.subvolume_layout = {
-                    "slice",
-                    std::to_string(parse_int_scalar(*n_v)),
-                    std::to_string(parse_int_scalar(*axis_v))
-                };
-            } else if (mode == "grid") {
-                std::vector<int> g(3, 0);
-                if (const auto gv = get_first_value(kv, {"simulation.subvolumes_grid", "subvolumes_grid"}); gv.has_value()) {
-                    const auto gd = parse_number_array(*gv);
-                    if (gd.size() != 3) {
-                        throw std::runtime_error("subvolumes_grid must contain 3 values [nx, ny, nz].");
-                    }
-                    for (int i = 0; i < 3; ++i) {
-                        g[static_cast<size_t>(i)] = static_cast<int>(std::llround(gd[static_cast<size_t>(i)]));
-                    }
-                } else {
-                    const auto nx = get_first_value(kv, {"simulation.subvolumes_nx", "subvolumes_nx"});
-                    const auto ny = get_first_value(kv, {"simulation.subvolumes_ny", "subvolumes_ny"});
-                    const auto nz = get_first_value(kv, {"simulation.subvolumes_nz", "subvolumes_nz"});
-                    if (!nx.has_value() || !ny.has_value() || !nz.has_value()) {
-                        throw std::runtime_error("TOML grid subvolume layout requires subvolumes_grid or subvolumes_nx/ny/nz.");
-                    }
-                    g = {parse_int_scalar(*nx), parse_int_scalar(*ny), parse_int_scalar(*nz)};
-                }
-                args.subvolume_layout = {
-                    "grid",
-                    std::to_string(g[0]),
-                    std::to_string(g[1]),
-                    std::to_string(g[2])
-                };
-            } else {
-                throw std::runtime_error("Unsupported subvolumes_mode in TOML: " + mode);
-            }
-        }
+        throw std::runtime_error("Missing required key: simulation.grid_xyz (or grid_xyz).");
     }
 
-    if (auto v = get_first_value(kv, {"boundary.boundary_conditions", "boundary_conditions", "boundary.bound_cond", "bound_cond"}); v.has_value()) {
+    if (auto v = get_first_value(kv, {"boundary.boundary_conditions", "boundary_conditions"}); v.has_value()) {
         args.boundary_conditions = parse_string_array(*v);
     }
-    if (auto v = get_first_value(kv, {"boundary.boundary_values", "boundary_values", "boundary.bound_values", "bound_values"}); v.has_value()) {
+    if (auto v = get_first_value(kv, {"boundary.boundary_values", "boundary_values"}); v.has_value()) {
         args.boundary_values = parse_number_array(*v);
     }
 
-    if (auto v = get_first_value(kv, {"boundary.boundary_positions", "boundary_positions", "boundary.bound_pos", "bound_pos"}); v.has_value()) {
-        args.boundary_positions = parse_string_array(*v);
-    } else {
-        const auto mode = get_first_value(kv, {"boundary.bound_pos_mode", "bound_pos_mode"});
-        const auto pts = get_first_value(kv, {"boundary.bound_pos_points", "bound_pos_points"});
-        if (mode.has_value() && pts.has_value()) {
-            args.boundary_positions = flatten_points(unquote(*mode), parse_point_array(*pts));
-        }
+    if (auto pts = get_first_value(kv, {
+            "boundary.boundary_position", "boundary_position"}); pts.has_value()) {
+        args.boundary_position = flatten_points("relative", parse_point_array(*pts));
     }
 
-    if (auto v = get_first_value(kv, {"boundary.periodic_pair_positions", "periodic_pair_positions", "boundary.connect_pos", "connect_pos"}); v.has_value()) {
-        args.periodic_pair_positions = parse_string_array(*v);
-    } else {
-        const auto mode = get_first_value(kv, {"boundary.connect_pos_mode", "connect_pos_mode"});
-        const auto pts = get_first_value(kv, {"boundary.connect_pos_points", "connect_pos_points"});
-        if (mode.has_value() && pts.has_value()) {
-            args.periodic_pair_positions = flatten_points(unquote(*mode), parse_point_array(*pts));
-        }
+    if (auto pts = get_first_value(kv, {
+            "boundary.periodic_pair", "periodic_pair"}); pts.has_value()) {
+        args.periodic_pair = flatten_points("relative", parse_point_array(*pts));
     }
 
-    if (auto v = get_first_value(kv, {"io.material_folder", "material_folder", "io.mat_folder", "mat_folder"}); v.has_value()) {
+    if (auto v = get_first_value(kv, {"io.material_folder", "material_folder"}); v.has_value()) {
         args.material_folder = unquote(*v);
     }
-    if (auto v = get_first_value(kv, {"io.results_base_folder", "results_base_folder", "io.results_folder", "results_folder"}); v.has_value()) {
-        args.results_base_folder = unquote(*v);
+    if (auto v = get_first_value(kv, {
+            "io.output_folder", "output_folder"}); v.has_value()) {
+        args.output_folder = unquote(*v);
     }
 
     bool heat_source_enabled_set = false;
-    if (auto v = get_first_value(kv, {"heat_source.enabled", "heat_source_enabled"}); v.has_value()) {
+    if (auto v = get_first_value(kv, {"heat_source.enabled"}); v.has_value()) {
         args.heat_source_enabled = parse_bool_scalar(*v);
         heat_source_enabled_set = true;
     }
-    if (auto v = get_first_value(kv, {"heat_source.mode", "heat_source_mode"}); v.has_value()) {
-        args.heat_source_mode = to_lower(unquote(*v));
-    }
-    if (auto v = get_first_value(kv, {"heat_source.min", "heat_source_min"}); v.has_value()) {
+    if (auto v = get_first_value(kv, {"heat_source.min"}); v.has_value()) {
         args.heat_source_min = parse_number_array(*v);
     }
-    if (auto v = get_first_value(kv, {"heat_source.max", "heat_source_max"}); v.has_value()) {
+    if (auto v = get_first_value(kv, {"heat_source.max"}); v.has_value()) {
         args.heat_source_max = parse_number_array(*v);
     }
-    if (auto v = get_first_value(kv, {"heat_source.power_density", "heat_source.power_density_wm3", "heat_source_power_density", "heat_source_power_density_wm3"}); v.has_value()) {
+    if (auto v = get_first_value(kv, {"heat_source.power_density"}); v.has_value()) {
         args.heat_source_power_density = parse_double_scalar(*v);
     }
     if (!heat_source_enabled_set &&
@@ -510,86 +465,58 @@ SimulationConfig parse_legacy_file(const std::string& path) {
     if (auto it = kv.find("--model"); it != kv.end() && !it->second.empty()) {
         args.model = it->second.front();
     }
-    if (auto it = kv.find("--dimensions"); it != kv.end() && !it->second.empty()) {
-        args.dimensions.clear();
+    if (auto it = kv.find("--sizes"); it != kv.end() && !it->second.empty()) {
+        args.sizes.clear();
         for (const auto& v : it->second) {
-            args.dimensions.push_back(std::stod(v));
+            args.sizes.push_back(std::stod(v) * 10.0);
         }
     }
     if (auto it = kv.find("--particle_count"); it != kv.end() && !it->second.empty()) {
         args.particle_count = std::stod(it->second.front());
-    } else if (auto it2 = kv.find("--particles"); it2 != kv.end() && !it2->second.empty()) {
-        args.particle_count = std::stod(it2->second.front());
     }
     if (auto it = kv.find("--time_step"); it != kv.end() && !it->second.empty()) {
         args.time_step = std::stod(it->second.front());
-    } else if (auto it2 = kv.find("--timestep"); it2 != kv.end() && !it2->second.empty()) {
-        args.time_step = std::stod(it2->second.front());
     }
     if (auto it = kv.find("--iterations"); it != kv.end() && !it->second.empty()) {
         args.iterations = std::stoi(it->second.front());
     }
-    if (auto it = kv.find("--compute_thermal_conductivity"); it != kv.end() && !it->second.empty()) {
-        args.compute_thermal_conductivity = parse_bool_scalar(it->second.front());
-    } else if (auto it2 = kv.find("--calculate_thermal_conductivity"); it2 != kv.end() && !it2->second.empty()) {
-        args.compute_thermal_conductivity = parse_bool_scalar(it2->second.front());
-    } else if (auto it3 = kv.find("--calc_kappa"); it3 != kv.end() && !it3->second.empty()) {
-        args.compute_thermal_conductivity = parse_bool_scalar(it3->second.front());
+    if (auto it = kv.find("--compute_kappa"); it != kv.end() && !it->second.empty()) {
+        args.compute_kappa = parse_bool_scalar(it->second.front());
     }
-    if (auto it = kv.find("--subvolume_layout"); it != kv.end()) {
-        args.subvolume_layout = it->second;
-    } else if (auto it2 = kv.find("--subvolumes"); it2 != kv.end()) {
-        args.subvolume_layout = it2->second;
+    if (auto it = kv.find("--grid_xyz"); it != kv.end() && it->second.size() >= 3) {
+        args.grid_layout = {"grid", it->second[0], it->second[1], it->second[2]};
+    } else {
+        throw std::runtime_error("Missing required option: --grid_xyz nx ny nz");
     }
-    if (auto it = kv.find("--initial_temperature_profile"); it != kv.end()) {
-        args.initial_temperature_profile = it->second;
-    } else if (auto it2 = kv.find("--temp_dist"); it2 != kv.end()) {
-        args.initial_temperature_profile = it2->second;
+    if (auto it = kv.find("--initial_temperature"); it != kv.end()) {
+        args.initial_temperature = it->second;
     }
     if (auto it = kv.find("--boundary_conditions"); it != kv.end()) {
         args.boundary_conditions = it->second;
-    } else if (auto it2 = kv.find("--bound_cond"); it2 != kv.end()) {
-        args.boundary_conditions = it2->second;
     }
-    if (auto it = kv.find("--boundary_positions"); it != kv.end()) {
-        args.boundary_positions = it->second;
-    } else if (auto it2 = kv.find("--bound_pos"); it2 != kv.end()) {
-        args.boundary_positions = it2->second;
+    if (auto it = kv.find("--boundary_position"); it != kv.end()) {
+        args.boundary_position = it->second;
     }
     if (auto it = kv.find("--boundary_values"); it != kv.end()) {
         args.boundary_values.clear();
         for (const auto& v : it->second) {
             args.boundary_values.push_back(std::stod(v));
         }
-    } else if (auto it2 = kv.find("--bound_values"); it2 != kv.end()) {
-        args.boundary_values.clear();
-        for (const auto& v : it2->second) {
-            args.boundary_values.push_back(std::stod(v));
-        }
     }
-    if (auto it = kv.find("--periodic_pair_positions"); it != kv.end()) {
-        args.periodic_pair_positions = it->second;
-    } else if (auto it2 = kv.find("--connect_pos"); it2 != kv.end()) {
-        args.periodic_pair_positions = it2->second;
+    if (auto it = kv.find("--periodic_pair"); it != kv.end()) {
+        args.periodic_pair = it->second;
     }
     if (auto it = kv.find("--material_folder"); it != kv.end() && !it->second.empty()) {
         args.material_folder = it->second.front();
-    } else if (auto it2 = kv.find("--mat_folder"); it2 != kv.end() && !it2->second.empty()) {
-        args.material_folder = it2->second.front();
     }
-    if (auto it = kv.find("--results_base_folder"); it != kv.end() && !it->second.empty()) {
-        args.results_base_folder = it->second.front();
-    } else if (auto it2 = kv.find("--results_folder"); it2 != kv.end() && !it2->second.empty()) {
-        args.results_base_folder = it2->second.front();
+    if (auto it = kv.find("--output_folder"); it != kv.end() && !it->second.empty()) {
+        args.output_folder = it->second.front();
     }
 
     bool heat_source_enabled_set = false;
     if (auto it = kv.find("--heat_source_enabled"); it != kv.end() && !it->second.empty()) {
         args.heat_source_enabled = parse_bool_scalar(it->second.front());
         heat_source_enabled_set = true;
-    }
-    if (auto it = kv.find("--heat_source_mode"); it != kv.end() && !it->second.empty()) {
-        args.heat_source_mode = to_lower(it->second.front());
     }
     if (auto it = kv.find("--heat_source_min"); it != kv.end()) {
         args.heat_source_min.clear();
@@ -605,8 +532,6 @@ SimulationConfig parse_legacy_file(const std::string& path) {
     }
     if (auto it = kv.find("--heat_source_power_density"); it != kv.end() && !it->second.empty()) {
         args.heat_source_power_density = std::stod(it->second.front());
-    } else if (auto it2 = kv.find("--heat_source_power_density_wm3"); it2 != kv.end() && !it2->second.empty()) {
-        args.heat_source_power_density = std::stod(it2->second.front());
     }
     if (!heat_source_enabled_set &&
         args.heat_source_min.size() == 3 &&
@@ -626,13 +551,13 @@ SimulationConfig load_simulation_config(const std::string& path) {
     return parse_legacy_file(path);
 }
 
-std::string create_indexed_results_folder(const std::string& results_base_folder) {
-    if (results_base_folder.empty()) {
-        throw std::runtime_error("results_base_folder cannot be empty.");
+std::string create_indexed_output_folder(const std::string& output_folder) {
+    if (output_folder.empty()) {
+        throw std::runtime_error("output_folder cannot be empty.");
     }
 
     namespace fs = std::filesystem;
-    fs::path base_abs = fs::absolute(fs::path(results_base_folder)).lexically_normal();
+    fs::path base_abs = fs::absolute(fs::path(output_folder)).lexically_normal();
     if (base_abs.filename().empty()) {
         base_abs = base_abs.parent_path();
     }

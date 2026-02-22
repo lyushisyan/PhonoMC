@@ -2,17 +2,15 @@
 model = "Model/finfet_A.stl"
 
 [simulation]
-particles = 50000
-timestep = 0.1
+particle_count = 50000
+time_step = 0.1
 iterations = 1000
-compute_thermal_conductivity = false
-temp_dist = "mean"
-subvolumes_mode = "grid"
-subvolumes_grid = [22, 36, 30]
+compute_kappa = false
+initial_temperature = "mean"
+grid_xyz = [22, 36, 30]
 
 [boundary]
-bound_pos_mode = "relative"
-bound_pos_points = [
+boundary_position = [
   [0.5, 0.5, 0.0],
   [0.0, 0.5, 0.15],
   [1.0, 0.5, 0.15],
@@ -24,21 +22,19 @@ bound_pos_points = [
   [0.6818181818, 0.5, 0.7],
   [0.5, 0.5, 1.0]
 ]
-bound_cond = ["T", "P", "P", "P", "P", "R", "R", "R", "R", "R"]
-bound_values = [300.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-connect_pos_mode = "relative"
-connect_pos_points = [
+boundary_conditions = ["T", "P", "P", "P", "P", "R", "R", "R", "R", "R"]
+boundary_values = [300.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+periodic_pair = [
   [0.0, 0.5, 0.15], [1.0, 0.5, 0.15],
   [0.5, 0.0, 0.2], [0.5, 1.0, 0.2]
 ]
 
 [io]
-mat_folder = "Material/Si/"
-results_folder = "results/FinFET_HeatSource_A/"
+material_folder = "Material/Si/"
+output_folder = "results/FinFET_HeatSource_A/"
 
 [heat_source]
 enabled = true
-mode = "relative"
 min = [0.43, 0.43, 0.88]
 max = [0.57, 0.57, 0.99]
 power_density = 7.0e19

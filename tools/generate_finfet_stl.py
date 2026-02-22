@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Generate a simple FinFET outline STL (no top split)."""
+"""Generate a simple FinFET outline STL (no top split).
+
+Output STL coordinates are in nm by default.
+"""
 
 from __future__ import annotations
 
@@ -200,12 +203,12 @@ def _make_parser() -> argparse.ArgumentParser:
     p.add_argument("--output", default="Model/finfet.stl", help="Output STL path")
     p.add_argument("--name", default="finfet_simple", help="STL header name")
 
-    # Keep the same meaning as your reference code (default values in meters).
-    p.add_argument("--base-width", type=float, default=22e-9, help="Base width")
-    p.add_argument("--base-height", type=float, default=10e-9, help="Base height")
-    p.add_argument("--stem-width", type=float, default=8e-9, help="Stem width")
-    p.add_argument("--stem-height", type=float, default=20e-9, help="Stem height")
-    p.add_argument("--thickness-y", type=float, default=36e-9, help="Extrusion thickness along Y")
+    p.add_argument("--unit", choices=["nm", "m", "angstrom"], default="nm", help="Unit of input dimensions")
+    p.add_argument("--base-width", type=float, default=22.0, help="Base width")
+    p.add_argument("--base-height", type=float, default=10.0, help="Base height")
+    p.add_argument("--stem-width", type=float, default=8.0, help="Stem width")
+    p.add_argument("--stem-height", type=float, default=20.0, help="Stem height")
+    p.add_argument("--thickness-y", type=float, default=36.0, help="Extrusion thickness along Y")
 
     p.add_argument("--scale", type=float, default=1.0, help="Uniform scale factor applied to all dimensions")
     p.add_argument("--preview", action="store_true", help="Also save a PNG preview")
@@ -217,12 +220,19 @@ def main() -> int:
     args = _make_parser().parse_args()
 
     s = float(args.scale)
+    if args.unit == "nm":
+        unit_to_nm = 1.0
+    elif args.unit == "m":
+        unit_to_nm = 1e9
+    else:  # angstrom
+        unit_to_nm = 0.1
+
     vertices, faces = _build_simple_finfet(
-        base_width=args.base_width * s,
-        base_height=args.base_height * s,
-        stem_width=args.stem_width * s,
-        stem_height=args.stem_height * s,
-        thickness_y=args.thickness_y * s,
+        base_width=args.base_width * unit_to_nm * s,
+        base_height=args.base_height * unit_to_nm * s,
+        stem_width=args.stem_width * unit_to_nm * s,
+        stem_height=args.stem_height * unit_to_nm * s,
+        thickness_y=args.thickness_y * unit_to_nm * s,
     )
 
     out = Path(args.output)
@@ -230,6 +240,7 @@ def main() -> int:
     _write_binary_stl(out, vertices, faces, args.name)
 
     print(f"[ok] STL written: {out.resolve()}")
+    print(f"[ok] STL coordinate unit: nm")
     print(f"[ok] Total vertices: {len(vertices)}")
     print(f"[ok] Total faces: {len(faces)}")
     print("[ok] Top surface: unsplit (single flat stem top)")
@@ -241,4 +252,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

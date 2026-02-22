@@ -235,12 +235,18 @@ std::vector<Vec3> parse_points(const std::vector<std::string>& tokens, const std
     if (tokens.empty()) {
         return {};
     }
-    if ((tokens.size() - 1) % 3 != 0) {
-        throw std::runtime_error(name + " points must be declared as type + triplets.");
+    size_t start = 0;
+    try {
+        (void) std::stod(tokens.front());
+    } catch (...) {
+        start = 1;
+    }
+    if ((tokens.size() - start) % 3 != 0) {
+        throw std::runtime_error(name + " points must be declared as triplets.");
     }
     std::vector<Vec3> pts;
-    pts.reserve((tokens.size() - 1) / 3);
-    for (size_t i = 1; i < tokens.size(); i += 3) {
+    pts.reserve((tokens.size() - start) / 3);
+    for (size_t i = start; i < tokens.size(); i += 3) {
         pts.push_back({std::stod(tokens[i]), std::stod(tokens[i + 1]), std::stod(tokens[i + 2])});
     }
     return pts;
@@ -272,13 +278,13 @@ SimulationDomain::SimulationDomain(const SimulationConfig& args) {
     sync_surface_mesh_properties();
     assign_boundary_conditions(args);
     build_periodic_connections(args);
-    initialize_subvolumes(args);
-    build_subvolume_connections();
+    initialize_grids(args);
+    build_grid_connections();
     write_domain_summary(args);
 
     std::cout << "SimulationDomain initialized: volume=" << volume_
               << ", facets=" << facet_count_
-              << ", subvolumes=" << subvolume_count_ << '\n';
+              << ", grids=" << grid_count_ << '\n';
 }
 
 void SimulationDomain::build_surface_mesh(const SimulationConfig& args) {
@@ -286,10 +292,10 @@ void SimulationDomain::build_surface_mesh(const SimulationConfig& args) {
     std::vector<Tri> faces;
 
     if (args.model == "box") {
-        if (args.dimensions.size() != 3) {
-            throw std::runtime_error("Box requires 3 dimensions.");
+        if (args.sizes.size() != 3) {
+            throw std::runtime_error("Box requires 3 sizes.");
         }
-        const Vec3 d {args.dimensions[0], args.dimensions[1], args.dimensions[2]};
+        const Vec3 d {args.sizes[0], args.sizes[1], args.sizes[2]};
         vertices = {
             Vec3{0, 0, 0}, Vec3{0, 0, 1}, Vec3{0, 1, 1}, Vec3{0, 1, 0},
             Vec3{1, 0, 0}, Vec3{1, 0, 1}, Vec3{1, 1, 1}, Vec3{1, 1, 0}
@@ -305,12 +311,12 @@ void SimulationDomain::build_surface_mesh(const SimulationConfig& args) {
             Tri{0, 4, 7}, Tri{0, 7, 3}, Tri{1, 5, 6}, Tri{1, 6, 2}
         };
     } else if (args.model == "cylinder") {
-        if (args.dimensions.size() < 3) {
+        if (args.sizes.size() < 3) {
             throw std::runtime_error("Cylinder requires [L R N].");
         }
-        const double L = args.dimensions[0];
-        const double R = args.dimensions[1];
-        const int N = static_cast<int>(args.dimensions[2]);
+        const double L = args.sizes[0];
+        const double R = args.sizes[1];
+        const int N = static_cast<int>(args.sizes[2]);
         if (N < 3) {
             throw std::runtime_error("Cylinder segment count N must be >= 3.");
         }
@@ -358,6 +364,14 @@ void SimulationDomain::build_surface_mesh(const SimulationConfig& args) {
         auto loaded = load_mesh_file(mesh_path);
         vertices = std::move(loaded.first);
         faces = std::move(loaded.second);
+        // STL geometry is provided in nm; convert to internal Angstrom.
+        if (to_lower(mesh_path.extension().string()) == ".stl") {
+            for (auto& v : vertices) {
+                v[0] *= 10.0;
+                v[1] *= 10.0;
+                v[2] *= 10.0;
+            }
+        }
     }
 
     mesh_.set_surface_mesh_data(std::move(vertices), std::move(faces));
@@ -380,17 +394,13 @@ void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) 
     const char default_bc = args.boundary_conditions.empty() ? 'P' : args.boundary_conditions.back().empty() ? 'P' : args.boundary_conditions.back()[0];
     facet_boundary_conditions_.assign(facet_count_, default_bc);
 
-    if (!args.boundary_positions.empty()) {
-        auto points = parse_points(args.boundary_positions, "boundary_positions");
-        if (args.boundary_positions.front() == "relative") {
-            const Vec3 ext = sub(bounds_max_, bounds_min_);
-            for (auto& p : points) {
-                for (int k = 0; k < 3; ++k) {
-                    p[k] = bounds_min_[k] + p[k] * ext[k];
-                }
+    if (!args.boundary_position.empty()) {
+        auto points = parse_points(args.boundary_position, "boundary_position");
+        const Vec3 ext = sub(bounds_max_, bounds_min_);
+        for (auto& p : points) {
+            for (int k = 0; k < 3; ++k) {
+                p[k] = bounds_min_[k] + p[k] * ext[k];
             }
-        } else if (args.boundary_positions.front() != "absolute") {
-            throw std::runtime_error("boundary_positions must start with relative or absolute");
         }
 
         boundary_facets_.clear();
@@ -423,7 +433,8 @@ void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) 
         if (default_bc == 'T' || default_bc == 'F') {
             std::fill(reservoir_values_.begin(), reservoir_values_.end(), args.boundary_values.back());
         } else if (default_bc == 'R') {
-            std::fill(roughness_values_.begin(), roughness_values_.end(), args.boundary_values.back());
+            // Roughness is provided in nm in input; convert to Angstrom internally.
+            std::fill(roughness_values_.begin(), roughness_values_.end(), args.boundary_values.back() * 10.0);
         }
     }
 
@@ -447,7 +458,8 @@ void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) 
         } else if (bc == 'R') {
             for (size_t j = 0; j < rough_facets_.size(); ++j) {
                 if (rough_facets_[j] == f) {
-                    roughness_values_[j] = args.boundary_values[val_idx];
+                    // Roughness is provided in nm in input; convert to Angstrom internally.
+                    roughness_values_[j] = args.boundary_values[val_idx] * 10.0;
                     break;
                 }
             }
@@ -458,22 +470,18 @@ void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) 
 
 void SimulationDomain::build_periodic_connections(const SimulationConfig& args) {
     connected_facets_.clear();
-    if (args.periodic_pair_positions.empty()) {
+    if (args.periodic_pair.empty()) {
         return;
     }
-    auto points = parse_points(args.periodic_pair_positions, "periodic_pair_positions");
-    if (args.periodic_pair_positions.front() == "relative") {
-        const Vec3 ext = sub(bounds_max_, bounds_min_);
-        for (auto& p : points) {
-            for (int k = 0; k < 3; ++k) {
-                p[k] = bounds_min_[k] + p[k] * ext[k];
-            }
+    auto points = parse_points(args.periodic_pair, "periodic_pair");
+    const Vec3 ext = sub(bounds_max_, bounds_min_);
+    for (auto& p : points) {
+        for (int k = 0; k < 3; ++k) {
+            p[k] = bounds_min_[k] + p[k] * ext[k];
         }
-    } else if (args.periodic_pair_positions.front() != "absolute") {
-        throw std::runtime_error("periodic_pair_positions must start with relative or absolute");
     }
     if (points.size() % 2 != 0) {
-        throw std::runtime_error("periodic_pair_positions must have even number of points.");
+        throw std::runtime_error("periodic_pair must have even number of points.");
     }
 
     for (size_t i = 0; i < points.size(); i += 2) {
@@ -481,7 +489,7 @@ void SimulationDomain::build_periodic_connections(const SimulationConfig& args) 
         const int b = mesh_.nearest_facet(points[i + 1]);
         connected_facets_.push_back({a, b});
         if (a < 0 || b < 0) {
-            throw std::runtime_error("Connected facet mapping failed for periodic_pair_positions pair.");
+            throw std::runtime_error("Connected facet mapping failed for periodic_pair pair.");
         }
         if (facet_boundary_conditions_[a] != 'P' || facet_boundary_conditions_[b] != 'P') {
             throw std::runtime_error("Connected facets must both be periodic ('P').");
@@ -522,54 +530,28 @@ void SimulationDomain::build_periodic_connections(const SimulationConfig& args) 
     }
 }
 
-void SimulationDomain::initialize_subvolumes(const SimulationConfig& args) {
-    if (args.subvolume_layout.empty()) {
-        subvolume_count_ = 1;
-        subvolume_centers_ = {mul(add(bounds_min_, bounds_max_), 0.5)};
-        subvolume_volumes_ = {volume_};
-        return;
-    }
-    if (args.subvolume_layout.front() == "slice") {
-        initialize_slice_subvolumes(args);
-    } else if (args.subvolume_layout.front() == "grid") {
-        initialize_grid_subvolumes(args);
+void SimulationDomain::initialize_grids(const SimulationConfig& args) {
+    if (args.grid_layout.front() == "grid") {
+        initialize_grid_cells(args);
     } else {
-        throw std::runtime_error("Unsupported subvolume layout mode. Use slice or grid.");
+        throw std::runtime_error("Unsupported grid layout mode. Use grid.");
     }
 }
 
-void SimulationDomain::initialize_slice_subvolumes(const SimulationConfig& args) {
-    if (args.subvolume_layout.size() < 3) {
-        throw std::runtime_error("slice subvolume layout requires: slice N axis");
+void SimulationDomain::initialize_grid_cells(const SimulationConfig& args) {
+    if (args.grid_layout.size() < 4) {
+        throw std::runtime_error("grid layout requires: grid nx ny nz");
     }
-    subvolume_count_ = std::stoi(args.subvolume_layout[1]);
-    const int axis = std::stoi(args.subvolume_layout[2]);
-    if (axis < 0 || axis > 2 || subvolume_count_ <= 0) {
-        throw std::runtime_error("Invalid slice settings.");
-    }
-
-    subvolume_centers_.assign(static_cast<size_t>(subvolume_count_), mul(add(bounds_min_, bounds_max_), 0.5));
-    const double len = bounds_max_[axis] - bounds_min_[axis];
-    for (int i = 0; i < subvolume_count_; ++i) {
-        const double ratio = (static_cast<double>(i) + 0.5) / static_cast<double>(subvolume_count_);
-        subvolume_centers_[i][axis] = bounds_min_[axis] + ratio * len;
-    }
-    subvolume_volumes_.assign(static_cast<size_t>(subvolume_count_), volume_ / static_cast<double>(subvolume_count_));
-}
-
-void SimulationDomain::initialize_grid_subvolumes(const SimulationConfig& args) {
-    if (args.subvolume_layout.size() < 4) {
-        throw std::runtime_error("grid subvolume layout requires: grid nx ny nz");
-    }
-    const int nx = std::stoi(args.subvolume_layout[1]);
-    const int ny = std::stoi(args.subvolume_layout[2]);
-    const int nz = std::stoi(args.subvolume_layout[3]);
+    const int nx = std::stoi(args.grid_layout[1]);
+    const int ny = std::stoi(args.grid_layout[2]);
+    const int nz = std::stoi(args.grid_layout[3]);
     if (nx <= 0 || ny <= 0 || nz <= 0) {
-        throw std::runtime_error("Grid dimensions must be positive.");
+        throw std::runtime_error("Grid sizes must be positive.");
     }
     const Vec3 ext = sub(bounds_max_, bounds_min_);
-    subvolume_centers_.clear();
-    subvolume_centers_.reserve(static_cast<size_t>(nx * ny * nz));
+    grid_centers_.clear();
+    grid_centers_.reserve(static_cast<size_t>(nx * ny * nz));
+    const bool is_box = (args.model == "box");
     for (int ix = 0; ix < nx; ++ix) {
         for (int iy = 0; iy < ny; ++iy) {
             for (int iz = 0; iz < nz; ++iz) {
@@ -578,33 +560,33 @@ void SimulationDomain::initialize_grid_subvolumes(const SimulationConfig& args) 
                     bounds_min_[1] + (static_cast<double>(iy) + 0.5) * ext[1] / static_cast<double>(ny),
                     bounds_min_[2] + (static_cast<double>(iz) + 0.5) * ext[2] / static_cast<double>(nz)
                 };
-                if (mesh_.contains_point(p)) {
-                    subvolume_centers_.push_back(p);
+                if (is_box || mesh_.contains_point(p)) {
+                    grid_centers_.push_back(p);
                 }
             }
         }
     }
-    subvolume_count_ = static_cast<int>(subvolume_centers_.size());
-    if (subvolume_count_ == 0) {
-        throw std::runtime_error("No valid grid subvolume centers found inside mesh.");
+    grid_count_ = static_cast<int>(grid_centers_.size());
+    if (grid_count_ == 0) {
+        throw std::runtime_error("No valid grid centers found inside mesh.");
     }
-    subvolume_volumes_.assign(static_cast<size_t>(subvolume_count_), volume_ / static_cast<double>(subvolume_count_));
+    grid_volumes_.assign(static_cast<size_t>(grid_count_), volume_ / static_cast<double>(grid_count_));
 }
 
-void SimulationDomain::build_subvolume_connections() {
-    subvolume_connections_.clear();
-    if (subvolume_count_ <= 1) {
+void SimulationDomain::build_grid_connections() {
+    grid_connections_.clear();
+    if (grid_count_ <= 1) {
         return;
     }
-    for (int i = 0; i < subvolume_count_; ++i) {
+    for (int i = 0; i < grid_count_; ++i) {
         double min_d = std::numeric_limits<double>::max();
         std::vector<std::pair<double, int>> dists;
-        dists.reserve(static_cast<size_t>(subvolume_count_ - 1));
-        for (int j = 0; j < subvolume_count_; ++j) {
+        dists.reserve(static_cast<size_t>(grid_count_ - 1));
+        for (int j = 0; j < grid_count_; ++j) {
             if (i == j) {
                 continue;
             }
-            const double d = norm(sub(subvolume_centers_[i], subvolume_centers_[j]));
+            const double d = norm(sub(grid_centers_[i], grid_centers_[j]));
             dists.push_back({d, j});
             min_d = std::min(min_d, d);
         }
@@ -612,15 +594,15 @@ void SimulationDomain::build_subvolume_connections() {
             if (d <= min_d * 1.01) {
                 const int a = std::min(i, j);
                 const int b = std::max(i, j);
-                if (std::find(subvolume_connections_.begin(), subvolume_connections_.end(), std::array<int, 2>{a, b}) == subvolume_connections_.end()) {
-                    const Vec3 mid = mul(add(subvolume_centers_[a], subvolume_centers_[b]), 0.5);
+                if (std::find(grid_connections_.begin(), grid_connections_.end(), std::array<int, 2>{a, b}) == grid_connections_.end()) {
+                    const Vec3 mid = mul(add(grid_centers_[a], grid_centers_[b]), 0.5);
                     if (mesh_.contains_point(mid)) {
-                        subvolume_connections_.push_back({a, b});
+                        grid_connections_.push_back({a, b});
                     } else {
-                        const Vec3 dir = sub(subvolume_centers_[b], subvolume_centers_[a]);
-                        const auto [_, t, __] = mesh_.trace_boundary_intersection(subvolume_centers_[a], dir);
+                        const Vec3 dir = sub(grid_centers_[b], grid_centers_[a]);
+                        const auto [_, t, __] = mesh_.trace_boundary_intersection(grid_centers_[a], dir);
                         if (std::isinf(t) || t > 1.0) {
-                            subvolume_connections_.push_back({a, b});
+                            grid_connections_.push_back({a, b});
                         }
                     }
                 }
@@ -630,35 +612,126 @@ void SimulationDomain::build_subvolume_connections() {
 }
 
 void SimulationDomain::write_domain_summary(const SimulationConfig& args) const {
-    if (args.results_base_folder.empty()) {
+    if (args.output_folder.empty()) {
         return;
     }
     namespace fs = std::filesystem;
-    fs::create_directories(args.results_base_folder);
-    std::ofstream out(fs::path(args.results_base_folder) / "geometry_summary.txt");
-    out << "model=" << args.model << '\n';
-    out << "volume=" << volume_ << '\n';
-    out << "n_faces=" << mesh_.face_count() << '\n';
-    out << "n_facets=" << facet_count_ << '\n';
-    out << "n_simplices=" << mesh_.simplex_count() << '\n';
-    out << "n_subvols=" << subvolume_count_ << '\n';
-    out << "n_connections=" << subvolume_connections_.size() << '\n';
+    fs::create_directories(args.output_folder);
+    std::ofstream out(fs::path(args.output_folder) / "summary.txt");
+    auto join_strings = [](const std::vector<std::string>& v) -> std::string {
+        if (v.empty()) {
+            return "[]";
+        }
+        std::ostringstream oss;
+        oss << "[";
+        for (size_t i = 0; i < v.size(); ++i) {
+            if (i > 0) {
+                oss << ", ";
+            }
+            oss << v[i];
+        }
+        oss << "]";
+        return oss.str();
+    };
+    auto join_numbers = [](const std::vector<double>& v) -> std::string {
+        if (v.empty()) {
+            return "[]";
+        }
+        std::ostringstream oss;
+        oss << "[";
+        for (size_t i = 0; i < v.size(); ++i) {
+            if (i > 0) {
+                oss << ", ";
+            }
+            oss << v[i];
+        }
+        oss << "]";
+        return oss.str();
+    };
+    auto point_count = [](const std::vector<std::string>& v) -> int {
+        if (v.empty()) {
+            return 0;
+        }
+        size_t start = 0;
+        try {
+            (void) std::stod(v.front());
+        } catch (...) {
+            start = 1;
+        }
+        if ((v.size() - start) % 3 != 0) {
+            return 0;
+        }
+        return static_cast<int>((v.size() - start) / 3);
+    };
+
     int npairs = 0;
     for (int i = 0; i < facet_count_; ++i) {
         if (periodic_pair_[i] > i) {
             ++npairs;
         }
     }
-    out << "n_periodic_pairs=" << npairs << '\n';
-    out << "reservoir_facets=" << reservoir_facets_.size() << '\n';
-    out << "rough_facets=" << rough_facets_.size() << '\n';
 
-    std::ofstream centers_out(fs::path(args.results_base_folder) / "subvolume_centers.csv");
+    out << "[input]\n";
+    out << "model = " << args.model << '\n';
+    out << "sizes_nm = [" << (args.sizes.size() > 0 ? args.sizes[0] / 10.0 : 0.0)
+        << ", " << (args.sizes.size() > 1 ? args.sizes[1] / 10.0 : 0.0)
+        << ", " << (args.sizes.size() > 2 ? args.sizes[2] / 10.0 : 0.0) << "]\n";
+    out << "sizes_angstrom = [" << (args.sizes.size() > 0 ? args.sizes[0] : 0.0)
+        << ", " << (args.sizes.size() > 1 ? args.sizes[1] : 0.0)
+        << ", " << (args.sizes.size() > 2 ? args.sizes[2] : 0.0) << "]\n";
+    out << "particle_count = " << args.particle_count << '\n';
+    out << "time_step = " << args.time_step << '\n';
+    out << "iterations = " << args.iterations << '\n';
+    out << "compute_kappa = " << (args.compute_kappa ? "true" : "false") << '\n';
+    out << "initial_temperature = " << join_strings(args.initial_temperature) << '\n';
+    if (args.grid_layout.size() >= 4) {
+        out << "grid_xyz = [" << args.grid_layout[1] << ", " << args.grid_layout[2] << ", " << args.grid_layout[3] << "]\n";
+    } else {
+        out << "grid_xyz = []\n";
+    }
+    out << "boundary_conditions = " << join_strings(args.boundary_conditions) << '\n';
+    out << "boundary_values = " << join_numbers(args.boundary_values) << '\n';
+    out << "boundary_position_point_count = " << point_count(args.boundary_position) << '\n';
+    out << "boundary_position_tokens = " << join_strings(args.boundary_position) << '\n';
+    out << "periodic_pair_point_count = " << point_count(args.periodic_pair) << '\n';
+    out << "periodic_pair_tokens = " << join_strings(args.periodic_pair) << '\n';
+    out << "material_folder = " << args.material_folder << '\n';
+    out << "output_folder = " << args.output_folder << '\n';
+    out << "heat_source_enabled = " << (args.heat_source_enabled ? "true" : "false") << '\n';
+    out << "heat_source_min = " << join_numbers(args.heat_source_min) << '\n';
+    out << "heat_source_max = " << join_numbers(args.heat_source_max) << '\n';
+    out << "heat_source_power_density = " << args.heat_source_power_density << '\n';
+    out << '\n';
+
+    out << "[geometry]\n";
+    out << "volume = " << volume_ << '\n';
+    out << "bounds_min = [" << bounds_min_[0] << ", " << bounds_min_[1] << ", " << bounds_min_[2] << "]\n";
+    out << "bounds_max = [" << bounds_max_[0] << ", " << bounds_max_[1] << ", " << bounds_max_[2] << "]\n";
+    out << "n_faces = " << mesh_.face_count() << '\n';
+    out << "n_facets = " << facet_count_ << '\n';
+    out << "n_simplices = " << mesh_.simplex_count() << '\n';
+    out << '\n';
+
+    out << "[grid]\n";
+    out << "count = " << grid_count_ << '\n';
+    out << "connections = " << grid_connections_.size() << '\n';
+    out << '\n';
+
+    out << "[boundary]\n";
+    out << "reservoir_facets = " << reservoir_facets_.size() << '\n';
+    out << "rough_facets = " << rough_facets_.size() << '\n';
+    out << "periodic_pairs = " << npairs << '\n';
+    out << '\n';
+
+    out << "[files]\n";
+    out << "grid_centers_csv = " << (fs::path(args.output_folder) / "grid_centers.csv").string() << '\n';
+
+    std::ofstream centers_out(fs::path(args.output_folder) / "grid_centers.csv");
     centers_out << "index,x,y,z,volume\n";
-    const size_t n = subvolume_centers_.size();
+    const size_t n = grid_centers_.size();
     for (size_t i = 0; i < n; ++i) {
-        const auto& c = subvolume_centers_[i];
-        const double v = (i < subvolume_volumes_.size()) ? subvolume_volumes_[i] : 0.0;
+        const auto& c = grid_centers_[i];
+        const double v = (i < grid_volumes_.size()) ? grid_volumes_[i] : 0.0;
         centers_out << i << "," << c[0] << "," << c[1] << "," << c[2] << "," << v << "\n";
     }
 }

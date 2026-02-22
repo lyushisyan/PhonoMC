@@ -67,11 +67,11 @@ def _pick_column(cols: Dict[str, np.ndarray], candidates: List[str]) -> str | No
 
 
 def _temp_columns(cols: Dict[str, np.ndarray]) -> List[str]:
-    tcols = [c for c in cols if c.startswith("T_sv_")]
+    tcols = [c for c in cols if c.startswith("T_")]
 
     def _key(name: str) -> int:
         try:
-            return int(name.split("_")[-1])
+            return int(name[2:])
         except ValueError:
             return 10**9
 
@@ -100,7 +100,7 @@ def _plot_case(result_dir: Path, tail: int, err_mode: str, dpi: int) -> Dict[str
     kend_col = _pick_column(cols, ["kappa_end", "Kappa", "kappa"])
     temp_cols = _temp_columns(cols)
     if not temp_cols:
-        raise ValueError(f"Cannot find temperature columns (T_sv_*) in {conv}")
+        raise ValueError(f"Cannot find temperature columns (T_*) in {conv}")
 
     # 1) Heatflux convergence
     fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
@@ -141,13 +141,13 @@ def _plot_case(result_dir: Path, tail: int, err_mode: str, dpi: int) -> Dict[str
     cmap = plt.get_cmap("viridis") 
     n_lines = len(temp_cols)
     for i, c in enumerate(temp_cols):
-        # 根据子体积索引分配渐变色
+        # 根据网格索引分配渐变色
         color = cmap(i / (n_lines - 1)) if n_lines > 1 else cmap(0.5)
         ax.plot(x, cols[c], lw=1.0, color=color, label=c)
     
     ax.set_xlabel("Timestep")
     ax.set_ylabel("Temperature (K)")
-    ax.set_title(f"Subvolume Temperature Convergence: {result_dir.name}")
+    ax.set_title(f"Grid Temperature Convergence: {result_dir.name}")
     ax.grid(alpha=0.3)
     ax.legend(ncol=2, fontsize=8)
     fig.tight_layout()
@@ -172,7 +172,7 @@ def _plot_case(result_dir: Path, tail: int, err_mode: str, dpi: int) -> Dict[str
     
     fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
     ax.errorbar(idx, mean, yerr=err, fmt="o-", capsize=4, lw=1.2, mfc='none', mec='C0', mew=1.2)
-    ax.set_xlabel("Subvolume Index")
+    ax.set_xlabel("Grid Index")
     ax.set_ylabel("Temperature (K)")
     
     # --- 修改 4: 纵坐标设置默认 299 到 301 ---
@@ -186,7 +186,7 @@ def _plot_case(result_dir: Path, tail: int, err_mode: str, dpi: int) -> Dict[str
 
     csv_path = out_dir / f"temperature_steady_tail{n_tail}.csv"
     with csv_path.open("w", encoding="utf-8") as f:
-        f.write("subvolume,mean_T,error,std\n")
+        f.write("grid,mean_T,error,std\n")
         for i in range(len(temp_cols)):
             f.write(f"{i+1},{mean[i]:.10g},{err[i]:.10g},{std[i]:.10g}\n")
 
@@ -250,9 +250,9 @@ def _plot_summary(cases: List[Dict[str, np.ndarray]], summary_dir: Path, dpi: in
     # steady temperature profile comparison
     fig, ax = plt.subplots(figsize=(8, 4.5), dpi=dpi)
     for c in cases:
-        idx = np.arange(c["steady_mean"].size)
+        idx = np.arange(1, c["steady_mean"].size + 1)
         ax.errorbar(idx, c["steady_mean"], yerr=c["steady_err"], fmt="o-", capsize=3, lw=1.1, label=c["name"][0])
-    ax.set_xlabel("Subvolume Index")
+    ax.set_xlabel("Grid Index")
     ax.set_ylabel("Temperature (K)")
     ax.set_title("Steady Temperature Profile Comparison")
     ax.grid(alpha=0.3)

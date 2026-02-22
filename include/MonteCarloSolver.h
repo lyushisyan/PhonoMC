@@ -39,13 +39,13 @@ private:
         double& out_occupation,
         double in_occupation) const;
     void update_collision_cache(const SimulationDomain& geometry, const std::vector<int>& indices);
-    int nearest_subvolume_index(const SimulationDomain& geometry, const Vec3& p) const;
+    int nearest_grid_index(const SimulationDomain& geometry, const Vec3& p) const;
     void process_boundary_collision(const SimulationDomain& geometry, int i);
     void remove_absorbed_particles();
     std::vector<std::pair<int, double>> inject_particles_from_reservoirs(const SimulationDomain& geometry, const PhononMaterial& phonon);
     void advance_particle(const SimulationDomain& geometry, const PhononMaterial& phonon, int i, double dt_remaining);
     void update_particle_temperatures(const SimulationDomain& geometry, const PhononMaterial& phonon);
-    void update_subvolume_energy_density(const SimulationDomain& geometry, const PhononMaterial& phonon);
+    void update_grid_energy_density(const SimulationDomain& geometry, const PhononMaterial& phonon);
     void apply_lifetime_scattering(const PhononMaterial& phonon);
     void update_heat_flux_and_conductivity(const SimulationDomain& geometry);
     double compute_roughness_specularity(const SimulationDomain& geometry, const PhononMaterial& phonon, int i, int facet) const;
@@ -80,18 +80,18 @@ private:
     std::vector<Vec3> cached_collision_positions_;
     std::vector<double> timesteps_to_collision_;
     std::vector<double> particle_temperatures_;
-    std::vector<double> subvolume_temperatures_;
-    std::vector<int> subvolume_particle_counts_;
-    std::vector<double> subvolume_energy_density_;
+    std::vector<double> grid_temperatures_;
+    std::vector<int> grid_particle_counts_;
+    std::vector<double> grid_energy_density_;
     std::vector<double> particle_omega_;
     std::vector<double> particle_occupation_;
     std::vector<double> particle_energies_;
-    std::vector<Vec3> subvolume_heat_flux_;
+    std::vector<Vec3> grid_heat_flux_;
     double average_heat_flux_along_axis_ = 0.0;
     double thermal_conductivity_ = 0.0;
     double thermal_conductivity_fit_ = 0.0;
     double thermal_conductivity_endpoints_ = 0.0;
-    std::vector<int> particle_subvolume_id_;
+    std::vector<int> particle_grid_id_;
     std::vector<int> cached_collision_facets_;
     std::vector<char> cached_collision_conditions_;
     std::vector<std::uint8_t> particle_alive_flags_;
@@ -122,5 +122,5 @@ private:
     Vec3 local_heat_source_min_ {0.0, 0.0, 0.0};
     Vec3 local_heat_source_max_ {0.0, 0.0, 0.0};
     double local_heat_source_power_density_wm3_ = 0.0;
-    std::vector<std::uint8_t> local_heat_source_subvolume_mask_;
+    std::vector<std::uint8_t> local_heat_source_grid_mask_;
 };
