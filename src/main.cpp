@@ -6,6 +6,7 @@
 #include <chrono>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -89,6 +90,23 @@ int main(int argc, char** argv) {
                   << hours << " h "
                   << minutes << " min "
                   << seconds << " s\n";
+
+        if (!args.output_folder.empty()) {
+            std::ofstream summary(fs::path(args.output_folder) / "summary.txt", std::ios::app);
+            if (summary) {
+                summary << "\n[runtime]\n";
+                summary << "total_seconds = " << sec << '\n';
+                summary << "total_days = " << days << '\n';
+                summary << "total_hours = " << hours << '\n';
+                summary << "total_minutes = " << minutes << '\n';
+                summary << "total_seconds_remainder = " << seconds << '\n';
+                summary << "total_human_readable = "
+                        << days << " days "
+                        << hours << " h "
+                        << minutes << " min "
+                        << seconds << " s\n";
+            }
+        }
         return 0;
     } catch (const std::exception& ex) {
         std::cerr << "Fatal error: " << ex.what() << '\n';
