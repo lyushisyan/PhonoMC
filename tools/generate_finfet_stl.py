@@ -119,20 +119,22 @@ def _build_simple_finfet(
     x_s_half = 0.5 * stem_width
     z_base = base_height
     z_top = base_height + stem_height
+    y0 = -0.5 * thickness_y
+    y1 = 0.5 * thickness_y
 
-    # Front face (y=0), 8 points.
+    # Front face (y=-thickness/2), 8 points.
     vf: List[Vec3] = [
-        (-x_b_half, 0.0, 0.0),      # 0
-        (x_b_half, 0.0, 0.0),       # 1
-        (x_b_half, 0.0, z_base),    # 2
-        (x_s_half, 0.0, z_base),    # 3
-        (x_s_half, 0.0, z_top),     # 4
-        (-x_s_half, 0.0, z_top),    # 5
-        (-x_s_half, 0.0, z_base),   # 6
-        (-x_b_half, 0.0, z_base),   # 7
+        (-x_b_half, y0, 0.0),      # 0
+        (x_b_half, y0, 0.0),       # 1
+        (x_b_half, y0, z_base),    # 2
+        (x_s_half, y0, z_base),    # 3
+        (x_s_half, y0, z_top),     # 4
+        (-x_s_half, y0, z_top),    # 5
+        (-x_s_half, y0, z_base),   # 6
+        (-x_b_half, y0, z_base),   # 7
     ]
 
-    vb = [(x, thickness_y, z) for (x, _, z) in vf]  # 8..15
+    vb = [(x, y1, z) for (x, _, z) in vf]  # 8..15
     vertices: List[Vec3] = vf + vb
 
     faces: List[Face] = []

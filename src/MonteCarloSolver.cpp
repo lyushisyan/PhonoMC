@@ -982,15 +982,6 @@ void MonteCarloSolver::update_heat_flux_and_conductivity(const SimulationDomain&
     const auto& centers = geometry.grid_centers();
     int i0 = 0;
     int i1 = nsv - 1;
-    if (nsv >= 6) {
-        const int cut = std::max(1, nsv / 5);  // remove edge-biased zones near reservoirs
-        i0 = cut;
-        i1 = nsv - 1 - cut;
-    }
-    if (i1 - i0 + 1 < 2) {
-        i0 = 0;
-        i1 = nsv - 1;
-    }
 
     double sx = 0.0;
     double st = 0.0;
