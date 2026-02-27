@@ -1,6 +1,6 @@
 .DS_Store
 .vscode/
-.*.toml
+*.toml
 
 # Project artifacts
 build/
