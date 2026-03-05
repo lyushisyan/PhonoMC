@@ -17,14 +17,57 @@
 #include <omp.h>
 #endif
 
+// 函数说明：执行三维向量加法，服务于粒子位置与速度相关更新。
 MonteCarloSolver::Vec3 MonteCarloSolver::add(const Vec3& a, const Vec3& b) { return {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; }
+// 函数说明：执行三维向量减法，服务于碰撞几何与距离计算。
 MonteCarloSolver::Vec3 MonteCarloSolver::sub(const Vec3& a, const Vec3& b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
+// 函数说明：执行向量与标量缩放，用于时间推进与反射修正。
 MonteCarloSolver::Vec3 MonteCarloSolver::mul(const Vec3& a, double s) { return {a[0] * s, a[1] * s, a[2] * s}; }
+// 函数说明：计算向量点积，用于投影、入射角与法向分量判断。
 double MonteCarloSolver::dot(const Vec3& a, const Vec3& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+// 函数说明：计算向量模长，用于速度归一化与阈值保护。
 double MonteCarloSolver::norm(const Vec3& a) { return std::sqrt(dot(a, a)); }
 
+// 函数说明：按线程数与网格数复用线程局部缓冲，降低 OpenMP 临时分配开销。
+void MonteCarloSolver::ensure_tls_buffers(int thread_count, int nsv) {
+    thread_count = std::max(1, thread_count);
+    nsv = std::max(1, nsv);
+    if (thread_count == tls_thread_count_ && nsv == tls_nsv_) {
+        return;
+    }
+    tls_thread_count_ = thread_count;
+    tls_nsv_ = nsv;
+    const size_t total = static_cast<size_t>(thread_count) * static_cast<size_t>(nsv);
+    energy_tls_buffer_.assign(total, 0.0);
+    count_tls_buffer_.assign(total, 0);
+    flux_tls_buffer_.assign(total, Vec3 {0.0, 0.0, 0.0});
+}
+
+// 函数说明：提供线程独立随机数发生器，保证并行采样过程的线程安全。
+std::mt19937_64& MonteCarloSolver::thread_rng() const {
+#ifdef _OPENMP
+    static thread_local std::mt19937_64 tl_rng;
+    static thread_local bool tl_seeded = false;
+    if (!tl_seeded) {
+        const unsigned tid = static_cast<unsigned>(omp_get_thread_num());
+        std::seed_seq seq {
+            static_cast<unsigned>(rng_seed_base_ & 0xffffffffu),
+            static_cast<unsigned>((rng_seed_base_ >> 32) & 0xffffffffu),
+            tid
+        };
+        tl_rng.seed(seq);
+        tl_seeded = true;
+    }
+    return tl_rng;
+#else
+    return rng_;
+#endif
+}
+
+// 函数说明：构造蒙特卡洛求解器并完成粒子、边界、热流统计与输出初始化。
 MonteCarloSolver::MonteCarloSolver(const SimulationConfig& args, const SimulationDomain& geometry, const PhononMaterial& phonon)
     : args_(args), geometry_(&geometry), phonon_(&phonon) {
+    rng_seed_base_ = rng_();
     particle_count_ = std::max(1, static_cast<int>(std::llround(args_.particle_count)));
     time_step_ = std::max(1e-12, args_.time_step);
     push_eps_ = 1e-10 * std::max(time_step_, 1.0);
@@ -53,6 +96,7 @@ MonteCarloSolver::MonteCarloSolver(const SimulationConfig& args, const Simulatio
     append_convergence_row();
 }
 
+// 函数说明：初始化粒子主状态与碰撞缓存，建立时间推进的初始条件。
 void MonteCarloSolver::initialize_particles(const SimulationDomain& geometry, const PhononMaterial& phonon) {
     const auto& mesh = geometry.mesh();
     particle_positions_ = mesh.sample_volume_points(particle_count_);
@@ -97,6 +141,7 @@ void MonteCarloSolver::initialize_particles(const SimulationDomain& geometry, co
     update_particle_temperatures(geometry, phonon);
 }
 
+// 函数说明：按材料活跃模态集合为每个粒子分配初始声子模态。
 void MonteCarloSolver::initialize_particle_modes(const PhononMaterial& phonon) {
     particle_modes_.resize(static_cast<size_t>(particle_count_));
     for (int i = 0; i < particle_count_; ++i) {
@@ -104,6 +149,7 @@ void MonteCarloSolver::initialize_particle_modes(const PhononMaterial& phonon) {
     }
 }
 
+// 函数说明：依据边界温度与初始策略设置粒子温度场。
 void MonteCarloSolver::initialize_particle_temperatures(const SimulationDomain& geometry) {
     particle_temperatures_.assign(static_cast<size_t>(particle_count_), 300.0);
     const auto& res_vals = geometry.reservoir_values();
@@ -136,9 +182,11 @@ void MonteCarloSolver::initialize_particle_temperatures(const SimulationDomain& 
     }
 }
 
+// 函数说明：采样随机单位方向，用于漫反射与方向随机化过程。
 MonteCarloSolver::Vec3 MonteCarloSolver::random_unit_vector() {
+    auto& rng = thread_rng();
     std::normal_distribution<double> N(0.0, 1.0);
-    Vec3 v {N(rng_), N(rng_), N(rng_)};
+    Vec3 v {N(rng), N(rng), N(rng)};
     const double n = norm(v);
     if (n <= 1e-12) {
         return {1.0, 0.0, 0.0};
@@ -146,6 +194,7 @@ MonteCarloSolver::Vec3 MonteCarloSolver::random_unit_vector() {
     return mul(v, 1.0 / n);
 }
 
+// 函数说明：根据粒子模态查询群速度并写入速度场。
 void MonteCarloSolver::initialize_particle_velocities(const PhononMaterial& phonon) {
     particle_velocities_.resize(static_cast<size_t>(particle_count_));
 #ifdef _OPENMP
@@ -156,6 +205,7 @@ void MonteCarloSolver::initialize_particle_velocities(const PhononMaterial& phon
     }
 }
 
+// 函数说明：预计算热库注入概率与计数器，驱动边界粒子注入机制。
 void MonteCarloSolver::initialize_reservoir_injection(const SimulationDomain& geometry, const PhononMaterial& phonon) {
     reservoir_facets_ = geometry.reservoir_facets();
     reservoir_temperatures_.clear();
@@ -170,6 +220,7 @@ void MonteCarloSolver::initialize_reservoir_injection(const SimulationDomain& ge
     reservoir_areas_.assign(static_cast<size_t>(reservoir_count_), 0.0);
     reservoir_normals_.assign(static_cast<size_t>(reservoir_count_), {0.0, 0.0, 1.0});
 
+    auto& rng = thread_rng();
     std::uniform_real_distribution<double> U(0.0, 1.0);
     const auto& mesh = geometry.mesh();
     const auto& areas = mesh.facet_areas();
@@ -189,11 +240,12 @@ void MonteCarloSolver::initialize_reservoir_injection(const SimulationDomain& ge
             const double gv_parallel = -dot(reservoir_normals_[static_cast<size_t>(r)], gv);
             const double p = std::max(0.0, gv_parallel * time_step_ / std::max(1e-18, bound_thickness));
             reservoir_entry_probability_[static_cast<size_t>(r)][m] = p;
-            reservoir_emit_counter_[static_cast<size_t>(r)][m] = U(rng_);
+            reservoir_emit_counter_[static_cast<size_t>(r)][m] = U(rng);
         }
     }
 }
 
+// 函数说明：构建粗糙边界散射查找表，包含镜面率与漫反射候选映射。
 void MonteCarloSolver::initialize_rough_boundary_scattering(const SimulationDomain& geometry, const PhononMaterial& phonon) {
     const auto& mesh = geometry.mesh();
     const int nfacets = mesh.facet_count();
@@ -312,6 +364,7 @@ void MonteCarloSolver::initialize_rough_boundary_scattering(const SimulationDoma
     }
 }
 
+// 函数说明：解析局部热源区域并生成网格掩码与功率参数。
 void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geometry) {
     local_heat_source_enabled_ = false;
     local_heat_source_grid_mask_.clear();
@@ -376,6 +429,7 @@ void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geom
               << ", power_density=" << local_heat_source_power_density_wm3_ << " W/m^3\n";
 }
 
+// 函数说明：在每步能量更新后向热源区域叠加体热源能量。
 void MonteCarloSolver::apply_local_heat_source() {
     if (!local_heat_source_enabled_) {
         return;
@@ -392,14 +446,16 @@ void MonteCarloSolver::apply_local_heat_source() {
     }
 }
 
+// 函数说明：在粗糙边界条件下采样漫反射后的活跃模态索引。
 int MonteCarloSolver::sample_diffuse_active_mode(int rough_idx, int in_ai) const {
+    auto& rng = thread_rng();
     const int na = (phonon_ != nullptr) ? phonon_->active_mode_count() : 0;
     if (na <= 0) {
         return 0;
     }
     if (rough_idx < 0 || rough_idx >= static_cast<int>(rough_boundary_data_.size())) {
         std::uniform_int_distribution<int> U(0, na - 1);
-        return U(rng_);
+        return U(rng);
     }
     const auto& rd = rough_boundary_data_[static_cast<size_t>(rough_idx)];
     if (in_ai >= 0 &&
@@ -410,17 +466,18 @@ int MonteCarloSolver::sample_diffuse_active_mode(int rough_idx, int in_ai) const
         const int ie = rd.diffuse_end[static_cast<size_t>(in_ai)];
         if (ie > ib && ib >= 0 && ie <= static_cast<int>(rd.outgoing_sorted_active.size())) {
             std::uniform_int_distribution<int> U(ib, ie - 1);
-            return rd.outgoing_sorted_active[static_cast<size_t>(U(rng_))];
+            return rd.outgoing_sorted_active[static_cast<size_t>(U(rng))];
         }
     }
     if (!rd.outgoing_active.empty()) {
         std::uniform_int_distribution<int> U(0, static_cast<int>(rd.outgoing_active.size()) - 1);
-        return rd.outgoing_active[static_cast<size_t>(U(rng_))];
+        return rd.outgoing_active[static_cast<size_t>(U(rng))];
     }
     std::uniform_int_distribution<int> U(0, na - 1);
-    return U(rng_);
+    return U(rng);
 }
 
+// 函数说明：按镜面/漫反射概率选择碰撞后的模态与占据数。
 std::array<int, 2> MonteCarloSolver::select_reflected_mode(
     const SimulationDomain& geometry,
     const PhononMaterial& phonon,
@@ -441,10 +498,11 @@ std::array<int, 2> MonteCarloSolver::select_reflected_mode(
     }
 
     std::uniform_real_distribution<double> U01(0.0, 1.0);
+    auto& rng = thread_rng();
     const double p_spec = (in_ai >= 0 && in_ai < static_cast<int>(rd.specularity.size()))
         ? std::clamp(rd.specularity[static_cast<size_t>(in_ai)], 0.0, 1.0)
         : 0.0;
-    if (in_ai >= 0 && U01(rng_) <= p_spec) {
+    if (in_ai >= 0 && U01(rng) <= p_spec) {
         const int out_ai = rd.spec_match_active[static_cast<size_t>(in_ai)];
         if (out_ai >= 0 && out_ai < na) {
             out_occupation = in_occupation;
@@ -462,6 +520,7 @@ std::array<int, 2> MonteCarloSolver::select_reflected_mode(
     return out_mode;
 }
 
+// 函数说明：将粒子位置映射到最近控制体网格索引。
 int MonteCarloSolver::nearest_grid_index(const SimulationDomain& geometry, const Vec3& p) const {
     const auto& centers = geometry.grid_centers();
     if (centers.empty()) {
@@ -480,30 +539,36 @@ int MonteCarloSolver::nearest_grid_index(const SimulationDomain& geometry, const
     return best;
 }
 
+// 函数说明：批量追踪粒子到下一次边界碰撞点并缓存结果。
 void MonteCarloSolver::update_collision_cache(const SimulationDomain& geometry, const std::vector<int>& indices) {
-    const auto& mesh = geometry.mesh();
     const int nidx = static_cast<int>(indices.size());
 #ifdef _OPENMP
 #pragma omp parallel for
 #endif
     for (int k = 0; k < nidx; ++k) {
-        const int i = indices[static_cast<size_t>(k)];
-        if (i < 0 || i >= particle_count_) {
-            continue;
-        }
-        auto [cp, t_hit, fct] = mesh.trace_boundary_intersection(particle_positions_[i], particle_velocities_[i]);
-        if (fct < 0 || std::isinf(t_hit)) {
-            // Robust fallback: reverse direction and retry once.
-            particle_velocities_[i] = mul(particle_velocities_[i], -1.0);
-            std::tie(cp, t_hit, fct) = mesh.trace_boundary_intersection(particle_positions_[i], particle_velocities_[i]);
-        }
-        cached_collision_positions_[i] = cp;
-        cached_collision_facets_[i] = fct;
-        cached_collision_conditions_[i] = geometry.facet_boundary_condition(fct);
-        timesteps_to_collision_[i] = std::isinf(t_hit) ? std::numeric_limits<double>::infinity() : (t_hit / time_step_);
+        update_collision_cache_single(geometry, indices[static_cast<size_t>(k)]);
     }
 }
 
+// 函数说明：为单个粒子更新下一次边界碰撞缓存。
+void MonteCarloSolver::update_collision_cache_single(const SimulationDomain& geometry, int i) {
+    const auto& mesh = geometry.mesh();
+    if (i < 0 || i >= particle_count_) {
+        return;
+    }
+    auto [cp, t_hit, fct] = mesh.trace_boundary_intersection(particle_positions_[i], particle_velocities_[i]);
+    if (fct < 0 || std::isinf(t_hit)) {
+        // Robust fallback: reverse direction and retry once.
+        particle_velocities_[i] = mul(particle_velocities_[i], -1.0);
+        std::tie(cp, t_hit, fct) = mesh.trace_boundary_intersection(particle_positions_[i], particle_velocities_[i]);
+    }
+    cached_collision_positions_[i] = cp;
+    cached_collision_facets_[i] = fct;
+    cached_collision_conditions_[i] = geometry.facet_boundary_condition(fct);
+    timesteps_to_collision_[i] = std::isinf(t_hit) ? std::numeric_limits<double>::infinity() : (t_hit / time_step_);
+}
+
+// 函数说明：处理边界事件（透射、吸收、周期、粗糙/镜面反射）并更新粒子态。
 void MonteCarloSolver::process_boundary_collision(const SimulationDomain& geometry, int i) {
     const int facet = cached_collision_facets_[i];
     const char cond = cached_collision_conditions_[i];
@@ -544,10 +609,11 @@ void MonteCarloSolver::process_boundary_collision(const SimulationDomain& geomet
         } else {
             const double p_spec = compute_roughness_specularity(geometry, *phonon_, i, facet);
             std::uniform_real_distribution<double> U(0.0, 1.0);
-            if (U(rng_) <= p_spec) {
+            auto& rng = thread_rng();
+            if (U(rng) <= p_spec) {
                 particle_velocities_[i] = sub(particle_velocities_[i], mul(n, 2.0 * vn));
             } else {
-                particle_modes_[i] = phonon_->sample_active_mode(rng_);
+                particle_modes_[i] = phonon_->sample_active_mode(rng);
                 const double speed = std::max(1e-9, norm(phonon_->mode_group_velocity(particle_modes_[i])));
                 Vec3 dir = random_unit_vector();
                 if (dot(dir, n) > 0.0) {
@@ -568,6 +634,7 @@ void MonteCarloSolver::process_boundary_collision(const SimulationDomain& geomet
     particle_grid_id_[i] = nearest_grid_index(geometry, particle_positions_[i]);
 }
 
+// 函数说明：根据粗糙度与入射条件计算镜面反射概率。
 double MonteCarloSolver::compute_roughness_specularity(const SimulationDomain& geometry, const PhononMaterial& phonon, int i, int facet) const {
     const double eta = std::max(0.0, geometry.roughness_for_facet(facet, 0.0));
     const double speed = std::max(1e-12, norm(particle_velocities_[i]));
@@ -579,6 +646,7 @@ double MonteCarloSolver::compute_roughness_specularity(const SimulationDomain& g
     return std::clamp(p, 0.0, 1.0);
 }
 
+// 函数说明：移除已吸收粒子并压缩所有粒子状态数组。
 void MonteCarloSolver::remove_absorbed_particles() {
     if (particle_alive_flags_.empty()) {
         return;
@@ -656,12 +724,14 @@ void MonteCarloSolver::remove_absorbed_particles() {
     particle_count_ = static_cast<int>(alive_count);
 }
 
+// 函数说明：从热库边界按统计规则注入新粒子并返回注入时刻偏移。
 std::vector<std::pair<int, double>> MonteCarloSolver::inject_particles_from_reservoirs(const SimulationDomain& geometry, const PhononMaterial& phonon) {
     std::vector<std::pair<int, double>> inserted;
     if (reservoir_count_ <= 0 || reservoir_modes_.empty()) {
         return inserted;
     }
 
+    auto& rng = thread_rng();
     std::uniform_real_distribution<double> U01(0.0, 1.0);
     const auto& mesh = geometry.mesh();
 
@@ -688,7 +758,7 @@ std::vector<std::pair<int, double>> MonteCarloSolver::inject_particles_from_rese
             }
             for (int c = 0; c < n_emit; ++c) {
                 mode_idx.push_back(m);
-                dt_in.push_back(time_step_ * U01(rng_));
+                dt_in.push_back(time_step_ * U01(rng));
             }
         }
 
@@ -729,19 +799,19 @@ std::vector<std::pair<int, double>> MonteCarloSolver::inject_particles_from_rese
     return inserted;
 }
 
+// 函数说明：由粒子非平衡占据统计网格能量密度并做归一化修正。
 void MonteCarloSolver::update_grid_energy_density(const SimulationDomain& geometry, const PhononMaterial& phonon) {
     const int nsv = std::max(1, geometry.grid_count());
     grid_energy_density_.assign(static_cast<size_t>(nsv), 0.0);
 
 #ifdef _OPENMP
-    const int thread_count = omp_get_max_threads();
-    std::vector<std::vector<double>> energy_tls(
-        static_cast<size_t>(thread_count),
-        std::vector<double>(static_cast<size_t>(nsv), 0.0));
+    const int thread_count = std::max(1, omp_get_max_threads());
+    ensure_tls_buffers(thread_count, nsv);
+    std::fill(energy_tls_buffer_.begin(), energy_tls_buffer_.end(), 0.0);
 #pragma omp parallel
     {
         const int tid = omp_get_thread_num();
-        auto& local_energy = energy_tls[static_cast<size_t>(tid)];
+        double* local_energy = energy_tls_buffer_.data() + static_cast<size_t>(tid) * static_cast<size_t>(nsv);
 #pragma omp for
         for (int i = 0; i < particle_count_; ++i) {
             const int sv = std::clamp(particle_grid_id_[i], 0, nsv - 1);
@@ -749,12 +819,13 @@ void MonteCarloSolver::update_grid_energy_density(const SimulationDomain& geomet
             const double dn = particle_occupation_[i] - n_eq;
             particle_omega_[i] = phonon.mode_angular_frequency(particle_modes_[i]);
             particle_energies_[i] = 6.582119569e-4 * particle_omega_[i] * dn;  // hbar[eV*ps] * mode_angular_frequency[rad/ps] => eV
-            local_energy[static_cast<size_t>(sv)] += particle_energies_[i];
+            local_energy[sv] += particle_energies_[i];
         }
     }
-    for (const auto& local : energy_tls) {
+    for (int tid = 0; tid < thread_count; ++tid) {
+        const double* local = energy_tls_buffer_.data() + static_cast<size_t>(tid) * static_cast<size_t>(nsv);
         for (int sv = 0; sv < nsv; ++sv) {
-            grid_energy_density_[static_cast<size_t>(sv)] += local[static_cast<size_t>(sv)];
+            grid_energy_density_[static_cast<size_t>(sv)] += local[sv];
         }
     }
 #else
@@ -784,33 +855,32 @@ void MonteCarloSolver::update_grid_energy_density(const SimulationDomain& geomet
     }
 }
 
+// 函数说明：完成粒子计数、网格温度反演与粒子温度回写闭环。
 void MonteCarloSolver::update_particle_temperatures(const SimulationDomain& geometry, const PhononMaterial& phonon) {
     const int nsv = std::max(1, geometry.grid_count());
     grid_particle_counts_.assign(static_cast<size_t>(nsv), 0);
 #ifdef _OPENMP
-    const int thread_count = omp_get_max_threads();
-    std::vector<std::vector<int>> count_tls(
-        static_cast<size_t>(thread_count),
-        std::vector<int>(static_cast<size_t>(nsv), 0));
+    const int thread_count = std::max(1, omp_get_max_threads());
+    ensure_tls_buffers(thread_count, nsv);
+    std::fill(count_tls_buffer_.begin(), count_tls_buffer_.end(), 0);
 #pragma omp parallel
     {
         const int tid = omp_get_thread_num();
-        auto& local_counts = count_tls[static_cast<size_t>(tid)];
+        int* local_counts = count_tls_buffer_.data() + static_cast<size_t>(tid) * static_cast<size_t>(nsv);
 #pragma omp for
         for (int i = 0; i < particle_count_; ++i) {
-            particle_grid_id_[i] = nearest_grid_index(geometry, particle_positions_[i]);
             const int sv = std::clamp(particle_grid_id_[i], 0, nsv - 1);
-            local_counts[static_cast<size_t>(sv)] += 1;
+            local_counts[sv] += 1;
         }
     }
-    for (const auto& local : count_tls) {
+    for (int tid = 0; tid < thread_count; ++tid) {
+        const int* local = count_tls_buffer_.data() + static_cast<size_t>(tid) * static_cast<size_t>(nsv);
         for (int sv = 0; sv < nsv; ++sv) {
-            grid_particle_counts_[static_cast<size_t>(sv)] += local[static_cast<size_t>(sv)];
+            grid_particle_counts_[static_cast<size_t>(sv)] += local[sv];
         }
     }
 #else
     for (int i = 0; i < particle_count_; ++i) {
-        particle_grid_id_[i] = nearest_grid_index(geometry, particle_positions_[i]);
         const int sv = std::clamp(particle_grid_id_[i], 0, nsv - 1);
         grid_particle_counts_[static_cast<size_t>(sv)] += 1;
     }
@@ -835,6 +905,7 @@ void MonteCarloSolver::update_particle_temperatures(const SimulationDomain& geom
     }
 }
 
+// 函数说明：按模态寿命推进粒子占据数，模拟弛豫散射过程。
 void MonteCarloSolver::apply_lifetime_scattering(const PhononMaterial& phonon) {
 #ifdef _OPENMP
 #pragma omp parallel for
@@ -851,30 +922,30 @@ void MonteCarloSolver::apply_lifetime_scattering(const PhononMaterial& phonon) {
     }
 }
 
+// 函数说明：统计网格热流并计算导热率估计（端点法与线性拟合法）。
 void MonteCarloSolver::update_heat_flux_and_conductivity(const SimulationDomain& geometry) {
     const int nsv = std::max(1, geometry.grid_count());
     grid_heat_flux_.assign(static_cast<size_t>(nsv), {0.0, 0.0, 0.0});
 
 #ifdef _OPENMP
-    const int thread_count = omp_get_max_threads();
-    std::vector<std::vector<Vec3>> flux_tls(
-        static_cast<size_t>(thread_count),
-        std::vector<Vec3>(static_cast<size_t>(nsv), Vec3 {0.0, 0.0, 0.0}));
+    const int thread_count = std::max(1, omp_get_max_threads());
+    ensure_tls_buffers(thread_count, nsv);
+    std::fill(flux_tls_buffer_.begin(), flux_tls_buffer_.end(), Vec3 {0.0, 0.0, 0.0});
 #pragma omp parallel
     {
         const int tid = omp_get_thread_num();
-        auto& local_flux = flux_tls[static_cast<size_t>(tid)];
+        Vec3* local_flux = flux_tls_buffer_.data() + static_cast<size_t>(tid) * static_cast<size_t>(nsv);
 #pragma omp for
         for (int i = 0; i < particle_count_; ++i) {
             const int sv = std::clamp(particle_grid_id_[i], 0, nsv - 1);
-            local_flux[static_cast<size_t>(sv)] =
-                add(local_flux[static_cast<size_t>(sv)], mul(particle_velocities_[i], particle_energies_[i]));
+            local_flux[sv] = add(local_flux[sv], mul(particle_velocities_[i], particle_energies_[i]));
         }
     }
-    for (const auto& local : flux_tls) {
+    for (int tid = 0; tid < thread_count; ++tid) {
+        const Vec3* local = flux_tls_buffer_.data() + static_cast<size_t>(tid) * static_cast<size_t>(nsv);
         for (int sv = 0; sv < nsv; ++sv) {
             grid_heat_flux_[static_cast<size_t>(sv)] =
-                add(grid_heat_flux_[static_cast<size_t>(sv)], local[static_cast<size_t>(sv)]);
+                add(grid_heat_flux_[static_cast<size_t>(sv)], local[sv]);
         }
     }
 #else
@@ -913,21 +984,13 @@ void MonteCarloSolver::update_heat_flux_and_conductivity(const SimulationDomain&
         }
     }
 
-    std::vector<double> phi(static_cast<size_t>(nsv), 0.0);
-#ifdef _OPENMP
-#pragma omp parallel for
-#endif
-    for (int sv = 0; sv < nsv; ++sv) {
-        phi[static_cast<size_t>(sv)] = grid_heat_flux_[static_cast<size_t>(sv)][axis];
-    }
-
     const int total_np = std::max(1, std::accumulate(grid_particle_counts_.begin(), grid_particle_counts_.end(), 0));
     double phi_weighted = 0.0;
 #ifdef _OPENMP
 #pragma omp parallel for reduction(+:phi_weighted)
 #endif
     for (int sv = 0; sv < nsv; ++sv) {
-        phi_weighted += phi[static_cast<size_t>(sv)] * static_cast<double>(grid_particle_counts_[static_cast<size_t>(sv)]);
+        phi_weighted += grid_heat_flux_[static_cast<size_t>(sv)][axis] * static_cast<double>(grid_particle_counts_[static_cast<size_t>(sv)]);
     }
     average_heat_flux_along_axis_ = phi_weighted / static_cast<double>(total_np);
 
@@ -1017,6 +1080,7 @@ void MonteCarloSolver::update_heat_flux_and_conductivity(const SimulationDomain&
     thermal_conductivity_ = thermal_conductivity_endpoints_;
 }
 
+// 函数说明：在单个时间步内推进粒子运动并处理可能的多次边界碰撞。
 void MonteCarloSolver::advance_particle(const SimulationDomain& geometry, const PhononMaterial& phonon, int i, double dt_remaining) {
     if (i < 0 || i >= particle_count_) {
         return;
@@ -1043,16 +1107,17 @@ void MonteCarloSolver::advance_particle(const SimulationDomain& geometry, const 
             if (particle_alive_flags_[static_cast<size_t>(i)] == 0) {
                 break;
             }
-            update_collision_cache(geometry, std::vector<int>{i});
+            update_collision_cache_single(geometry, i);
             if (timesteps_to_collision_[i] * time_step_ < 1e-12) {
                 particle_positions_[i] = add(particle_positions_[i], mul(particle_velocities_[i], 1e-12));
-                update_collision_cache(geometry, std::vector<int>{i});
+                update_collision_cache_single(geometry, i);
             }
         }
     }
     (void) phonon;
 }
 
+// 函数说明：初始化收敛输出文件表头，定义温度与热输运列。
 void MonteCarloSolver::write_convergence_header() {
     if (args_.output_folder.empty()) {
         return;
@@ -1066,6 +1131,7 @@ void MonteCarloSolver::write_convergence_header() {
     out << " heatflux kappa_fit kappa_end\n";
 }
 
+// 函数说明：追加当前时间步温度、热流与导热率统计结果。
 void MonteCarloSolver::append_convergence_row() const {
     if (args_.output_folder.empty()) {
         return;
@@ -1079,6 +1145,7 @@ void MonteCarloSolver::append_convergence_row() const {
     out << " " << average_heat_flux_along_axis_ << " " << thermal_conductivity_fit_ << " " << thermal_conductivity_endpoints_ << '\n';
 }
 
+// 函数说明：执行一次完整时间步流程：推进、注入、温度更新、散射与输出。
 void MonteCarloSolver::run_timestep() {
     if (geometry_ == nullptr) {
         throw std::runtime_error("MonteCarloSolver geometry is not set.");
@@ -1090,6 +1157,9 @@ void MonteCarloSolver::run_timestep() {
     const PhononMaterial& phonon = *phonon_;
 
     const int n_before = particle_count_;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic, 64)
+#endif
     for (int i = 0; i < n_before; ++i) {
         advance_particle(geometry, phonon, i, time_step_);
         if (i < particle_count_ && i < static_cast<int>(particle_alive_flags_.size()) && particle_alive_flags_[static_cast<size_t>(i)] != 0) {
@@ -1106,10 +1176,20 @@ void MonteCarloSolver::run_timestep() {
             new_idx.push_back(idx);
         }
         update_collision_cache(geometry, new_idx);
-        for (const auto& [idx, dt_in] : injected) {
+        const int ninj = static_cast<int>(injected.size());
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic, 64)
+#endif
+        for (int k = 0; k < ninj; ++k) {
+            const auto [idx, dt_in] = injected[static_cast<size_t>(k)];
             const double remain = std::max(0.0, time_step_ - dt_in);
             if (remain > 1e-14 && idx < particle_count_) {
                 advance_particle(geometry, phonon, idx, remain);
+            }
+            if (idx < particle_count_ &&
+                idx < static_cast<int>(particle_alive_flags_.size()) &&
+                particle_alive_flags_[static_cast<size_t>(idx)] != 0) {
+                particle_grid_id_[idx] = nearest_grid_index(geometry, particle_positions_[idx]);
             }
         }
         remove_absorbed_particles();

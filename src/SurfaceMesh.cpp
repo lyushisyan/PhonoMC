@@ -24,6 +24,7 @@ Vec3 add(const Vec3& a, const Vec3& b) { return {a[0] + b[0], a[1] + b[1], a[2] 
 Vec3 sub(const Vec3& a, const Vec3& b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
 Vec3 mul(const Vec3& a, double s) { return {a[0] * s, a[1] * s, a[2] * s}; }
 double dot(const Vec3& a, const Vec3& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+// 函数说明：计算三维叉乘，用于法向与面积方向计算。
 Vec3 cross(const Vec3& a, const Vec3& b) {
     return {
         a[1] * b[2] - a[2] * b[1],
@@ -32,6 +33,7 @@ Vec3 cross(const Vec3& a, const Vec3& b) {
     };
 }
 double norm(const Vec3& a) { return std::sqrt(dot(a, a)); }
+// 函数说明：单位化向量，服务于法向和方向几何计算。
 Vec3 normalize(const Vec3& a) {
     const double n = norm(a);
     if (n <= 0.0) {
@@ -39,13 +41,16 @@ Vec3 normalize(const Vec3& a) {
     }
     return mul(a, 1.0 / n);
 }
+// 函数说明：逐分量最小值，用于包围盒收缩。
 Vec3 min_vec(const Vec3& a, const Vec3& b) {
     return {std::min(a[0], b[0]), std::min(a[1], b[1]), std::min(a[2], b[2])};
 }
+// 函数说明：逐分量最大值，用于包围盒扩展。
 Vec3 max_vec(const Vec3& a, const Vec3& b) {
     return {std::max(a[0], b[0]), std::max(a[1], b[1]), std::max(a[2], b[2])};
 }
 
+// 函数说明：计算 3x3 矩阵逆，用于晶格变换或四面体坐标变换。
 std::array<std::array<double, 3>, 3> inverse3x3(const std::array<std::array<double, 3>, 3>& m, bool& ok) {
     const double a = m[0][0], b = m[0][1], c = m[0][2];
     const double d = m[1][0], e = m[1][1], f = m[1][2];
@@ -73,6 +78,7 @@ std::array<std::array<double, 3>, 3> inverse3x3(const std::array<std::array<doub
     }};
 }
 
+// 函数说明：执行 3x3 矩阵与向量乘法。
 Vec3 matvec3(const std::array<std::array<double, 3>, 3>& m, const Vec3& v) {
     return {
         m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
@@ -81,6 +87,7 @@ Vec3 matvec3(const std::array<std::array<double, 3>, 3>& m, const Vec3& v) {
     };
 }
 
+// 函数说明：将坐标量化为字符串键，支持顶点去重。
 std::string quant_key(const Vec3& p, double h) {
     auto q = [h](double x) -> long long {
         return static_cast<long long>(std::llround(x / h));
@@ -88,6 +95,7 @@ std::string quant_key(const Vec3& p, double h) {
     return std::to_string(q(p[0])) + ":" + std::to_string(q(p[1])) + ":" + std::to_string(q(p[2]));
 }
 
+// 函数说明：计算点到三角面的最近点，用于距离与命中判定。
 Vec3 closest_point_on_triangle(const Vec3& p, const Vec3& a, const Vec3& b, const Vec3& c) {
     const Vec3 ab = sub(b, a);
     const Vec3 ac = sub(c, a);
@@ -138,6 +146,7 @@ Vec3 closest_point_on_triangle(const Vec3& p, const Vec3& a, const Vec3& b, cons
     return add(add(a, mul(ab, v)), mul(ac, w));
 }
 
+// 函数说明：执行射线-三角形相交测试。
 bool ray_intersects_triangle(const Vec3& orig, const Vec3& dir, const Vec3& a, const Vec3& b, const Vec3& c, double& t) {
     constexpr double eps = 1e-10;
     const Vec3 e1 = sub(b, a);
@@ -163,10 +172,12 @@ bool ray_intersects_triangle(const Vec3& orig, const Vec3& dir, const Vec3& a, c
 }
 }  // namespace
 
+// 函数说明：创建表面网格对象并触发几何缓存构建。
 SurfaceMesh::SurfaceMesh(std::vector<Vec3> vertices, std::vector<Tri> faces) {
     set_surface_mesh_data(std::move(vertices), std::move(faces));
 }
 
+// 函数说明：设置网格顶点/面并重建所有几何派生数据。
 void SurfaceMesh::set_surface_mesh_data(std::vector<Vec3> vertices, std::vector<Tri> faces) {
     vertices_ = std::move(vertices);
     faces_ = std::move(faces);
@@ -177,6 +188,7 @@ void SurfaceMesh::set_surface_mesh_data(std::vector<Vec3> vertices, std::vector<
     rebuild_cached_properties();
 }
 
+// 函数说明：将网格平移到原点附近，便于统一坐标系处理。
 void SurfaceMesh::shift_to_origin() {
     compute_bounding_box();
     for (auto& v : vertices_) {
@@ -185,6 +197,7 @@ void SurfaceMesh::shift_to_origin() {
     rebuild_cached_properties();
 }
 
+// 函数说明：重建边、法向、邻接、体积等缓存属性。
 void SurfaceMesh::rebuild_cached_properties() {
     clear_tetrahedra_cache();
     compute_bounding_box();
@@ -197,11 +210,13 @@ void SurfaceMesh::rebuild_cached_properties() {
     compute_enclosed_volume();
 }
 
+// 函数说明：清理体积分解缓存，避免陈旧几何数据。
 void SurfaceMesh::clear_tetrahedra_cache() {
     simplices_.clear();
     simplices_ready_ = false;
 }
 
+// 函数说明：计算网格轴对齐包围盒。
 void SurfaceMesh::compute_bounding_box() {
     bounds_min_ = vertices_.front();
     bounds_max_ = vertices_.front();
@@ -211,6 +226,7 @@ void SurfaceMesh::compute_bounding_box() {
     }
 }
 
+// 函数说明：从三角面拓扑构建边列表与面-边关系。
 void SurfaceMesh::compute_edge_list() {
     std::map<std::pair<int, int>, int> edge_map;
     for (const auto& f : faces_) {
@@ -245,6 +261,7 @@ void SurfaceMesh::compute_edge_list() {
     }
 }
 
+// 函数说明：计算每个面的法向、质心、面积与平面参数。
 void SurfaceMesh::compute_face_metrics() {
     face_normals_.assign(faces_.size(), Vec3 {0.0, 0.0, 0.0});
     face_centroids_.assign(faces_.size(), Vec3 {0.0, 0.0, 0.0});
@@ -267,6 +284,7 @@ void SurfaceMesh::compute_face_metrics() {
     }
 }
 
+// 函数说明：构建面邻接关系用于后续分组与拓扑查询。
 void SurfaceMesh::compute_face_neighbors() {
     face_adjacency_.clear();
     for (const auto& ef : edges_faces_) {
@@ -290,6 +308,7 @@ void SurfaceMesh::compute_face_neighbors() {
     face_adjacency_.erase(std::unique(face_adjacency_.begin(), face_adjacency_.end()), face_adjacency_.end());
 }
 
+// 函数说明：将共面面片聚类为 facet，形成边界物理面。
 void SurfaceMesh::compute_facet_groups() {
     face_to_facet_.assign(faces_.size(), -1);
     facets_.clear();
@@ -373,6 +392,7 @@ void SurfaceMesh::compute_facet_groups() {
     }
 }
 
+// 函数说明：构建 facet 级邻接关系。
 void SurfaceMesh::compute_facet_neighbors() {
     facets_adjacency_.clear();
     for (const auto& adj : face_adjacency_) {
@@ -394,6 +414,7 @@ void SurfaceMesh::compute_facet_neighbors() {
     facets_adjacency_.erase(std::unique(facets_adjacency_.begin(), facets_adjacency_.end()), facets_adjacency_.end());
 }
 
+// 函数说明：识别内部接口相关面集合。
 void SurfaceMesh::compute_interface_faces() {
     interfaces_.clear();
     interfacets_.clear();
@@ -428,6 +449,7 @@ void SurfaceMesh::compute_interface_faces() {
     interfaces_.erase(std::unique(interfaces_.begin(), interfaces_.end()), interfaces_.end());
 }
 
+// 函数说明：通过封闭表面计算几何体积。
 void SurfaceMesh::compute_enclosed_volume() {
     const Vec3 center = mul(add(bounds_min_, bounds_max_), 0.5);
     double v = 0.0;
@@ -440,6 +462,7 @@ void SurfaceMesh::compute_enclosed_volume() {
     volume_ = v;
 }
 
+// 函数说明：按需构建体积分解缓存以支持体内判定与采样。
 void SurfaceMesh::ensure_volume_tetrahedra() const {
     if (simplices_ready_) {
         return;
@@ -447,6 +470,7 @@ void SurfaceMesh::ensure_volume_tetrahedra() const {
     const_cast<SurfaceMesh*>(this)->build_volume_tetrahedra();
 }
 
+// 函数说明：将体域分解为四面体集合，用于快速体采样。
 void SurfaceMesh::build_volume_tetrahedra() {
     simplices_.clear();
     auto build_star_fallback = [this]() {
@@ -656,6 +680,7 @@ void SurfaceMesh::build_volume_tetrahedra() {
     simplices_ready_ = true;
 }
 
+// 函数说明：查询空间点最近的 facet 索引。
 int SurfaceMesh::nearest_facet(const Vec3& p) const {
     const auto fq = nearest_face(p);
     if (fq.index < 0) {
@@ -664,6 +689,7 @@ int SurfaceMesh::nearest_facet(const Vec3& p) const {
     return face_to_facet_[fq.index];
 }
 
+// 函数说明：查询空间点最近三角面及其距离信息。
 SurfaceMesh::FaceQuery SurfaceMesh::nearest_face(const Vec3& p) const {
     FaceQuery q;
     q.index = -1;
@@ -682,6 +708,7 @@ SurfaceMesh::FaceQuery SurfaceMesh::nearest_face(const Vec3& p) const {
     return q;
 }
 
+// 函数说明：查询空间点最近三角面及其距离信息。
 std::vector<SurfaceMesh::FaceQuery> SurfaceMesh::nearest_face(const std::vector<Vec3>& p) const {
     std::vector<FaceQuery> out;
     out.reserve(p.size());
@@ -691,6 +718,7 @@ std::vector<SurfaceMesh::FaceQuery> SurfaceMesh::nearest_face(const std::vector<
     return out;
 }
 
+// 函数说明：查询空间点最近边及其距离信息。
 SurfaceMesh::EdgeQuery SurfaceMesh::nearest_edge(const Vec3& p) const {
     EdgeQuery q;
     q.index = -1;
@@ -718,6 +746,7 @@ SurfaceMesh::EdgeQuery SurfaceMesh::nearest_edge(const Vec3& p) const {
     return q;
 }
 
+// 函数说明：查询空间点最近边及其距离信息。
 std::vector<SurfaceMesh::EdgeQuery> SurfaceMesh::nearest_edge(const std::vector<Vec3>& p) const {
     std::vector<EdgeQuery> out;
     out.reserve(p.size());
@@ -727,6 +756,7 @@ std::vector<SurfaceMesh::EdgeQuery> SurfaceMesh::nearest_edge(const std::vector<
     return out;
 }
 
+// 函数说明：综合面/边查询空间点到网格最近点。
 SurfaceMesh::PointQuery SurfaceMesh::nearest_point(const Vec3& p) const {
     const auto fq = nearest_face(p);
     const auto eq = nearest_edge(p);
@@ -743,6 +773,7 @@ SurfaceMesh::PointQuery SurfaceMesh::nearest_point(const Vec3& p) const {
     return out;
 }
 
+// 函数说明：综合面/边查询空间点到网格最近点。
 std::vector<SurfaceMesh::PointQuery> SurfaceMesh::nearest_point(const std::vector<Vec3>& p) const {
     std::vector<PointQuery> out;
     out.reserve(p.size());
@@ -752,6 +783,7 @@ std::vector<SurfaceMesh::PointQuery> SurfaceMesh::nearest_point(const std::vecto
     return out;
 }
 
+// 函数说明：用射线法判断点是否在封闭体内部。
 bool SurfaceMesh::contains_point_ray_cast(const Vec3& p) const {
     // Ray casting in +x direction.
     const Vec3 dir {1.0, 0.0, 0.0};
@@ -765,6 +797,7 @@ bool SurfaceMesh::contains_point_ray_cast(const Vec3& p) const {
     return (hits % 2) == 1;
 }
 
+// 函数说明：优先基于四面体分解判断点是否在几何体内。
 bool SurfaceMesh::contains_point(const Vec3& p) const {
     ensure_volume_tetrahedra();
     if (simplices_.empty()) {
@@ -789,6 +822,7 @@ bool SurfaceMesh::contains_point(const Vec3& p) const {
     return false;
 }
 
+// 函数说明：优先基于四面体分解判断点是否在几何体内。
 std::vector<bool> SurfaceMesh::contains_point(const std::vector<Vec3>& p) const {
     std::vector<bool> out;
     out.reserve(p.size());
@@ -798,6 +832,7 @@ std::vector<bool> SurfaceMesh::contains_point(const std::vector<Vec3>& p) const 
     return out;
 }
 
+// 函数说明：沿速度方向追踪粒子到下一次边界碰撞点。
 std::tuple<Vec3, double, int> SurfaceMesh::trace_boundary_intersection(const Vec3& x, const Vec3& v) const {
     constexpr double eps = 1e-10;
     double best_t = std::numeric_limits<double>::infinity();
@@ -835,6 +870,7 @@ std::tuple<Vec3, double, int> SurfaceMesh::trace_boundary_intersection(const Vec
     return {best_p, best_t, face_to_facet_[best_face]};
 }
 
+// 函数说明：对一批射线重复追踪并收集所有边界交点事件。
 std::tuple<std::vector<Vec3>, std::vector<double>, std::vector<int>, std::vector<int>> SurfaceMesh::trace_boundary_intersections(
     const std::vector<Vec3>& x,
     const std::vector<Vec3>& v) const {
@@ -876,6 +912,7 @@ std::tuple<std::vector<Vec3>, std::vector<double>, std::vector<int>, std::vector
     return {xc, tc, fc, ic};
 }
 
+// 函数说明：按面面积加权在边界表面采样粒子注入点。
 std::vector<Vec3> SurfaceMesh::sample_surface_points(int n, const std::vector<int>& facets) const {
     if (n <= 0) {
         return {};
@@ -932,6 +969,7 @@ std::vector<Vec3> SurfaceMesh::sample_surface_points(int n, const std::vector<in
     return out;
 }
 
+// 函数说明：用拒绝采样在体域内生成粒子初始位置。
 std::vector<Vec3> SurfaceMesh::sample_volume_points_naive(int n) const {
     if (n <= 0) {
         return {};
@@ -958,6 +996,7 @@ std::vector<Vec3> SurfaceMesh::sample_volume_points_naive(int n) const {
     return out;
 }
 
+// 函数说明：优先基于四面体体积分布进行体内高效采样。
 std::vector<Vec3> SurfaceMesh::sample_volume_points(int n) const {
     if (n <= 0) {
         return {};
@@ -1004,6 +1043,7 @@ std::vector<Vec3> SurfaceMesh::sample_volume_points(int n) const {
     return out;
 }
 
+// 函数说明：将三角面索引映射到所属 facet。
 int SurfaceMesh::facet_index_for_face(int face_index) const {
     if (face_index < 0 || face_index >= static_cast<int>(face_to_facet_.size())) {
         return -1;
@@ -1011,6 +1051,7 @@ int SurfaceMesh::facet_index_for_face(int face_index) const {
     return face_to_facet_[face_index];
 }
 
+// 函数说明：批量将面索引映射到 facet 索引。
 std::vector<int> SurfaceMesh::facet_indices_for_faces(const std::vector<int>& face_indices) const {
     std::vector<int> out;
     out.reserve(face_indices.size());
@@ -1020,6 +1061,7 @@ std::vector<int> SurfaceMesh::facet_indices_for_faces(const std::vector<int>& fa
     return out;
 }
 
+// 函数说明：删除指定顶点并重建有效面拓扑。
 void SurfaceMesh::erase_vertices(const std::vector<int>& indices) {
     if (indices.empty()) {
         return;
@@ -1050,6 +1092,7 @@ void SurfaceMesh::erase_vertices(const std::vector<int>& indices) {
     rebuild_cached_properties();
 }
 
+// 函数说明：删除指定三角面并更新网格拓扑。
 void SurfaceMesh::erase_faces(const std::vector<int>& indices) {
     if (indices.empty()) {
         return;
@@ -1069,6 +1112,7 @@ void SurfaceMesh::erase_faces(const std::vector<int>& indices) {
     rebuild_cached_properties();
 }
 
+// 函数说明：清理未被任何面引用的孤立顶点。
 void SurfaceMesh::remove_unreferenced_vertices() {
     std::vector<bool> used(vertices_.size(), false);
     for (const auto& f : faces_) {
@@ -1087,6 +1131,7 @@ void SurfaceMesh::remove_unreferenced_vertices() {
     }
 }
 
+// 函数说明：按容差合并重复顶点并修复索引。
 void SurfaceMesh::merge_duplicate_vertices(double tol) {
     if (vertices_.empty() || faces_.empty()) {
         return;
@@ -1141,6 +1186,7 @@ void SurfaceMesh::merge_duplicate_vertices(double tol) {
     rebuild_cached_properties();
 }
 
+// 函数说明：将当前网格写出为 STL 文件用于可视化/复用。
 void SurfaceMesh::write_stl(const std::string& path, const std::string& name) const {
     namespace fs = std::filesystem;
     fs::create_directories(path);

@@ -22,11 +22,13 @@ Vec3 mul(const Vec3& a, double s) { return {a[0] * s, a[1] * s, a[2] * s}; }
 double dot(const Vec3& a, const Vec3& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
 double norm(const Vec3& a) { return std::sqrt(dot(a, a)); }
 
+// 函数说明：将关键字统一为小写，避免输入大小写差异影响流程。
 std::string to_lower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return s;
 }
 
+// 函数说明：清理输入文本两端空白，保证配置与数据解析的稳健性。
 std::string trim(const std::string& s) {
     const auto b = std::find_if_not(s.begin(), s.end(), [](unsigned char c) { return std::isspace(c); });
     if (b == s.end()) {
@@ -36,6 +38,7 @@ std::string trim(const std::string& s) {
     return std::string(b, e);
 }
 
+// 函数说明：将几何坐标量化到容差网格，用于顶点去重键生成。
 std::array<long long, 3> quant3(const Vec3& p, double h = 1e-10) {
     return {
         static_cast<long long>(std::llround(p[0] / h)),
@@ -44,6 +47,7 @@ std::array<long long, 3> quant3(const Vec3& p, double h = 1e-10) {
     };
 }
 
+// 函数说明：对顶点做量化去重并返回去重后的顶点索引。
 int add_vertex_dedup(
     const Vec3& p,
     std::vector<Vec3>& vertices,
@@ -61,6 +65,7 @@ int add_vertex_dedup(
     return idx;
 }
 
+// 函数说明：读取 OBJ 三角网格并转换为统一顶点/面数据结构。
 std::pair<std::vector<Vec3>, std::vector<Tri>> load_obj_mesh(const std::filesystem::path& p) {
     std::ifstream in(p);
     if (!in) {
@@ -115,6 +120,7 @@ std::pair<std::vector<Vec3>, std::vector<Tri>> load_obj_mesh(const std::filesyst
     return {vertices, faces};
 }
 
+// 函数说明：读取 ASCII STL 并构建去重后的三角网格。
 std::pair<std::vector<Vec3>, std::vector<Tri>> load_ascii_stl_mesh(const std::filesystem::path& p) {
     std::ifstream in(p);
     if (!in) {
@@ -153,12 +159,14 @@ std::pair<std::vector<Vec3>, std::vector<Tri>> load_ascii_stl_mesh(const std::fi
 }
 
 template <typename T>
+// 函数说明：按二进制类型读取 STL 字段，支撑二进制网格解析。
 T read_binary(std::istream& in) {
     T v {};
     in.read(reinterpret_cast<char*>(&v), sizeof(T));
     return v;
 }
 
+// 函数说明：读取 Binary STL 并转换为内部网格表示。
 std::pair<std::vector<Vec3>, std::vector<Tri>> load_binary_stl_mesh(const std::filesystem::path& p) {
     std::ifstream in(p, std::ios::binary);
     if (!in) {
@@ -192,6 +200,7 @@ std::pair<std::vector<Vec3>, std::vector<Tri>> load_binary_stl_mesh(const std::f
     return {vertices, faces};
 }
 
+// 函数说明：依据文件尺寸规则判定 STL 是否为二进制格式。
 bool is_probably_binary_stl(const std::filesystem::path& p) {
     std::ifstream in(p, std::ios::binary);
     if (!in) {
@@ -217,6 +226,7 @@ bool is_probably_binary_stl(const std::filesystem::path& p) {
     return to_lower(first5) != "solid";
 }
 
+// 函数说明：按扩展名调度网格加载器，统一支持 OBJ/STL。
 std::pair<std::vector<Vec3>, std::vector<Tri>> load_mesh_file(const std::filesystem::path& p) {
     const auto ext = to_lower(p.extension().string());
     if (ext == ".obj") {
@@ -231,6 +241,7 @@ std::pair<std::vector<Vec3>, std::vector<Tri>> load_mesh_file(const std::filesys
     throw std::runtime_error("Unsupported mesh extension: " + ext + " (expected .stl or .obj)");
 }
 
+// 函数说明：解析边界/周期点参数并转换为三维坐标列表。
 std::vector<Vec3> parse_points(const std::vector<std::string>& tokens, const std::string& name) {
     if (tokens.empty()) {
         return {};
@@ -252,6 +263,7 @@ std::vector<Vec3> parse_points(const std::vector<std::string>& tokens, const std
     return pts;
 }
 
+// 函数说明：提取指定 facet 的边界边长特征，用于边界匹配与诊断。
 std::vector<double> facet_boundary_edge_lengths(const SurfaceMesh& mesh, int facet) {
     std::vector<double> out;
     if (facet < 0 || facet >= static_cast<int>(mesh.facet_boundary_edges().size())) {
@@ -273,6 +285,7 @@ std::vector<double> facet_boundary_edge_lengths(const SurfaceMesh& mesh, int fac
 }
 }  // namespace
 
+// 函数说明：构建仿真域：网格、边界、周期配对、控制体与摘要输出。
 SimulationDomain::SimulationDomain(const SimulationConfig& args) {
     build_surface_mesh(args);
     sync_surface_mesh_properties();
@@ -287,6 +300,7 @@ SimulationDomain::SimulationDomain(const SimulationConfig& args) {
               << ", grids=" << grid_count_ << '\n';
 }
 
+// 函数说明：根据 box/cylinder/文件模型构建并单位化表面网格。
 void SimulationDomain::build_surface_mesh(const SimulationConfig& args) {
     std::vector<Vec3> vertices;
     std::vector<Tri> faces;
@@ -378,6 +392,7 @@ void SimulationDomain::build_surface_mesh(const SimulationConfig& args) {
     mesh_.shift_to_origin();
 }
 
+// 函数说明：同步网格边界框、体积和 facet 数等几何缓存。
 void SimulationDomain::sync_surface_mesh_properties() {
     bounds_min_ = mesh_.bounds_min();
     bounds_max_ = mesh_.bounds_max();
@@ -387,6 +402,7 @@ void SimulationDomain::sync_surface_mesh_properties() {
     periodic_shift_.assign(static_cast<size_t>(facet_count_), {0.0, 0.0, 0.0});
 }
 
+// 函数说明：将输入边界条件映射到 facet，并识别热库/粗糙边界。
 void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) {
     if (facet_count_ == 0) {
         return;
@@ -468,6 +484,7 @@ void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) 
     }
 }
 
+// 函数说明：建立周期边界配对关系与平移向量。
 void SimulationDomain::build_periodic_connections(const SimulationConfig& args) {
     connected_facets_.clear();
     if (args.periodic_pair.empty()) {
@@ -530,6 +547,7 @@ void SimulationDomain::build_periodic_connections(const SimulationConfig& args) 
     }
 }
 
+// 函数说明：初始化控制体网格布局入口（当前为规则网格模式）。
 void SimulationDomain::initialize_grids(const SimulationConfig& args) {
     if (args.grid_layout.front() == "grid") {
         initialize_grid_cells(args);
@@ -538,6 +556,7 @@ void SimulationDomain::initialize_grids(const SimulationConfig& args) {
     }
 }
 
+// 函数说明：在几何域内生成有效网格中心与体积权重。
 void SimulationDomain::initialize_grid_cells(const SimulationConfig& args) {
     if (args.grid_layout.size() < 4) {
         throw std::runtime_error("grid layout requires: grid nx ny nz");
@@ -573,6 +592,7 @@ void SimulationDomain::initialize_grid_cells(const SimulationConfig& args) {
     grid_volumes_.assign(static_cast<size_t>(grid_count_), volume_ / static_cast<double>(grid_count_));
 }
 
+// 函数说明：基于邻近关系与几何可达性构建网格连接图。
 void SimulationDomain::build_grid_connections() {
     grid_connections_.clear();
     if (grid_count_ <= 1) {
@@ -611,6 +631,7 @@ void SimulationDomain::build_grid_connections() {
     }
 }
 
+// 函数说明：输出几何、边界、网格与输入信息摘要文件。
 void SimulationDomain::write_domain_summary(const SimulationConfig& args) const {
     if (args.output_folder.empty()) {
         return;
@@ -741,6 +762,7 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
     }
 }
 
+// 函数说明：查询指定 facet 的边界类型（T/P/R/F 等）。
 char SimulationDomain::facet_boundary_condition(int facet) const {
     if (facet < 0 || facet >= static_cast<int>(facet_boundary_conditions_.size())) {
         return 'P';
@@ -748,6 +770,7 @@ char SimulationDomain::facet_boundary_condition(int facet) const {
     return facet_boundary_conditions_[facet];
 }
 
+// 函数说明：查询热库 facet 的边界温度值。
 double SimulationDomain::reservoir_value_for_facet(int facet, double fallback) const {
     for (size_t i = 0; i < reservoir_facets_.size(); ++i) {
         if (reservoir_facets_[i] == facet) {
@@ -760,10 +783,12 @@ double SimulationDomain::reservoir_value_for_facet(int facet, double fallback) c
     return fallback;
 }
 
+// 函数说明：判断 facet 是否存在周期配对面。
 bool SimulationDomain::has_periodic_pair(int facet) const {
     return facet >= 0 && facet < static_cast<int>(periodic_pair_.size()) && periodic_pair_[facet] >= 0;
 }
 
+// 函数说明：返回 facet 对应的周期配对面索引。
 int SimulationDomain::periodic_pair_facet(int facet) const {
     if (!has_periodic_pair(facet)) {
         return -1;
@@ -771,6 +796,7 @@ int SimulationDomain::periodic_pair_facet(int facet) const {
     return periodic_pair_[facet];
 }
 
+// 函数说明：返回周期穿越时粒子位置平移向量。
 std::array<double, 3> SimulationDomain::periodic_shift_for_facet(int facet) const {
     if (!has_periodic_pair(facet)) {
         return {0.0, 0.0, 0.0};
@@ -778,10 +804,12 @@ std::array<double, 3> SimulationDomain::periodic_shift_for_facet(int facet) cons
     return periodic_shift_[facet];
 }
 
+// 函数说明：判断 facet 是否为粗糙散射边界。
 bool SimulationDomain::is_rough_facet(int facet) const {
     return std::find(rough_facets_.begin(), rough_facets_.end(), facet) != rough_facets_.end();
 }
 
+// 函数说明：查询 facet 粗糙度参数，用于镜面率计算。
 double SimulationDomain::roughness_for_facet(int facet, double fallback) const {
     for (size_t i = 0; i < rough_facets_.size(); ++i) {
         if (rough_facets_[i] == facet) {

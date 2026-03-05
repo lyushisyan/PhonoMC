@@ -29,6 +29,7 @@ private:
     void initialize_rough_boundary_scattering(const SimulationDomain& geometry, const PhononMaterial& phonon);
     void initialize_local_heat_source(const SimulationDomain& geometry);
     void apply_local_heat_source();
+    std::mt19937_64& thread_rng() const;
     int sample_diffuse_active_mode(int rough_idx, int in_ai) const;
     std::array<int, 2> select_reflected_mode(
         const SimulationDomain& geometry,
@@ -39,6 +40,7 @@ private:
         double& out_occupation,
         double in_occupation) const;
     void update_collision_cache(const SimulationDomain& geometry, const std::vector<int>& indices);
+    void update_collision_cache_single(const SimulationDomain& geometry, int i);
     int nearest_grid_index(const SimulationDomain& geometry, const Vec3& p) const;
     void process_boundary_collision(const SimulationDomain& geometry, int i);
     void remove_absorbed_particles();
@@ -51,6 +53,7 @@ private:
     double compute_roughness_specularity(const SimulationDomain& geometry, const PhononMaterial& phonon, int i, int facet) const;
     void write_convergence_header();
     void append_convergence_row() const;
+    void ensure_tls_buffers(int thread_count, int nsv);
 
     static Vec3 add(const Vec3& a, const Vec3& b);
     static Vec3 sub(const Vec3& a, const Vec3& b);
@@ -63,6 +66,7 @@ private:
     const SimulationDomain* geometry_ = nullptr;
     const PhononMaterial* phonon_ = nullptr;
     mutable std::mt19937_64 rng_ {std::random_device{}()};
+    std::uint64_t rng_seed_base_ = 0;
     int particle_count_ = 0;
     double time_step_ = 1.0;
     double elapsed_time_ = 0.0;
@@ -123,4 +127,11 @@ private:
     Vec3 local_heat_source_max_ {0.0, 0.0, 0.0};
     double local_heat_source_power_density_wm3_ = 0.0;
     std::vector<std::uint8_t> local_heat_source_grid_mask_;
+
+    // Reusable per-thread scratch buffers to avoid per-step allocations in OpenMP paths.
+    std::vector<double> energy_tls_buffer_;
+    std::vector<int> count_tls_buffer_;
+    std::vector<Vec3> flux_tls_buffer_;
+    int tls_thread_count_ = 0;
+    int tls_nsv_ = 0;
 };

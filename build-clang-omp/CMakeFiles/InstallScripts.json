@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/sxliu/Documents/GitHub/NanoThermal-MC/build-clang-omp/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

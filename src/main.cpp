@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+// 函数说明：程序入口：读取输入、构建几何与材料、执行时间步并输出汇总结果。
 int main(int argc, char** argv) {
     try {
         namespace fs = std::filesystem;

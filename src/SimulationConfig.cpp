@@ -13,6 +13,7 @@
 #include <unordered_map>
 
 namespace {
+// 函数说明：清理输入文本两端空白，保证配置与数据解析的稳健性。
 std::string trim(const std::string& s) {
     const auto first = std::find_if_not(s.begin(), s.end(), [](unsigned char ch) { return std::isspace(ch); });
     if (first == s.end()) {
@@ -22,11 +23,13 @@ std::string trim(const std::string& s) {
     return std::string(first, last);
 }
 
+// 函数说明：将关键字统一为小写，避免输入大小写差异影响流程。
 std::string to_lower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return s;
 }
 
+// 函数说明：移除配置行内注释且保留引号内容，避免误删有效字段。
 std::string strip_inline_comment(const std::string& line) {
     bool in_quote = false;
     char quote_char = '\0';
@@ -58,6 +61,7 @@ std::string strip_inline_comment(const std::string& line) {
     return line;
 }
 
+// 函数说明：将旧版参数文件拆分为 token 序列，兼容历史输入格式。
 std::vector<std::string> tokenize_legacy(const std::string& path) {
     std::ifstream in(path);
     if (!in) {
@@ -80,15 +84,18 @@ std::vector<std::string> tokenize_legacy(const std::string& path) {
     return tokens;
 }
 
+// 函数说明：识别旧版命令行风格选项前缀（--）。
 bool is_option(const std::string& tk) {
     return tk.rfind("--", 0) == 0;
 }
 
+// 函数说明：根据扩展名判断输入文件是否按 TOML 语法解析。
 bool looks_like_toml(const std::string& path) {
     const std::string ext = to_lower(std::filesystem::path(path).extension().string());
     return ext == ".toml";
 }
 
+// 函数说明：判断字符串是否被引号包裹，用于安全去引号。
 bool is_quoted(const std::string& s) {
     if (s.size() < 2) {
         return false;
@@ -96,6 +103,7 @@ bool is_quoted(const std::string& s) {
     return (s.front() == '"' && s.back() == '"') || (s.front() == '\'' && s.back() == '\'');
 }
 
+// 函数说明：去除外层引号并保留原始值语义。
 std::string unquote(const std::string& s) {
     const std::string t = trim(s);
     if (is_quoted(t)) {
@@ -104,12 +112,14 @@ std::string unquote(const std::string& s) {
     return t;
 }
 
+// 函数说明：标准化数字 token（去空白、去下划线）便于数值转换。
 std::string normalise_number_token(std::string s) {
     s = trim(unquote(s));
     s.erase(std::remove(s.begin(), s.end(), '_'), s.end());
     return s;
 }
 
+// 函数说明：解析标量浮点参数，用于粒子数、时间步等基础输入。
 double parse_double_scalar(const std::string& s) {
     const std::string t = normalise_number_token(s);
     if (t.empty()) {
@@ -118,10 +128,12 @@ double parse_double_scalar(const std::string& s) {
     return std::stod(t);
 }
 
+// 函数说明：解析整数参数并进行四舍五入兼容。
 int parse_int_scalar(const std::string& s) {
     return static_cast<int>(std::llround(parse_double_scalar(s)));
 }
 
+// 函数说明：解析布尔开关，支持 true/false 与数值兼容写法。
 bool parse_bool_scalar(const std::string& s) {
     std::string t = to_lower(trim(unquote(s)));
     if (t == "true" || t == "yes" || t == "on") {
@@ -136,6 +148,7 @@ bool parse_bool_scalar(const std::string& s) {
     return std::abs(parse_double_scalar(t)) > 0.0;
 }
 
+// 函数说明：按顶层分隔符切分数组文本，正确处理嵌套括号与引号。
 std::vector<std::string> split_top_level(const std::string& s, char delim) {
     std::vector<std::string> out;
     std::string cur;
@@ -184,6 +197,7 @@ std::vector<std::string> split_top_level(const std::string& s, char delim) {
     return out;
 }
 
+// 函数说明：抽取数组元素文本，为后续数值/字符串/点阵解析提供输入。
 std::vector<std::string> parse_array_elements(const std::string& value) {
     const std::string t = trim(value);
     if (t.size() < 2 || t.front() != '[' || t.back() != ']') {
@@ -196,6 +210,7 @@ std::vector<std::string> parse_array_elements(const std::string& value) {
     return split_top_level(inner, ',');
 }
 
+// 函数说明：解析数值数组参数（如尺寸、边界值、热源范围）。
 std::vector<double> parse_number_array(const std::string& value) {
     std::vector<double> out;
     for (const auto& elem : parse_array_elements(value)) {
@@ -204,6 +219,7 @@ std::vector<double> parse_number_array(const std::string& value) {
     return out;
 }
 
+// 函数说明：解析字符串数组参数（如边界类型、初始化模式）。
 std::vector<std::string> parse_string_array(const std::string& value) {
     std::vector<std::string> out;
     for (const auto& elem : parse_array_elements(value)) {
@@ -212,6 +228,7 @@ std::vector<std::string> parse_string_array(const std::string& value) {
     return out;
 }
 
+// 函数说明：解析三维点数组参数（边界点、周期配对点）。
 std::vector<std::array<double, 3>> parse_point_array(const std::string& value) {
     std::vector<std::array<double, 3>> points;
     for (const auto& row : parse_array_elements(value)) {
@@ -224,12 +241,14 @@ std::vector<std::array<double, 3>> parse_point_array(const std::string& value) {
     return points;
 }
 
+// 函数说明：将数值格式化为紧凑字符串，便于输出文件可读性。
 std::string format_number(double x) {
     std::ostringstream oss;
     oss << std::setprecision(17) << x;
     return oss.str();
 }
 
+// 函数说明：统计括号平衡，用于多行 TOML 值拼接的结束判定。
 int bracket_balance(const std::string& s) {
     int bal = 0;
     bool in_quote = false;
@@ -265,6 +284,7 @@ int bracket_balance(const std::string& s) {
     return bal;
 }
 
+// 函数说明：读取 TOML 键值对并展开段名为扁平键，统一后续取值逻辑。
 void parse_toml_assignments(const std::string& path, std::unordered_map<std::string, std::string>& kv) {
     std::ifstream in(path);
     if (!in) {
@@ -317,6 +337,7 @@ void parse_toml_assignments(const std::string& path, std::unordered_map<std::str
     }
 }
 
+// 函数说明：按候选键顺序从键值表中查找第一个有效值。
 std::optional<std::string> get_first_value(
     const std::unordered_map<std::string, std::string>& kv,
     std::initializer_list<const char*> keys) {
@@ -329,6 +350,7 @@ std::optional<std::string> get_first_value(
     return std::nullopt;
 }
 
+// 函数说明：将点集合扁平化为旧接口需要的顺序 token。
 std::vector<std::string> flatten_points(const std::string& mode, const std::vector<std::array<double, 3>>& pts) {
     std::vector<std::string> out;
     out.reserve(1 + pts.size() * 3);
@@ -341,6 +363,7 @@ std::vector<std::string> flatten_points(const std::string& mode, const std::vect
     return out;
 }
 
+// 函数说明：解析 TOML 输入并构造仿真配置对象（含单位与默认规则）。
 SimulationConfig parse_toml_file(const std::string& path) {
     SimulationConfig args;
     args.input_directory = std::filesystem::absolute(std::filesystem::path(path)).parent_path().string();
@@ -446,6 +469,7 @@ SimulationConfig parse_toml_file(const std::string& path) {
     return args;
 }
 
+// 函数说明：解析旧版参数文件并映射到统一配置对象。
 SimulationConfig parse_legacy_file(const std::string& path) {
     SimulationConfig args;
     args.input_directory = std::filesystem::absolute(std::filesystem::path(path)).parent_path().string();
@@ -545,6 +569,7 @@ SimulationConfig parse_legacy_file(const std::string& path) {
 }
 }  // namespace
 
+// 函数说明：根据文件类型选择 TOML 或旧格式解析路径。
 SimulationConfig load_simulation_config(const std::string& path) {
     if (looks_like_toml(path)) {
         return parse_toml_file(path);
@@ -552,6 +577,7 @@ SimulationConfig load_simulation_config(const std::string& path) {
     return parse_legacy_file(path);
 }
 
+// 函数说明：按序号创建结果目录，避免覆盖历史仿真输出。
 std::string create_indexed_output_folder(const std::string& output_folder) {
     if (output_folder.empty()) {
         throw std::runtime_error("output_folder cannot be empty.");
