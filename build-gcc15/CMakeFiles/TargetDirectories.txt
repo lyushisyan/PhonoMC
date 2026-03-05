@@ -1,3 +1,0 @@
-/Users/sxliu/Documents/GitHub/NanoThermal-MC/build-gcc15/CMakeFiles/ntmc.dir
-/Users/sxliu/Documents/GitHub/NanoThermal-MC/build-gcc15/CMakeFiles/edit_cache.dir
-/Users/sxliu/Documents/GitHub/NanoThermal-MC/build-gcc15/CMakeFiles/rebuild_cache.dir
