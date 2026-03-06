@@ -11,6 +11,7 @@ struct SimulationConfig {
     double time_step = 1.0;
     int iterations = 10000;
     bool compute_kappa = false;
+    bool profile_timers = false;
 
     std::vector<std::string> grid_layout;
     std::vector<std::string> initial_temperature {"cold"};

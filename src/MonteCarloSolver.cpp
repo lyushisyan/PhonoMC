@@ -4,6 +4,7 @@
 #include "PhononMaterial.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -80,13 +81,19 @@ MonteCarloSolver::MonteCarloSolver(const SimulationConfig& args, const Simulatio
               << (args_.compute_kappa ? "enabled" : "disabled")
               << '\n';
 #ifdef _OPENMP
-    std::cout << "OpenMP enabled: max_threads=" << omp_get_max_threads() << '\n';
+    openmp_thread_count_ = std::max(1, omp_get_max_threads());
+    std::cout << "OpenMP enabled: max_threads=" << openmp_thread_count_ << '\n';
 #else
+    openmp_thread_count_ = 1;
     std::cout << "OpenMP enabled: no\n";
 #endif
 
     if (!args_.output_folder.empty()) {
         std::filesystem::create_directories(args_.output_folder);
+    }
+    profile_timers_enabled_ = args_.profile_timers;
+    if (profile_timers_enabled_) {
+        std::cout << "Timestep profiling: enabled (simulation.profile_timers=true)\n";
     }
 
     initialize_particles(geometry, phonon);
@@ -1145,6 +1152,57 @@ void MonteCarloSolver::append_convergence_row() const {
     out << " " << average_heat_flux_along_axis_ << " " << thermal_conductivity_fit_ << " " << thermal_conductivity_endpoints_ << '\n';
 }
 
+void MonteCarloSolver::append_profile_summary(std::ostream& out) const {
+    out << "\n[performance]\n";
+#ifdef _OPENMP
+    out << "openmp_enabled = true\n";
+#else
+    out << "openmp_enabled = false\n";
+#endif
+    out << "openmp_thread_count = " << openmp_thread_count_ << '\n';
+    out << "profile_timers_enabled = " << (profile_timers_enabled_ ? "true" : "false") << '\n';
+    if (!profile_timers_enabled_) {
+        return;
+    }
+    out << "profile_total_seconds = " << timer_total_ << '\n';
+    const double denom = std::max(timer_total_, 1e-18);
+    auto write_seg = [&out, denom](const char* name, double sec) {
+        out << name << "_seconds = " << sec << '\n';
+        out << name << "_percent = " << (100.0 * sec / denom) << '\n';
+    };
+    write_seg("advance_main", timer_advance_main_);
+    write_seg("remove_absorb_1", timer_remove_absorb_1_);
+    write_seg("inject_build", timer_inject_build_);
+    write_seg("inject_cache", timer_inject_cache_);
+    write_seg("advance_injected", timer_advance_injected_);
+    write_seg("remove_absorb_2", timer_remove_absorb_2_);
+    write_seg("update_temp", timer_update_temp_);
+    write_seg("lifetime", timer_lifetime_);
+    write_seg("stats", timer_stats_);
+}
+
+void MonteCarloSolver::report_timestep_timers_if_needed() const {
+    if (!profile_timers_enabled_ || current_timestep_ <= 0) {
+        return;
+    }
+    if (current_timestep_ % 100 != 0 && current_timestep_ != args_.iterations) {
+        return;
+    }
+    const double denom = std::max(timer_total_, 1e-18);
+    auto pct = [denom](double x) { return 100.0 * x / denom; };
+    std::cout << "[profile] timesteps=" << current_timestep_
+              << " total=" << timer_total_ << "s\n";
+    std::cout << "  advance_main=" << pct(timer_advance_main_) << "%\n";
+    std::cout << "  remove_absorb_1=" << pct(timer_remove_absorb_1_) << "%\n";
+    std::cout << "  inject_build=" << pct(timer_inject_build_) << "%\n";
+    std::cout << "  inject_cache=" << pct(timer_inject_cache_) << "%\n";
+    std::cout << "  advance_injected=" << pct(timer_advance_injected_) << "%\n";
+    std::cout << "  remove_absorb_2=" << pct(timer_remove_absorb_2_) << "%\n";
+    std::cout << "  update_temp=" << pct(timer_update_temp_) << "%\n";
+    std::cout << "  lifetime=" << pct(timer_lifetime_) << "%\n";
+    std::cout << "  stats=" << pct(timer_stats_) << "%\n";
+}
+
 // 函数说明：执行一次完整时间步流程：推进、注入、温度更新、散射与输出。
 void MonteCarloSolver::run_timestep() {
     if (geometry_ == nullptr) {
@@ -1155,8 +1213,11 @@ void MonteCarloSolver::run_timestep() {
     }
     const SimulationDomain& geometry = *geometry_;
     const PhononMaterial& phonon = *phonon_;
+    using Clock = std::chrono::steady_clock;
+    const auto t_step_begin = Clock::now();
 
     const int n_before = particle_count_;
+    const auto t_advance_begin = Clock::now();
 #ifdef _OPENMP
 #pragma omp parallel for schedule(dynamic, 64)
 #endif
@@ -1166,16 +1227,24 @@ void MonteCarloSolver::run_timestep() {
             particle_grid_id_[i] = nearest_grid_index(geometry, particle_positions_[i]);
         }
     }
+    const auto t_advance_end = Clock::now();
+    const auto t_remove1_begin = t_advance_end;
     remove_absorbed_particles();
+    const auto t_remove1_end = Clock::now();
 
+    const auto t_inject_begin = t_remove1_end;
     const auto injected = inject_particles_from_reservoirs(geometry, phonon);
+    const auto t_inject_end = Clock::now();
     if (!injected.empty()) {
+        const auto t_cache_begin = Clock::now();
         std::vector<int> new_idx;
         new_idx.reserve(injected.size());
         for (const auto& [idx, _] : injected) {
             new_idx.push_back(idx);
         }
         update_collision_cache(geometry, new_idx);
+        const auto t_cache_end = Clock::now();
+        const auto t_adv_inj_begin = t_cache_end;
         const int ninj = static_cast<int>(injected.size());
 #ifdef _OPENMP
 #pragma omp parallel for schedule(dynamic, 64)
@@ -1192,17 +1261,41 @@ void MonteCarloSolver::run_timestep() {
                 particle_grid_id_[idx] = nearest_grid_index(geometry, particle_positions_[idx]);
             }
         }
+        const auto t_adv_inj_end = Clock::now();
+        const auto t_remove2_begin = t_adv_inj_end;
         remove_absorbed_particles();
+        const auto t_remove2_end = Clock::now();
+        if (profile_timers_enabled_) {
+            timer_inject_cache_ += std::chrono::duration<double>(t_cache_end - t_cache_begin).count();
+            timer_advance_injected_ += std::chrono::duration<double>(t_adv_inj_end - t_adv_inj_begin).count();
+            timer_remove_absorb_2_ += std::chrono::duration<double>(t_remove2_end - t_remove2_begin).count();
+        }
     }
 
+    const auto t_temp_begin = Clock::now();
     update_particle_temperatures(geometry, phonon);
+    const auto t_temp_end = Clock::now();
+    const auto t_life_begin = t_temp_end;
     apply_lifetime_scattering(phonon);
+    const auto t_life_end = Clock::now();
 
     ++current_timestep_;
     elapsed_time_ += time_step_;
+    const auto t_stats_begin = Clock::now();
     if (current_timestep_ % convergence_write_interval_ == 0 || current_timestep_ == 1) {
         update_heat_flux_and_conductivity(geometry);
         append_convergence_row();
+    }
+    const auto t_stats_end = Clock::now();
+    const auto t_step_end = t_stats_end;
+    if (profile_timers_enabled_) {
+        timer_total_ += std::chrono::duration<double>(t_step_end - t_step_begin).count();
+        timer_advance_main_ += std::chrono::duration<double>(t_advance_end - t_advance_begin).count();
+        timer_remove_absorb_1_ += std::chrono::duration<double>(t_remove1_end - t_remove1_begin).count();
+        timer_inject_build_ += std::chrono::duration<double>(t_inject_end - t_inject_begin).count();
+        timer_update_temp_ += std::chrono::duration<double>(t_temp_end - t_temp_begin).count();
+        timer_lifetime_ += std::chrono::duration<double>(t_life_end - t_life_begin).count();
+        timer_stats_ += std::chrono::duration<double>(t_stats_end - t_stats_begin).count();
     }
     int total_iters = args_.iterations;
     int print_interval = std::max(1, total_iters / 100);
@@ -1224,4 +1317,5 @@ void MonteCarloSolver::run_timestep() {
         }
         std::cout << "-------------------------" << std::endl;
     }
+    report_timestep_timers_if_needed();
 }

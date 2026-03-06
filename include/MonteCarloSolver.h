@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <ostream>
 #include <random>
 #include <utility>
 #include <vector>
@@ -17,6 +18,9 @@ public:
 
     void run_timestep();
     int current_timestep() const { return current_timestep_; }
+    int openmp_thread_count() const { return openmp_thread_count_; }
+    bool profile_timers_enabled() const { return profile_timers_enabled_; }
+    void append_profile_summary(std::ostream& out) const;
 
 private:
     using Vec3 = std::array<double, 3>;
@@ -50,6 +54,7 @@ private:
     void update_grid_energy_density(const SimulationDomain& geometry, const PhononMaterial& phonon);
     void apply_lifetime_scattering(const PhononMaterial& phonon);
     void update_heat_flux_and_conductivity(const SimulationDomain& geometry);
+    void report_timestep_timers_if_needed() const;
     double compute_roughness_specularity(const SimulationDomain& geometry, const PhononMaterial& phonon, int i, int facet) const;
     void write_convergence_header();
     void append_convergence_row() const;
@@ -134,4 +139,17 @@ private:
     std::vector<Vec3> flux_tls_buffer_;
     int tls_thread_count_ = 0;
     int tls_nsv_ = 0;
+
+    bool profile_timers_enabled_ = false;
+    int openmp_thread_count_ = 1;
+    double timer_total_ = 0.0;
+    double timer_advance_main_ = 0.0;
+    double timer_remove_absorb_1_ = 0.0;
+    double timer_inject_build_ = 0.0;
+    double timer_inject_cache_ = 0.0;
+    double timer_advance_injected_ = 0.0;
+    double timer_remove_absorb_2_ = 0.0;
+    double timer_update_temp_ = 0.0;
+    double timer_lifetime_ = 0.0;
+    double timer_stats_ = 0.0;
 };

@@ -704,6 +704,7 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
     out << "time_step = " << args.time_step << '\n';
     out << "iterations = " << args.iterations << '\n';
     out << "compute_kappa = " << (args.compute_kappa ? "true" : "false") << '\n';
+    out << "profile_timers = " << (args.profile_timers ? "true" : "false") << '\n';
     out << "initial_temperature = " << join_strings(args.initial_temperature) << '\n';
     if (args.grid_layout.size() >= 4) {
         out << "grid_xyz = [" << args.grid_layout[1] << ", " << args.grid_layout[2] << ", " << args.grid_layout[3] << "]\n";

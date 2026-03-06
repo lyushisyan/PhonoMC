@@ -106,6 +106,7 @@ int main(int argc, char** argv) {
                         << hours << " h "
                         << minutes << " min "
                         << seconds << " s\n";
+                pop.append_profile_summary(summary);
             }
         }
         return 0;

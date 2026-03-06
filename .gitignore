@@ -4,6 +4,7 @@
 
 # Project artifacts
 build/
+build-mac/
 results/
 
 # Python caches

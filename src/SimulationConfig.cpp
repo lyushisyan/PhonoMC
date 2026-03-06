@@ -395,6 +395,11 @@ SimulationConfig parse_toml_file(const std::string& path) {
             "compute_kappa"}); v.has_value()) {
         args.compute_kappa = parse_bool_scalar(*v);
     }
+    if (auto v = get_first_value(kv, {
+            "simulation.profile_timers",
+            "profile_timers"}); v.has_value()) {
+        args.profile_timers = parse_bool_scalar(*v);
+    }
 
     if (auto v = get_first_value(kv, {"simulation.initial_temperature", "initial_temperature"}); v.has_value()) {
         const std::string t = trim(*v);
@@ -507,6 +512,9 @@ SimulationConfig parse_legacy_file(const std::string& path) {
     }
     if (auto it = kv.find("--compute_kappa"); it != kv.end() && !it->second.empty()) {
         args.compute_kappa = parse_bool_scalar(it->second.front());
+    }
+    if (auto it = kv.find("--profile_timers"); it != kv.end() && !it->second.empty()) {
+        args.profile_timers = parse_bool_scalar(it->second.front());
     }
     if (auto it = kv.find("--grid_xyz"); it != kv.end() && it->second.size() >= 3) {
         args.grid_layout = {"grid", it->second[0], it->second[1], it->second[2]};
