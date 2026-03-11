@@ -11,10 +11,12 @@
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace {
 using Vec3 = std::array<double, 3>;
 using Tri = std::array<int, 3>;
+using Box6 = std::array<double, 6>;
 
 Vec3 add(const Vec3& a, const Vec3& b) { return {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; }
 Vec3 sub(const Vec3& a, const Vec3& b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
@@ -263,6 +265,95 @@ std::vector<Vec3> parse_points(const std::vector<std::string>& tokens, const std
     return pts;
 }
 
+enum class BoundarySelectorMode {
+    Points,
+    Boxes
+};
+
+struct BoundarySelectors {
+    BoundarySelectorMode mode = BoundarySelectorMode::Points;
+    std::vector<Vec3> points;
+    std::vector<Box6> boxes;
+};
+
+bool is_numeric_token(const std::string& token) {
+    try {
+        (void) std::stod(token);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+// 函数说明：解析边界选择器，支持点模式和区域模式（相对坐标）。
+BoundarySelectors parse_boundary_selectors(const std::vector<std::string>& tokens, const std::string& name) {
+    BoundarySelectors out;
+    if (tokens.empty()) {
+        return out;
+    }
+
+    size_t start = 0;
+    std::string mode = "points";
+    if (!is_numeric_token(tokens.front())) {
+        mode = to_lower(tokens.front());
+        start = 1;
+    }
+    if (start >= tokens.size()) {
+        return out;
+    }
+
+    const bool use_boxes =
+        mode == "box" ||
+        mode == "boxes" ||
+        mode == "region" ||
+        mode == "regions" ||
+        mode == "relative_box" ||
+        mode == "relative_boxes" ||
+        mode == "relative_region" ||
+        mode == "relative_regions";
+
+    const bool use_points =
+        mode == "point" ||
+        mode == "points" ||
+        mode == "relative" ||
+        mode == "relative_point" ||
+        mode == "relative_points";
+
+    if (!use_boxes && !use_points) {
+        throw std::runtime_error(
+            name + " mode must be points/relative or boxes/regions (relative_box).");
+    }
+
+    if (use_boxes) {
+        if ((tokens.size() - start) % 6 != 0) {
+            throw std::runtime_error(name + " regions must be declared as sextuplets [xmin,ymin,zmin,xmax,ymax,zmax].");
+        }
+        out.mode = BoundarySelectorMode::Boxes;
+        out.boxes.reserve((tokens.size() - start) / 6);
+        for (size_t i = start; i < tokens.size(); i += 6) {
+            out.boxes.push_back({
+                std::stod(tokens[i]),
+                std::stod(tokens[i + 1]),
+                std::stod(tokens[i + 2]),
+                std::stod(tokens[i + 3]),
+                std::stod(tokens[i + 4]),
+                std::stod(tokens[i + 5])
+            });
+        }
+        return out;
+    }
+
+    if ((tokens.size() - start) % 3 != 0) {
+        throw std::runtime_error(name + " points must be declared as triplets.");
+    }
+    out.mode = BoundarySelectorMode::Points;
+    out.points.reserve((tokens.size() - start) / 3);
+    for (size_t i = start; i < tokens.size(); i += 3) {
+        out.points.push_back({std::stod(tokens[i]), std::stod(tokens[i + 1]), std::stod(tokens[i + 2])});
+    }
+    return out;
+}
+
 // 函数说明：提取指定 facet 的边界边长特征，用于边界匹配与诊断。
 std::vector<double> facet_boundary_edge_lengths(const SurfaceMesh& mesh, int facet) {
     std::vector<double> out;
@@ -407,27 +498,89 @@ void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) 
     if (facet_count_ == 0) {
         return;
     }
-    const char default_bc = args.boundary_conditions.empty() ? 'P' : args.boundary_conditions.back().empty() ? 'P' : args.boundary_conditions.back()[0];
+    // Unspecified boundaries always default to rough-surface scattering (R), with eta fallback = 0.
+    const char default_bc = 'R';
     facet_boundary_conditions_.assign(facet_count_, default_bc);
+    boundary_facets_.clear();
+    std::vector<std::vector<int>> selector_facets;
+    std::vector<char> selector_conditions;
 
     if (!args.boundary_position.empty()) {
-        auto points = parse_points(args.boundary_position, "boundary_position");
+        const auto selectors = parse_boundary_selectors(args.boundary_position, "boundary_position");
         const Vec3 ext = sub(bounds_max_, bounds_min_);
-        for (auto& p : points) {
-            for (int k = 0; k < 3; ++k) {
-                p[k] = bounds_min_[k] + p[k] * ext[k];
-            }
-        }
+        std::unordered_set<int> unique_boundary_facets;
 
-        boundary_facets_.clear();
-        for (size_t i = 0; i < points.size(); ++i) {
-            const int best_f = mesh_.nearest_facet(points[i]);
-            if (best_f < 0) {
-                continue;
+        if (selectors.mode == BoundarySelectorMode::Points) {
+            selector_facets.reserve(selectors.points.size());
+            selector_conditions.reserve(selectors.points.size());
+            for (size_t i = 0; i < selectors.points.size(); ++i) {
+                Vec3 p = selectors.points[i];
+                for (int k = 0; k < 3; ++k) {
+                    p[k] = bounds_min_[k] + p[k] * ext[k];
+                }
+                const char bc = (i < args.boundary_conditions.size() && !args.boundary_conditions[i].empty())
+                    ? args.boundary_conditions[i][0]
+                    : default_bc;
+                selector_conditions.push_back(bc);
+
+                std::vector<int> matched;
+                const int best_f = mesh_.nearest_facet(p);
+                if (best_f >= 0) {
+                    matched.push_back(best_f);
+                    facet_boundary_conditions_[best_f] = bc;
+                    if (unique_boundary_facets.insert(best_f).second) {
+                        boundary_facets_.push_back(best_f);
+                    }
+                }
+                selector_facets.push_back(std::move(matched));
             }
-            boundary_facets_.push_back(best_f);
-            if (i < args.boundary_conditions.size() && !args.boundary_conditions[i].empty()) {
-                facet_boundary_conditions_[best_f] = args.boundary_conditions[i][0];
+        } else {
+            selector_facets.reserve(selectors.boxes.size());
+            selector_conditions.reserve(selectors.boxes.size());
+            const auto& centroids = mesh_.facet_centroids();
+            const double eps = 1e-12 * std::max({1.0, std::abs(ext[0]), std::abs(ext[1]), std::abs(ext[2])});
+
+            for (size_t i = 0; i < selectors.boxes.size(); ++i) {
+                const auto& b = selectors.boxes[i];
+                const double xr0 = std::min(b[0], b[3]);
+                const double yr0 = std::min(b[1], b[4]);
+                const double zr0 = std::min(b[2], b[5]);
+                const double xr1 = std::max(b[0], b[3]);
+                const double yr1 = std::max(b[1], b[4]);
+                const double zr1 = std::max(b[2], b[5]);
+
+                const Vec3 lo {
+                    bounds_min_[0] + xr0 * ext[0],
+                    bounds_min_[1] + yr0 * ext[1],
+                    bounds_min_[2] + zr0 * ext[2]
+                };
+                const Vec3 hi {
+                    bounds_min_[0] + xr1 * ext[0],
+                    bounds_min_[1] + yr1 * ext[1],
+                    bounds_min_[2] + zr1 * ext[2]
+                };
+
+                const char bc = (i < args.boundary_conditions.size() && !args.boundary_conditions[i].empty())
+                    ? args.boundary_conditions[i][0]
+                    : default_bc;
+                selector_conditions.push_back(bc);
+
+                std::vector<int> matched;
+                for (int f = 0; f < facet_count_; ++f) {
+                    const Vec3& c = centroids[static_cast<size_t>(f)];
+                    const bool in_x = (c[0] >= lo[0] - eps && c[0] <= hi[0] + eps);
+                    const bool in_y = (c[1] >= lo[1] - eps && c[1] <= hi[1] + eps);
+                    const bool in_z = (c[2] >= lo[2] - eps && c[2] <= hi[2] + eps);
+                    if (!in_x || !in_y || !in_z) {
+                        continue;
+                    }
+                    matched.push_back(f);
+                    facet_boundary_conditions_[f] = bc;
+                    if (unique_boundary_facets.insert(f).second) {
+                        boundary_facets_.push_back(f);
+                    }
+                }
+                selector_facets.push_back(std::move(matched));
             }
         }
     }
@@ -445,42 +598,36 @@ void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) 
     reservoir_values_.assign(reservoir_facets_.size(), std::numeric_limits<double>::quiet_NaN());
     roughness_values_.assign(rough_facets_.size(), std::numeric_limits<double>::quiet_NaN());
 
-    if (!args.boundary_values.empty()) {
-        if (default_bc == 'T' || default_bc == 'F') {
-            std::fill(reservoir_values_.begin(), reservoir_values_.end(), args.boundary_values.back());
-        } else if (default_bc == 'R') {
-            // Roughness is provided in nm in input; convert to Angstrom internally.
-            std::fill(roughness_values_.begin(), roughness_values_.end(), args.boundary_values.back() * 10.0);
-        }
-    }
-
-    int val_idx = 0;
-    for (size_t i = 0; i < boundary_facets_.size(); ++i) {
-        const int f = boundary_facets_[i];
-        const char bc = facet_boundary_conditions_[f];
-        if (bc == 'P') {
-            continue;
-        }
-        if (val_idx >= static_cast<int>(args.boundary_values.size())) {
+    // boundary_values follows selector-level mapping: one value controls one selected point/region.
+    std::unordered_map<int, double> reservoir_values_by_facet;
+    std::unordered_map<int, double> roughness_values_by_facet;
+    for (size_t i = 0; i < selector_facets.size(); ++i) {
+        if (i >= args.boundary_values.size()) {
             break;
         }
+        const char bc = (i < selector_conditions.size()) ? selector_conditions[i] : default_bc;
         if (bc == 'T' || bc == 'F') {
-            for (size_t j = 0; j < reservoir_facets_.size(); ++j) {
-                if (reservoir_facets_[j] == f) {
-                    reservoir_values_[j] = args.boundary_values[val_idx];
-                    break;
-                }
+            for (const int f : selector_facets[i]) {
+                reservoir_values_by_facet[f] = args.boundary_values[i];
             }
         } else if (bc == 'R') {
-            for (size_t j = 0; j < rough_facets_.size(); ++j) {
-                if (rough_facets_[j] == f) {
-                    // Roughness is provided in nm in input; convert to Angstrom internally.
-                    roughness_values_[j] = args.boundary_values[val_idx] * 10.0;
-                    break;
-                }
+            for (const int f : selector_facets[i]) {
+                // Roughness is provided in nm in input; convert to Angstrom internally.
+                roughness_values_by_facet[f] = args.boundary_values[i] * 10.0;
             }
         }
-        ++val_idx;
+    }
+    for (size_t j = 0; j < reservoir_facets_.size(); ++j) {
+        const int f = reservoir_facets_[j];
+        if (const auto it = reservoir_values_by_facet.find(f); it != reservoir_values_by_facet.end()) {
+            reservoir_values_[j] = it->second;
+        }
+    }
+    for (size_t j = 0; j < rough_facets_.size(); ++j) {
+        const int f = rough_facets_[j];
+        if (const auto it = roughness_values_by_facet.find(f); it != roughness_values_by_facet.end()) {
+            roughness_values_[j] = it->second;
+        }
     }
 }
 
@@ -684,6 +831,16 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
         }
         return static_cast<int>((v.size() - start) / 3);
     };
+    auto boundary_selector_info = [](const std::vector<std::string>& v) -> std::pair<std::string, int> {
+        if (v.empty()) {
+            return {"none", 0};
+        }
+        const auto parsed = parse_boundary_selectors(v, "boundary_position");
+        if (parsed.mode == BoundarySelectorMode::Boxes) {
+            return {"region", static_cast<int>(parsed.boxes.size())};
+        }
+        return {"point", static_cast<int>(parsed.points.size())};
+    };
 
     int npairs = 0;
     for (int i = 0; i < facet_count_; ++i) {
@@ -713,7 +870,9 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
     }
     out << "boundary_conditions = " << join_strings(args.boundary_conditions) << '\n';
     out << "boundary_values = " << join_numbers(args.boundary_values) << '\n';
-    out << "boundary_position_point_count = " << point_count(args.boundary_position) << '\n';
+    const auto [boundary_selector_mode, boundary_selector_count] = boundary_selector_info(args.boundary_position);
+    out << "boundary_position_selector_mode = " << boundary_selector_mode << '\n';
+    out << "boundary_position_selector_count = " << boundary_selector_count << '\n';
     out << "boundary_position_tokens = " << join_strings(args.boundary_position) << '\n';
     out << "periodic_pair_point_count = " << point_count(args.periodic_pair) << '\n';
     out << "periodic_pair_tokens = " << join_strings(args.periodic_pair) << '\n';
@@ -766,7 +925,7 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
 // 函数说明：查询指定 facet 的边界类型（T/P/R/F 等）。
 char SimulationDomain::facet_boundary_condition(int facet) const {
     if (facet < 0 || facet >= static_cast<int>(facet_boundary_conditions_.size())) {
-        return 'P';
+        return 'R';
     }
     return facet_boundary_conditions_[facet];
 }

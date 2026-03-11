@@ -241,6 +241,33 @@ std::vector<std::array<double, 3>> parse_point_array(const std::string& value) {
     return points;
 }
 
+struct BoundaryPositionSpec {
+    bool use_boxes = false;
+    std::vector<std::array<double, 3>> points;
+    std::vector<std::array<double, 6>> boxes;
+};
+
+// 函数说明：解析 boundary_position，支持点选择 [x,y,z] 与区域选择 [xmin,ymin,zmin,xmax,ymax,zmax]。
+BoundaryPositionSpec parse_boundary_position_array(const std::string& value) {
+    BoundaryPositionSpec out;
+    for (const auto& row : parse_array_elements(value)) {
+        const auto coords = parse_number_array(row);
+        if (coords.size() == 3) {
+            out.points.push_back({coords[0], coords[1], coords[2]});
+        } else if (coords.size() == 6) {
+            out.boxes.push_back({coords[0], coords[1], coords[2], coords[3], coords[4], coords[5]});
+        } else {
+            throw std::runtime_error(
+                "boundary_position row must be [x,y,z] or [xmin,ymin,zmin,xmax,ymax,zmax].");
+        }
+    }
+    if (!out.points.empty() && !out.boxes.empty()) {
+        throw std::runtime_error("boundary_position cannot mix point rows and region rows.");
+    }
+    out.use_boxes = !out.boxes.empty();
+    return out;
+}
+
 // 函数说明：将数值格式化为紧凑字符串，便于输出文件可读性。
 std::string format_number(double x) {
     std::ostringstream oss;
@@ -363,6 +390,19 @@ std::vector<std::string> flatten_points(const std::string& mode, const std::vect
     return out;
 }
 
+// 函数说明：将区域集合扁平化为 token，供边界赋值阶段按区域匹配 facet。
+std::vector<std::string> flatten_boxes(const std::string& mode, const std::vector<std::array<double, 6>>& boxes) {
+    std::vector<std::string> out;
+    out.reserve(1 + boxes.size() * 6);
+    out.push_back(mode);
+    for (const auto& b : boxes) {
+        for (int i = 0; i < 6; ++i) {
+            out.push_back(format_number(b[static_cast<size_t>(i)]));
+        }
+    }
+    return out;
+}
+
 // 函数说明：解析 TOML 输入并构造仿真配置对象（含单位与默认规则）。
 SimulationConfig parse_toml_file(const std::string& path) {
     SimulationConfig args;
@@ -434,7 +474,12 @@ SimulationConfig parse_toml_file(const std::string& path) {
 
     if (auto pts = get_first_value(kv, {
             "boundary.boundary_position", "boundary_position"}); pts.has_value()) {
-        args.boundary_position = flatten_points("relative", parse_point_array(*pts));
+        const auto spec = parse_boundary_position_array(*pts);
+        if (spec.use_boxes) {
+            args.boundary_position = flatten_boxes("relative_box", spec.boxes);
+        } else {
+            args.boundary_position = flatten_points("relative", spec.points);
+        }
     }
 
     if (auto pts = get_first_value(kv, {

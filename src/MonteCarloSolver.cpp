@@ -141,7 +141,7 @@ void MonteCarloSolver::initialize_particles(const SimulationDomain& geometry, co
     cached_collision_positions_.assign(static_cast<size_t>(particle_count_), {0.0, 0.0, 0.0});
     timesteps_to_collision_.assign(static_cast<size_t>(particle_count_), std::numeric_limits<double>::infinity());
     cached_collision_facets_.assign(static_cast<size_t>(particle_count_), -1);
-    cached_collision_conditions_.assign(static_cast<size_t>(particle_count_), 'P');
+    cached_collision_conditions_.assign(static_cast<size_t>(particle_count_), 'R');
     std::vector<int> all_idx(static_cast<size_t>(particle_count_));
     std::iota(all_idx.begin(), all_idx.end(), 0);
     update_collision_cache(geometry, all_idx);
@@ -797,7 +797,7 @@ std::vector<std::pair<int, double>> MonteCarloSolver::inject_particles_from_rese
             particle_energies_.push_back(0.0);
             particle_grid_id_.push_back(nearest_grid_index(geometry, pos));
             cached_collision_facets_.push_back(-1);
-            cached_collision_conditions_.push_back('P');
+            cached_collision_conditions_.push_back('R');
             particle_alive_flags_.push_back(static_cast<std::uint8_t>(1));
             ++particle_count_;
             inserted.push_back({new_idx, dt_in[k]});
