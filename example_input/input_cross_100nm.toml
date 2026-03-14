@@ -7,6 +7,7 @@ particle_count = 10000
 time_step = 0.1
 iterations = 5000
 compute_kappa = true
+initial_temperature = "linear"
 grid_xyz = [10, 1, 1]
 
 [boundary]

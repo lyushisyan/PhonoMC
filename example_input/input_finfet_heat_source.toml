@@ -6,7 +6,7 @@ particle_count = 50000
 time_step = 0.1
 iterations = 1000
 compute_kappa = false
-initial_temperature = "mean"
+initial_temperature = 300
 grid_xyz = [22, 36, 30]
 
 [boundary]

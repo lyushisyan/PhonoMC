@@ -15,7 +15,7 @@ struct SimulationConfig {
     double temperature_lookup_dt = 0.1;  // K, lookup-table step for T->E precompute
 
     std::vector<std::string> grid_layout;
-    std::vector<std::string> initial_temperature {"cold"};
+    std::vector<std::string> initial_temperature {"t0", "300"};
     std::vector<std::string> boundary_conditions;
     std::vector<std::string> boundary_position;
     std::vector<double> boundary_values;

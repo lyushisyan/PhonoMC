@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -195,33 +196,122 @@ void MonteCarloSolver::initialize_particle_modes(const PhononMaterial& phonon) {
 // 函数说明：依据边界温度与初始策略设置粒子温度场。
 void MonteCarloSolver::initialize_particle_temperatures(const SimulationDomain& geometry) {
     particle_temperatures_.assign(static_cast<size_t>(particle_count_), 300.0);
-    const auto& res_vals = geometry.reservoir_values();
-
-    double tmin = 298.0;
-    double tmax = 302.0;
-    if (!res_vals.empty()) {
-        tmin = *std::min_element(res_vals.begin(), res_vals.end());
-        tmax = *std::max_element(res_vals.begin(), res_vals.end());
-        if (std::isnan(tmin) || std::isnan(tmax)) {
-            tmin = 298.0;
-            tmax = 302.0;
+    constexpr double kNoReservoirCold = 299.0;
+    constexpr double kNoReservoirHot = 301.0;
+    std::vector<double> finite_res_vals;
+    finite_res_vals.reserve(geometry.reservoir_values().size());
+    for (double v : geometry.reservoir_values()) {
+        if (std::isfinite(v)) {
+            finite_res_vals.push_back(v);
         }
+    }
+
+    double tmin = kNoReservoirCold;
+    double tmax = kNoReservoirHot;
+    if (!finite_res_vals.empty()) {
+        tmin = *std::min_element(finite_res_vals.begin(), finite_res_vals.end());
+        tmax = *std::max_element(finite_res_vals.begin(), finite_res_vals.end());
     }
     if (tmin > tmax) {
         std::swap(tmin, tmax);
     }
     const double tmean = 0.5 * (tmin + tmax);
-    std::string key = "cold";
+    std::string key = "t0";
     if (!args_.initial_temperature.empty()) {
         key = args_.initial_temperature.front();
     }
+    std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
-    if (key == "cold") {
-        std::fill(particle_temperatures_.begin(), particle_temperatures_.end(), tmin);
-    } else if (key == "mean") {
-        std::fill(particle_temperatures_.begin(), particle_temperatures_.end(), tmean);
+    auto try_parse_double = [](const std::string& token, double& out) -> bool {
+        if (token.empty()) {
+            return false;
+        }
+        try {
+            size_t pos = 0;
+            const double v = std::stod(token, &pos);
+            if (pos != token.size() || !std::isfinite(v)) {
+                return false;
+            }
+            out = v;
+            return true;
+        } catch (...) {
+            return false;
+        }
+    };
+
+    double t0 = tmean;
+    const bool key_is_number = try_parse_double(key, t0);
+    if (key_is_number) {
+        key = "t0";
+    }
+
+    if (key == "t0") {
+        if (!key_is_number && args_.initial_temperature.size() >= 2) {
+            const std::string token = args_.initial_temperature[1];
+            if (!try_parse_double(token, t0)) {
+                throw std::runtime_error("initial_temperature t0 mode requires a finite numeric value.");
+            }
+        }
+        std::fill(particle_temperatures_.begin(), particle_temperatures_.end(), t0);
+        std::cout << "[init] initial_temperature mode=t0, T0=" << t0 << " K\n";
+    } else if (key == "linear") {
+        const auto& rf = geometry.reservoir_facets();
+        const auto& centroids = geometry.mesh().facet_centroids();
+        int cold_facet = -1;
+        int hot_facet = -1;
+        double cold_t = std::numeric_limits<double>::infinity();
+        double hot_t = -std::numeric_limits<double>::infinity();
+        for (int facet : rf) {
+            if (facet < 0 || facet >= static_cast<int>(centroids.size())) {
+                continue;
+            }
+            const double Tres = geometry.reservoir_value_for_facet(facet, std::numeric_limits<double>::quiet_NaN());
+            if (!std::isfinite(Tres)) {
+                continue;
+            }
+            if (Tres < cold_t) {
+                cold_t = Tres;
+                cold_facet = facet;
+            }
+            if (Tres > hot_t) {
+                hot_t = Tres;
+                hot_facet = facet;
+            }
+        }
+
+        const bool valid_pair = (cold_facet >= 0 && hot_facet >= 0 && hot_t > cold_t + 1e-12);
+        if (!valid_pair) {
+            std::fill(particle_temperatures_.begin(), particle_temperatures_.end(), tmean);
+            std::cout << "[init] initial_temperature mode=linear, fallback_to_uniform_mean="
+                      << tmean << " K (insufficient hot/cold reservoirs)\n";
+            return;
+        }
+
+        const Vec3 p_cold = centroids[static_cast<size_t>(cold_facet)];
+        const Vec3 p_hot = centroids[static_cast<size_t>(hot_facet)];
+        const Vec3 axis = sub(p_hot, p_cold);
+        const double axis_len2 = dot(axis, axis);
+        if (!(axis_len2 > 1e-20)) {
+            std::fill(particle_temperatures_.begin(), particle_temperatures_.end(), tmean);
+            std::cout << "[init] initial_temperature mode=linear, fallback_to_uniform_mean="
+                      << tmean << " K (degenerate hot/cold direction)\n";
+            return;
+        }
+
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+        for (int i = 0; i < particle_count_; ++i) {
+            const Vec3 rel = sub(particle_positions_[i], p_cold);
+            const double s = std::clamp(dot(rel, axis) / axis_len2, 0.0, 1.0);
+            particle_temperatures_[static_cast<size_t>(i)] = cold_t + s * (hot_t - cold_t);
+        }
+        std::cout << "[init] initial_temperature mode=linear, cold=" << cold_t
+                  << " K (facet " << cold_facet << "), hot=" << hot_t
+                  << " K (facet " << hot_facet << ")\n";
     } else {
-        throw std::runtime_error("initial_temperature only supports: cold, mean");
+        throw std::runtime_error(
+            "initial_temperature supports only: t0 (+value) or linear.");
     }
 }
 
