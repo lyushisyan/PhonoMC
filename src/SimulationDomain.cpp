@@ -243,36 +243,7 @@ std::pair<std::vector<Vec3>, std::vector<Tri>> load_mesh_file(const std::filesys
     throw std::runtime_error("Unsupported mesh extension: " + ext + " (expected .stl or .obj)");
 }
 
-// 函数说明：解析边界/周期点参数并转换为三维坐标列表。
-std::vector<Vec3> parse_points(const std::vector<std::string>& tokens, const std::string& name) {
-    if (tokens.empty()) {
-        return {};
-    }
-    size_t start = 0;
-    try {
-        (void) std::stod(tokens.front());
-    } catch (...) {
-        start = 1;
-    }
-    if ((tokens.size() - start) % 3 != 0) {
-        throw std::runtime_error(name + " points must be declared as triplets.");
-    }
-    std::vector<Vec3> pts;
-    pts.reserve((tokens.size() - start) / 3);
-    for (size_t i = start; i < tokens.size(); i += 3) {
-        pts.push_back({std::stod(tokens[i]), std::stod(tokens[i + 1]), std::stod(tokens[i + 2])});
-    }
-    return pts;
-}
-
-enum class BoundarySelectorMode {
-    Points,
-    Boxes
-};
-
 struct BoundarySelectors {
-    BoundarySelectorMode mode = BoundarySelectorMode::Points;
-    std::vector<Vec3> points;
     std::vector<Box6> boxes;
 };
 
@@ -285,7 +256,7 @@ bool is_numeric_token(const std::string& token) {
     }
 }
 
-// 函数说明：解析边界选择器，支持点模式和区域模式（相对坐标）。
+// 函数说明：解析边界选择器，仅支持区域模式（相对坐标六元组）。
 BoundarySelectors parse_boundary_selectors(const std::vector<std::string>& tokens, const std::string& name) {
     BoundarySelectors out;
     if (tokens.empty()) {
@@ -312,44 +283,26 @@ BoundarySelectors parse_boundary_selectors(const std::vector<std::string>& token
         mode == "relative_region" ||
         mode == "relative_regions";
 
-    const bool use_points =
-        mode == "point" ||
-        mode == "points" ||
-        mode == "relative" ||
-        mode == "relative_point" ||
-        mode == "relative_points";
-
-    if (!use_boxes && !use_points) {
+    if (!use_boxes && !is_numeric_token(tokens.front())) {
         throw std::runtime_error(
-            name + " mode must be points/relative or boxes/regions (relative_box).");
+            name +
+            " mode must be regions/relative_box. Point mode is no longer supported.");
     }
-
-    if (use_boxes) {
-        if ((tokens.size() - start) % 6 != 0) {
-            throw std::runtime_error(name + " regions must be declared as sextuplets [xmin,ymin,zmin,xmax,ymax,zmax].");
-        }
-        out.mode = BoundarySelectorMode::Boxes;
-        out.boxes.reserve((tokens.size() - start) / 6);
-        for (size_t i = start; i < tokens.size(); i += 6) {
-            out.boxes.push_back({
-                std::stod(tokens[i]),
-                std::stod(tokens[i + 1]),
-                std::stod(tokens[i + 2]),
-                std::stod(tokens[i + 3]),
-                std::stod(tokens[i + 4]),
-                std::stod(tokens[i + 5])
-            });
-        }
-        return out;
+    if ((tokens.size() - start) % 6 != 0) {
+        throw std::runtime_error(
+            name +
+            " regions must be declared as sextuplets [xmin,ymin,zmin,xmax,ymax,zmax].");
     }
-
-    if ((tokens.size() - start) % 3 != 0) {
-        throw std::runtime_error(name + " points must be declared as triplets.");
-    }
-    out.mode = BoundarySelectorMode::Points;
-    out.points.reserve((tokens.size() - start) / 3);
-    for (size_t i = start; i < tokens.size(); i += 3) {
-        out.points.push_back({std::stod(tokens[i]), std::stod(tokens[i + 1]), std::stod(tokens[i + 2])});
+    out.boxes.reserve((tokens.size() - start) / 6);
+    for (size_t i = start; i < tokens.size(); i += 6) {
+        out.boxes.push_back({
+            std::stod(tokens[i]),
+            std::stod(tokens[i + 1]),
+            std::stod(tokens[i + 2]),
+            std::stod(tokens[i + 3]),
+            std::stod(tokens[i + 4]),
+            std::stod(tokens[i + 5])
+        });
     }
     return out;
 }
@@ -500,6 +453,18 @@ void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) 
     }
     // Unspecified boundaries always default to rough-surface scattering (R), with eta fallback = 0.
     const char default_bc = 'R';
+    auto parse_bc = [&](const std::string& token, size_t index) -> char {
+        if (token.empty()) {
+            return default_bc;
+        }
+        const char bc = static_cast<char>(std::toupper(static_cast<unsigned char>(token[0])));
+        if (token.size() != 1 || (bc != 'T' && bc != 'P' && bc != 'R')) {
+            throw std::runtime_error(
+                "Unsupported boundary condition at index " + std::to_string(index) +
+                ": '" + token + "'. Only 'T', 'P', 'R' are supported.");
+        }
+        return bc;
+    };
     facet_boundary_conditions_.assign(facet_count_, default_bc);
     boundary_facets_.clear();
     std::vector<std::vector<int>> selector_facets;
@@ -509,86 +474,59 @@ void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) 
         const auto selectors = parse_boundary_selectors(args.boundary_position, "boundary_position");
         const Vec3 ext = sub(bounds_max_, bounds_min_);
         std::unordered_set<int> unique_boundary_facets;
+        selector_facets.reserve(selectors.boxes.size());
+        selector_conditions.reserve(selectors.boxes.size());
+        const auto& centroids = mesh_.facet_centroids();
+        const double eps = 1e-12 * std::max({1.0, std::abs(ext[0]), std::abs(ext[1]), std::abs(ext[2])});
 
-        if (selectors.mode == BoundarySelectorMode::Points) {
-            selector_facets.reserve(selectors.points.size());
-            selector_conditions.reserve(selectors.points.size());
-            for (size_t i = 0; i < selectors.points.size(); ++i) {
-                Vec3 p = selectors.points[i];
-                for (int k = 0; k < 3; ++k) {
-                    p[k] = bounds_min_[k] + p[k] * ext[k];
-                }
-                const char bc = (i < args.boundary_conditions.size() && !args.boundary_conditions[i].empty())
-                    ? args.boundary_conditions[i][0]
-                    : default_bc;
-                selector_conditions.push_back(bc);
+        for (size_t i = 0; i < selectors.boxes.size(); ++i) {
+            const auto& b = selectors.boxes[i];
+            const double xr0 = std::min(b[0], b[3]);
+            const double yr0 = std::min(b[1], b[4]);
+            const double zr0 = std::min(b[2], b[5]);
+            const double xr1 = std::max(b[0], b[3]);
+            const double yr1 = std::max(b[1], b[4]);
+            const double zr1 = std::max(b[2], b[5]);
 
-                std::vector<int> matched;
-                const int best_f = mesh_.nearest_facet(p);
-                if (best_f >= 0) {
-                    matched.push_back(best_f);
-                    facet_boundary_conditions_[best_f] = bc;
-                    if (unique_boundary_facets.insert(best_f).second) {
-                        boundary_facets_.push_back(best_f);
-                    }
+            const Vec3 lo {
+                bounds_min_[0] + xr0 * ext[0],
+                bounds_min_[1] + yr0 * ext[1],
+                bounds_min_[2] + zr0 * ext[2]
+            };
+            const Vec3 hi {
+                bounds_min_[0] + xr1 * ext[0],
+                bounds_min_[1] + yr1 * ext[1],
+                bounds_min_[2] + zr1 * ext[2]
+            };
+
+            const char bc = (i < args.boundary_conditions.size())
+                ? parse_bc(args.boundary_conditions[i], i)
+                : default_bc;
+            selector_conditions.push_back(bc);
+
+            std::vector<int> matched;
+            for (int f = 0; f < facet_count_; ++f) {
+                const Vec3& c = centroids[static_cast<size_t>(f)];
+                const bool in_x = (c[0] >= lo[0] - eps && c[0] <= hi[0] + eps);
+                const bool in_y = (c[1] >= lo[1] - eps && c[1] <= hi[1] + eps);
+                const bool in_z = (c[2] >= lo[2] - eps && c[2] <= hi[2] + eps);
+                if (!in_x || !in_y || !in_z) {
+                    continue;
                 }
-                selector_facets.push_back(std::move(matched));
+                matched.push_back(f);
+                facet_boundary_conditions_[f] = bc;
+                if (unique_boundary_facets.insert(f).second) {
+                    boundary_facets_.push_back(f);
+                }
             }
-        } else {
-            selector_facets.reserve(selectors.boxes.size());
-            selector_conditions.reserve(selectors.boxes.size());
-            const auto& centroids = mesh_.facet_centroids();
-            const double eps = 1e-12 * std::max({1.0, std::abs(ext[0]), std::abs(ext[1]), std::abs(ext[2])});
-
-            for (size_t i = 0; i < selectors.boxes.size(); ++i) {
-                const auto& b = selectors.boxes[i];
-                const double xr0 = std::min(b[0], b[3]);
-                const double yr0 = std::min(b[1], b[4]);
-                const double zr0 = std::min(b[2], b[5]);
-                const double xr1 = std::max(b[0], b[3]);
-                const double yr1 = std::max(b[1], b[4]);
-                const double zr1 = std::max(b[2], b[5]);
-
-                const Vec3 lo {
-                    bounds_min_[0] + xr0 * ext[0],
-                    bounds_min_[1] + yr0 * ext[1],
-                    bounds_min_[2] + zr0 * ext[2]
-                };
-                const Vec3 hi {
-                    bounds_min_[0] + xr1 * ext[0],
-                    bounds_min_[1] + yr1 * ext[1],
-                    bounds_min_[2] + zr1 * ext[2]
-                };
-
-                const char bc = (i < args.boundary_conditions.size() && !args.boundary_conditions[i].empty())
-                    ? args.boundary_conditions[i][0]
-                    : default_bc;
-                selector_conditions.push_back(bc);
-
-                std::vector<int> matched;
-                for (int f = 0; f < facet_count_; ++f) {
-                    const Vec3& c = centroids[static_cast<size_t>(f)];
-                    const bool in_x = (c[0] >= lo[0] - eps && c[0] <= hi[0] + eps);
-                    const bool in_y = (c[1] >= lo[1] - eps && c[1] <= hi[1] + eps);
-                    const bool in_z = (c[2] >= lo[2] - eps && c[2] <= hi[2] + eps);
-                    if (!in_x || !in_y || !in_z) {
-                        continue;
-                    }
-                    matched.push_back(f);
-                    facet_boundary_conditions_[f] = bc;
-                    if (unique_boundary_facets.insert(f).second) {
-                        boundary_facets_.push_back(f);
-                    }
-                }
-                selector_facets.push_back(std::move(matched));
-            }
+            selector_facets.push_back(std::move(matched));
         }
     }
 
     reservoir_facets_.clear();
     rough_facets_.clear();
     for (int f = 0; f < facet_count_; ++f) {
-        if (facet_boundary_conditions_[f] == 'T' || facet_boundary_conditions_[f] == 'F') {
+        if (facet_boundary_conditions_[f] == 'T') {
             reservoir_facets_.push_back(f);
         } else if (facet_boundary_conditions_[f] == 'R') {
             rough_facets_.push_back(f);
@@ -606,7 +544,7 @@ void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) 
             break;
         }
         const char bc = (i < selector_conditions.size()) ? selector_conditions[i] : default_bc;
-        if (bc == 'T' || bc == 'F') {
+        if (bc == 'T') {
             for (const int f : selector_facets[i]) {
                 reservoir_values_by_facet[f] = args.boundary_values[i];
             }
@@ -637,24 +575,56 @@ void SimulationDomain::build_periodic_connections(const SimulationConfig& args) 
     if (args.periodic_pair.empty()) {
         return;
     }
-    auto points = parse_points(args.periodic_pair, "periodic_pair");
+    const auto selectors = parse_boundary_selectors(args.periodic_pair, "periodic_pair");
     const Vec3 ext = sub(bounds_max_, bounds_min_);
-    for (auto& p : points) {
-        for (int k = 0; k < 3; ++k) {
-            p[k] = bounds_min_[k] + p[k] * ext[k];
-        }
-    }
-    if (points.size() % 2 != 0) {
-        throw std::runtime_error("periodic_pair must have even number of points.");
+    const auto& centroids = mesh_.facet_centroids();
+    const double eps = 1e-12 * std::max({1.0, std::abs(ext[0]), std::abs(ext[1]), std::abs(ext[2])});
+    if (selectors.boxes.size() % 2 != 0) {
+        throw std::runtime_error("periodic_pair must have even number of regions.");
     }
 
-    for (size_t i = 0; i < points.size(); i += 2) {
-        const int a = mesh_.nearest_facet(points[i]);
-        const int b = mesh_.nearest_facet(points[i + 1]);
-        connected_facets_.push_back({a, b});
-        if (a < 0 || b < 0) {
-            throw std::runtime_error("Connected facet mapping failed for periodic_pair pair.");
+    auto match_facets_by_region = [&](const Box6& b) {
+        std::vector<int> matched;
+        const double xr0 = std::min(b[0], b[3]);
+        const double yr0 = std::min(b[1], b[4]);
+        const double zr0 = std::min(b[2], b[5]);
+        const double xr1 = std::max(b[0], b[3]);
+        const double yr1 = std::max(b[1], b[4]);
+        const double zr1 = std::max(b[2], b[5]);
+        const Vec3 lo {
+            bounds_min_[0] + xr0 * ext[0],
+            bounds_min_[1] + yr0 * ext[1],
+            bounds_min_[2] + zr0 * ext[2]
+        };
+        const Vec3 hi {
+            bounds_min_[0] + xr1 * ext[0],
+            bounds_min_[1] + yr1 * ext[1],
+            bounds_min_[2] + zr1 * ext[2]
+        };
+        for (int f = 0; f < facet_count_; ++f) {
+            const Vec3& c = centroids[static_cast<size_t>(f)];
+            const bool in_x = (c[0] >= lo[0] - eps && c[0] <= hi[0] + eps);
+            const bool in_y = (c[1] >= lo[1] - eps && c[1] <= hi[1] + eps);
+            const bool in_z = (c[2] >= lo[2] - eps && c[2] <= hi[2] + eps);
+            if (in_x && in_y && in_z) {
+                matched.push_back(f);
+            }
         }
+        return matched;
+    };
+
+    for (size_t i = 0; i < selectors.boxes.size(); i += 2) {
+        const auto matched_a = match_facets_by_region(selectors.boxes[i]);
+        const auto matched_b = match_facets_by_region(selectors.boxes[i + 1]);
+        if (matched_a.empty() || matched_b.empty()) {
+            throw std::runtime_error("Connected facet mapping failed for periodic_pair regions.");
+        }
+        if (matched_a.size() != 1 || matched_b.size() != 1) {
+            throw std::runtime_error("Each periodic_pair region must match exactly one facet.");
+        }
+        const int a = matched_a.front();
+        const int b = matched_b.front();
+        connected_facets_.push_back({a, b});
         if (facet_boundary_conditions_[a] != 'P' || facet_boundary_conditions_[b] != 'P') {
             throw std::runtime_error("Connected facets must both be periodic ('P').");
         }
@@ -816,30 +786,18 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
         oss << "]";
         return oss.str();
     };
-    auto point_count = [](const std::vector<std::string>& v) -> int {
+    auto region_count = [](const std::vector<std::string>& v) -> int {
         if (v.empty()) {
             return 0;
         }
-        size_t start = 0;
-        try {
-            (void) std::stod(v.front());
-        } catch (...) {
-            start = 1;
-        }
-        if ((v.size() - start) % 3 != 0) {
-            return 0;
-        }
-        return static_cast<int>((v.size() - start) / 3);
+        return static_cast<int>(parse_boundary_selectors(v, "summary_selector").boxes.size());
     };
     auto boundary_selector_info = [](const std::vector<std::string>& v) -> std::pair<std::string, int> {
         if (v.empty()) {
             return {"none", 0};
         }
         const auto parsed = parse_boundary_selectors(v, "boundary_position");
-        if (parsed.mode == BoundarySelectorMode::Boxes) {
-            return {"region", static_cast<int>(parsed.boxes.size())};
-        }
-        return {"point", static_cast<int>(parsed.points.size())};
+        return {"region", static_cast<int>(parsed.boxes.size())};
     };
 
     int npairs = 0;
@@ -874,7 +832,7 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
     out << "boundary_position_selector_mode = " << boundary_selector_mode << '\n';
     out << "boundary_position_selector_count = " << boundary_selector_count << '\n';
     out << "boundary_position_tokens = " << join_strings(args.boundary_position) << '\n';
-    out << "periodic_pair_point_count = " << point_count(args.periodic_pair) << '\n';
+    out << "periodic_pair_region_count = " << region_count(args.periodic_pair) << '\n';
     out << "periodic_pair_tokens = " << join_strings(args.periodic_pair) << '\n';
     out << "material_folder = " << args.material_folder << '\n';
     out << "output_folder = " << args.output_folder << '\n';
@@ -922,7 +880,7 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
     }
 }
 
-// 函数说明：查询指定 facet 的边界类型（T/P/R/F 等）。
+// 函数说明：查询指定 facet 的边界类型（T/P/R）。
 char SimulationDomain::facet_boundary_condition(int facet) const {
     if (facet < 0 || facet >= static_cast<int>(facet_boundary_conditions_.size())) {
         return 'R';

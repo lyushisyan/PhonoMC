@@ -8,6 +8,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <numeric>
@@ -120,6 +121,7 @@ void MonteCarloSolver::initialize_particles(const SimulationDomain& geometry, co
     initialize_particle_velocities(phonon);
     initialize_reservoir_injection(geometry, phonon);
     initialize_rough_boundary_scattering(geometry, phonon);
+    write_rough_boundary_mode_map(geometry, phonon);
     particle_omega_.resize(static_cast<size_t>(particle_count_));
     particle_occupation_.resize(static_cast<size_t>(particle_count_));
     particle_energies_.resize(static_cast<size_t>(particle_count_));
@@ -285,6 +287,8 @@ void MonteCarloSolver::initialize_rough_boundary_scattering(const SimulationDoma
         rd.facet = facet;
         rd.specularity.assign(static_cast<size_t>(na), 0.0);
         rd.spec_match_active.assign(static_cast<size_t>(na), -1);
+        rd.diffuse_creation_rate.assign(static_cast<size_t>(na), 0.0);
+        rd.diffuse_creation_prob.assign(static_cast<size_t>(na), 0.0);
         rd.diffuse_begin.assign(static_cast<size_t>(na), -1);
         rd.diffuse_end.assign(static_cast<size_t>(na), -1);
 
@@ -293,6 +297,8 @@ void MonteCarloSolver::initialize_rough_boundary_scattering(const SimulationDoma
         const Vec3 n_in {-n_out[0], -n_out[1], -n_out[2]};
         std::vector<int> incoming;
         std::vector<int> outgoing;
+        std::vector<double> incoming_destruction(static_cast<size_t>(na), 0.0);
+        std::vector<double> outgoing_creation(static_cast<size_t>(na), 0.0);
         incoming.reserve(static_cast<size_t>(na));
         outgoing.reserve(static_cast<size_t>(na));
 
@@ -301,8 +307,10 @@ void MonteCarloSolver::initialize_rough_boundary_scattering(const SimulationDoma
             const double vn = dot(v, n_in);
             if (vn < 0.0) {
                 incoming.push_back(ai);
+                incoming_destruction[static_cast<size_t>(ai)] = -vn;
             } else if (vn > 0.0) {
                 outgoing.push_back(ai);
+                outgoing_creation[static_cast<size_t>(ai)] = vn;
             }
             const double vnorm = std::max(1e-12, vnorm_active[static_cast<size_t>(ai)]);
             const double incidence_cos = std::abs(vn) / vnorm;
@@ -311,7 +319,8 @@ void MonteCarloSolver::initialize_rough_boundary_scattering(const SimulationDoma
             if (!std::isfinite(p)) {
                 p = 0.0;
             }
-            rd.specularity[static_cast<size_t>(ai)] = std::clamp(p, 0.0, 1.0);
+            // Specularity is only meaningful for incoming modes on this facet.
+            rd.specularity[static_cast<size_t>(ai)] = (vn < 0.0) ? std::clamp(p, 0.0, 1.0) : 0.0;
         }
         rd.outgoing_active = outgoing;
         rd.outgoing_sorted_active = outgoing;
@@ -365,10 +374,111 @@ void MonteCarloSolver::initialize_rough_boundary_scattering(const SimulationDoma
             }
         }
 
+        // Population.py style: only truly matched incoming modes can be specular.
+        for (int ai : incoming) {
+            if (rd.spec_match_active[static_cast<size_t>(ai)] < 0) {
+                rd.specularity[static_cast<size_t>(ai)] = 0.0;
+            }
+        }
+
+        // Population.py style diffuse creation rate:
+        // creation_rate(out) = C_total(out) - sum(specular_D(in -> out)).
+        for (int ao : outgoing) {
+            rd.diffuse_creation_rate[static_cast<size_t>(ao)] = outgoing_creation[static_cast<size_t>(ao)];
+        }
+        for (int ai : incoming) {
+            const int ao = rd.spec_match_active[static_cast<size_t>(ai)];
+            if (ao < 0 || ao >= na) {
+                continue;
+            }
+            const double specular_d =
+                incoming_destruction[static_cast<size_t>(ai)] * rd.specularity[static_cast<size_t>(ai)];
+            rd.diffuse_creation_rate[static_cast<size_t>(ao)] -= specular_d;
+        }
+
+        double rate_sum = 0.0;
+        for (int ao : outgoing) {
+            double& r = rd.diffuse_creation_rate[static_cast<size_t>(ao)];
+            if (!std::isfinite(r) || r < 0.0) {
+                r = 0.0;
+            }
+            rate_sum += r;
+        }
+        if (rate_sum > 0.0) {
+            double cdf = 0.0;
+            for (int ao : outgoing) {
+                const double r = rd.diffuse_creation_rate[static_cast<size_t>(ao)];
+                if (r <= 0.0) {
+                    continue;
+                }
+                cdf += r;
+                rd.diffuse_roulette_active.push_back(ao);
+                rd.diffuse_roulette_cdf.push_back(cdf);
+                rd.diffuse_creation_prob[static_cast<size_t>(ao)] = r / rate_sum;
+            }
+        }
+
         const int rid = static_cast<int>(rough_boundary_data_.size());
         rough_boundary_data_.push_back(std::move(rd));
         facet_to_rough_data_[static_cast<size_t>(facet)] = rid;
     }
+}
+
+// 函数说明：导出粗糙面模态映射，便于核查镜面/漫反射模式选择是否按预计算执行。
+void MonteCarloSolver::write_rough_boundary_mode_map(const SimulationDomain& geometry, const PhononMaterial& phonon) const {
+    if (args_.output_folder.empty()) {
+        return;
+    }
+    namespace fs = std::filesystem;
+    fs::create_directories(args_.output_folder);
+    std::ofstream out(fs::path(args_.output_folder) / "rough_boundary_mode_map.csv", std::ios::trunc);
+    if (!out) {
+        return;
+    }
+
+    out << "rough_index,facet,in_active_idx,in_q,in_branch,p_spec,spec_match_active,spec_match_q,spec_match_branch,"
+           "diffuse_begin,diffuse_end,diffuse_candidate_count,outgoing_count,is_incoming,creation_rate,creation_prob,diffuse_roulette_size\n";
+
+    const int na = phonon.active_mode_count();
+    for (int rid = 0; rid < static_cast<int>(rough_boundary_data_.size()); ++rid) {
+        const auto& rd = rough_boundary_data_[static_cast<size_t>(rid)];
+        for (int ai = 0; ai < na; ++ai) {
+            const auto in_mode = phonon.active_mode_at(ai);
+            const double p_spec = (ai < static_cast<int>(rd.specularity.size())) ? rd.specularity[static_cast<size_t>(ai)] : 0.0;
+            const int spec_ai = (ai < static_cast<int>(rd.spec_match_active.size())) ? rd.spec_match_active[static_cast<size_t>(ai)] : -1;
+            const auto spec_mode = (spec_ai >= 0 && spec_ai < na) ? phonon.active_mode_at(spec_ai) : std::array<int, 2>{-1, -1};
+            const int ib = (ai < static_cast<int>(rd.diffuse_begin.size())) ? rd.diffuse_begin[static_cast<size_t>(ai)] : -1;
+            const int ie = (ai < static_cast<int>(rd.diffuse_end.size())) ? rd.diffuse_end[static_cast<size_t>(ai)] : -1;
+            const int n_candidate = (ib >= 0 && ie >= ib) ? (ie - ib) : 0;
+            const int is_incoming = (n_candidate > 0) ? 1 : 0;
+            const double creation_rate =
+                (ai < static_cast<int>(rd.diffuse_creation_rate.size())) ? rd.diffuse_creation_rate[static_cast<size_t>(ai)] : 0.0;
+            const double creation_prob =
+                (ai < static_cast<int>(rd.diffuse_creation_prob.size())) ? rd.diffuse_creation_prob[static_cast<size_t>(ai)] : 0.0;
+
+            out << rid << ","
+                << rd.facet << ","
+                << ai << ","
+                << in_mode[0] << ","
+                << in_mode[1] << ","
+                << std::setprecision(17) << p_spec << ","
+                << spec_ai << ","
+                << spec_mode[0] << ","
+                << spec_mode[1] << ","
+                << ib << ","
+                << ie << ","
+                << n_candidate << ","
+                << rd.outgoing_active.size() << ","
+                << is_incoming << ","
+                << creation_rate << ","
+                << creation_prob << ","
+                << rd.diffuse_roulette_active.size() << "\n";
+        }
+    }
+
+    std::cout << "Rough-boundary mode map written: "
+              << (fs::path(args_.output_folder) / "rough_boundary_mode_map.csv").string() << '\n';
+    (void) geometry;
 }
 
 // 函数说明：解析局部热源区域并生成网格掩码与功率参数。
@@ -454,33 +564,54 @@ void MonteCarloSolver::apply_local_heat_source() {
 }
 
 // 函数说明：在粗糙边界条件下采样漫反射后的活跃模态索引。
-int MonteCarloSolver::sample_diffuse_active_mode(int rough_idx, int in_ai) const {
+// source: 1=creation-roulette, 2=outgoing-pool fallback, 3=global-random fallback.
+int MonteCarloSolver::sample_diffuse_active_mode(int rough_idx, int in_ai, int* source) const {
     auto& rng = thread_rng();
     const int na = (phonon_ != nullptr) ? phonon_->active_mode_count() : 0;
+    (void) in_ai;
     if (na <= 0) {
+        if (source != nullptr) {
+            *source = 3;
+        }
         return 0;
     }
     if (rough_idx < 0 || rough_idx >= static_cast<int>(rough_boundary_data_.size())) {
         std::uniform_int_distribution<int> U(0, na - 1);
+        if (source != nullptr) {
+            *source = 3;
+        }
         return U(rng);
     }
     const auto& rd = rough_boundary_data_[static_cast<size_t>(rough_idx)];
-    if (in_ai >= 0 &&
-        in_ai < static_cast<int>(rd.diffuse_begin.size()) &&
-        in_ai < static_cast<int>(rd.diffuse_end.size()) &&
-        !rd.outgoing_sorted_active.empty()) {
-        const int ib = rd.diffuse_begin[static_cast<size_t>(in_ai)];
-        const int ie = rd.diffuse_end[static_cast<size_t>(in_ai)];
-        if (ie > ib && ib >= 0 && ie <= static_cast<int>(rd.outgoing_sorted_active.size())) {
-            std::uniform_int_distribution<int> U(ib, ie - 1);
-            return rd.outgoing_sorted_active[static_cast<size_t>(U(rng))];
+
+    if (!rd.diffuse_roulette_active.empty() &&
+        !rd.diffuse_roulette_cdf.empty() &&
+        rd.diffuse_roulette_active.size() == rd.diffuse_roulette_cdf.size() &&
+        rd.diffuse_roulette_cdf.back() > 0.0) {
+        std::uniform_real_distribution<double> U(0.0, rd.diffuse_roulette_cdf.back());
+        const double r = U(rng);
+        auto it = std::lower_bound(rd.diffuse_roulette_cdf.begin(), rd.diffuse_roulette_cdf.end(), r);
+        size_t pos = static_cast<size_t>(std::distance(rd.diffuse_roulette_cdf.begin(), it));
+        if (pos >= rd.diffuse_roulette_active.size()) {
+            pos = rd.diffuse_roulette_active.size() - 1;
         }
+        if (source != nullptr) {
+            *source = 1;
+        }
+        return rd.diffuse_roulette_active[pos];
     }
+
     if (!rd.outgoing_active.empty()) {
         std::uniform_int_distribution<int> U(0, static_cast<int>(rd.outgoing_active.size()) - 1);
+        if (source != nullptr) {
+            *source = 2;
+        }
         return rd.outgoing_active[static_cast<size_t>(U(rng))];
     }
     std::uniform_int_distribution<int> U(0, na - 1);
+    if (source != nullptr) {
+        *source = 3;
+    }
     return U(rng);
 }
 
@@ -494,7 +625,9 @@ std::array<int, 2> MonteCarloSolver::select_reflected_mode(
     double& out_occupation,
     double in_occupation) const {
     const int na = phonon.active_mode_count();
+    rough_events_total_.fetch_add(1, std::memory_order_relaxed);
     if (rough_idx < 0 || rough_idx >= static_cast<int>(rough_boundary_data_.size()) || na <= 0) {
+        rough_fallback_missing_rough_data_.fetch_add(1, std::memory_order_relaxed);
         out_occupation = in_occupation;
         return in_mode;
     }
@@ -512,12 +645,21 @@ std::array<int, 2> MonteCarloSolver::select_reflected_mode(
     if (in_ai >= 0 && U01(rng) <= p_spec) {
         const int out_ai = rd.spec_match_active[static_cast<size_t>(in_ai)];
         if (out_ai >= 0 && out_ai < na) {
+            rough_specular_selected_.fetch_add(1, std::memory_order_relaxed);
             out_occupation = in_occupation;
             return phonon.active_mode_at(out_ai);
         }
+        rough_fallback_missing_spec_match_.fetch_add(1, std::memory_order_relaxed);
     }
 
-    const int out_ai = sample_diffuse_active_mode(rough_idx, in_ai);
+    int source = 3;
+    const int out_ai = sample_diffuse_active_mode(rough_idx, in_ai, &source);
+    rough_diffuse_selected_.fetch_add(1, std::memory_order_relaxed);
+    if (source == 2) {
+        rough_fallback_outgoing_pool_.fetch_add(1, std::memory_order_relaxed);
+    } else if (source == 3) {
+        rough_fallback_global_random_.fetch_add(1, std::memory_order_relaxed);
+    }
     const std::array<int, 2> out_mode = phonon.active_mode_at(out_ai);
     const int nsv = std::max(1, geometry.grid_count());
     const int sv = std::clamp(nearest_grid_index(geometry, collision_pos), 0, nsv - 1);
@@ -588,7 +730,7 @@ void MonteCarloSolver::process_boundary_collision(const SimulationDomain& geomet
     const Vec3 n = geometry.mesh().facet_normals()[facet];
     const double vn = dot(particle_velocities_[i], n);
 
-    if (cond == 'T' || cond == 'F') {
+    if (cond == 'T') {
         if (i >= 0 && i < static_cast<int>(particle_alive_flags_.size())) {
             particle_alive_flags_[static_cast<size_t>(i)] = static_cast<std::uint8_t>(0);
         }
@@ -614,12 +756,17 @@ void MonteCarloSolver::process_boundary_collision(const SimulationDomain& geomet
             particle_occupation_[i] = out_occ;
             particle_energies_[i] = 0.0;
         } else {
+            rough_events_total_.fetch_add(1, std::memory_order_relaxed);
+            rough_fallback_missing_rough_data_.fetch_add(1, std::memory_order_relaxed);
             const double p_spec = compute_roughness_specularity(geometry, *phonon_, i, facet);
             std::uniform_real_distribution<double> U(0.0, 1.0);
             auto& rng = thread_rng();
             if (U(rng) <= p_spec) {
+                rough_specular_selected_.fetch_add(1, std::memory_order_relaxed);
                 particle_velocities_[i] = sub(particle_velocities_[i], mul(n, 2.0 * vn));
             } else {
+                rough_diffuse_selected_.fetch_add(1, std::memory_order_relaxed);
+                rough_fallback_global_random_.fetch_add(1, std::memory_order_relaxed);
                 particle_modes_[i] = phonon_->sample_active_mode(rng);
                 const double speed = std::max(1e-9, norm(phonon_->mode_group_velocity(particle_modes_[i])));
                 Vec3 dir = random_unit_vector();
@@ -729,6 +876,46 @@ void MonteCarloSolver::remove_absorbed_particles() {
     remap_vecc(cached_collision_conditions_);
     particle_alive_flags_.assign(alive_count, static_cast<std::uint8_t>(1));
     particle_count_ = static_cast<int>(alive_count);
+}
+
+// 函数说明：将数值误差导致越界的粒子重采样回几何体内部，并重建碰撞缓存。
+void MonteCarloSolver::recover_escaped_particles(const SimulationDomain& geometry) {
+    if (particle_count_ <= 0 || particle_positions_.empty()) {
+        return;
+    }
+    const auto& bmin = geometry.bounds_min();
+    const auto& bmax = geometry.bounds_max();
+    const Vec3 ext {bmax[0] - bmin[0], bmax[1] - bmin[1], bmax[2] - bmin[2]};
+    const double scale = std::max({1.0, std::abs(ext[0]), std::abs(ext[1]), std::abs(ext[2])});
+    const double tol = 1e-10 * scale;
+
+    std::vector<int> escaped_idx;
+    escaped_idx.reserve(64);
+    for (int i = 0; i < particle_count_; ++i) {
+        const Vec3& p = particle_positions_[static_cast<size_t>(i)];
+        const bool out =
+            (p[0] < bmin[0] - tol || p[0] > bmax[0] + tol) ||
+            (p[1] < bmin[1] - tol || p[1] > bmax[1] + tol) ||
+            (p[2] < bmin[2] - tol || p[2] > bmax[2] + tol);
+        if (out) {
+            escaped_idx.push_back(i);
+        }
+    }
+    if (escaped_idx.empty()) {
+        return;
+    }
+
+    const auto& mesh = geometry.mesh();
+    std::vector<Vec3> respawn = mesh.sample_volume_points(static_cast<int>(escaped_idx.size()));
+    for (size_t k = 0; k < escaped_idx.size(); ++k) {
+        const int idx = escaped_idx[k];
+        particle_positions_[static_cast<size_t>(idx)] = respawn[k];
+        particle_grid_id_[static_cast<size_t>(idx)] = nearest_grid_index(geometry, respawn[k]);
+    }
+    update_collision_cache(geometry, escaped_idx);
+
+    escaped_recovery_events_ += 1;
+    escaped_recovered_particles_ += static_cast<long long>(escaped_idx.size());
 }
 
 // 函数说明：从热库边界按统计规则注入新粒子并返回注入时刻偏移。
@@ -1161,6 +1348,30 @@ void MonteCarloSolver::append_profile_summary(std::ostream& out) const {
 #endif
     out << "openmp_thread_count = " << openmp_thread_count_ << '\n';
     out << "profile_timers_enabled = " << (profile_timers_enabled_ ? "true" : "false") << '\n';
+    const long long rough_total = rough_events_total_.load(std::memory_order_relaxed);
+    const long long rough_spec = rough_specular_selected_.load(std::memory_order_relaxed);
+    const long long rough_diff = rough_diffuse_selected_.load(std::memory_order_relaxed);
+    const long long rough_fb_no_data = rough_fallback_missing_rough_data_.load(std::memory_order_relaxed);
+    const long long rough_fb_no_spec = rough_fallback_missing_spec_match_.load(std::memory_order_relaxed);
+    const long long rough_fb_pool = rough_fallback_outgoing_pool_.load(std::memory_order_relaxed);
+    const long long rough_fb_rand = rough_fallback_global_random_.load(std::memory_order_relaxed);
+    const double rough_den = std::max(1.0, static_cast<double>(rough_total));
+    out << "\n[rough_boundary_diagnostics]\n";
+    out << "events_total = " << rough_total << '\n';
+    out << "specular_selected = " << rough_spec << '\n';
+    out << "diffuse_selected = " << rough_diff << '\n';
+    out << "specular_ratio = " << (static_cast<double>(rough_spec) / rough_den) << '\n';
+    out << "diffuse_ratio = " << (static_cast<double>(rough_diff) / rough_den) << '\n';
+    out << "fallback_missing_rough_data = " << rough_fb_no_data << '\n';
+    out << "fallback_missing_spec_match = " << rough_fb_no_spec << '\n';
+    out << "fallback_outgoing_pool = " << rough_fb_pool << '\n';
+    out << "fallback_global_random = " << rough_fb_rand << '\n';
+    out << "fallback_total = " << (rough_fb_no_data + rough_fb_no_spec + rough_fb_pool + rough_fb_rand) << '\n';
+    out << "mode_map_csv = " << (std::filesystem::path(args_.output_folder) / "rough_boundary_mode_map.csv").string() << '\n';
+    out << "\n[escaped_particle_recovery]\n";
+    out << "check_interval = " << escaped_recovery_check_interval_ << '\n';
+    out << "recovery_events = " << escaped_recovery_events_ << '\n';
+    out << "recovered_particles_total = " << escaped_recovered_particles_ << '\n';
     if (!profile_timers_enabled_) {
         return;
     }
@@ -1270,6 +1481,11 @@ void MonteCarloSolver::run_timestep() {
             timer_advance_injected_ += std::chrono::duration<double>(t_adv_inj_end - t_adv_inj_begin).count();
             timer_remove_absorb_2_ += std::chrono::duration<double>(t_remove2_end - t_remove2_begin).count();
         }
+    }
+
+    if (escaped_recovery_check_interval_ > 0 &&
+        (current_timestep_ % escaped_recovery_check_interval_) == 0) {
+        recover_escaped_particles(geometry);
     }
 
     const auto t_temp_begin = Clock::now();

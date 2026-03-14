@@ -2,6 +2,7 @@
 
 #include "SimulationConfig.h"
 
+#include <atomic>
 #include <array>
 #include <cstdint>
 #include <ostream>
@@ -34,7 +35,7 @@ private:
     void initialize_local_heat_source(const SimulationDomain& geometry);
     void apply_local_heat_source();
     std::mt19937_64& thread_rng() const;
-    int sample_diffuse_active_mode(int rough_idx, int in_ai) const;
+    int sample_diffuse_active_mode(int rough_idx, int in_ai, int* source = nullptr) const;
     std::array<int, 2> select_reflected_mode(
         const SimulationDomain& geometry,
         const PhononMaterial& phonon,
@@ -48,6 +49,7 @@ private:
     int nearest_grid_index(const SimulationDomain& geometry, const Vec3& p) const;
     void process_boundary_collision(const SimulationDomain& geometry, int i);
     void remove_absorbed_particles();
+    void recover_escaped_particles(const SimulationDomain& geometry);
     std::vector<std::pair<int, double>> inject_particles_from_reservoirs(const SimulationDomain& geometry, const PhononMaterial& phonon);
     void advance_particle(const SimulationDomain& geometry, const PhononMaterial& phonon, int i, double dt_remaining);
     void update_particle_temperatures(const SimulationDomain& geometry, const PhononMaterial& phonon);
@@ -58,6 +60,7 @@ private:
     double compute_roughness_specularity(const SimulationDomain& geometry, const PhononMaterial& phonon, int i, int facet) const;
     void write_convergence_header();
     void append_convergence_row() const;
+    void write_rough_boundary_mode_map(const SimulationDomain& geometry, const PhononMaterial& phonon) const;
     void ensure_tls_buffers(int thread_count, int nsv);
 
     static Vec3 add(const Vec3& a, const Vec3& b);
@@ -118,11 +121,15 @@ private:
         int facet = -1;
         std::vector<double> specularity;
         std::vector<int> spec_match_active;
+        std::vector<double> diffuse_creation_rate;
+        std::vector<double> diffuse_creation_prob;
         std::vector<int> outgoing_active;
         std::vector<int> outgoing_sorted_active;
         std::vector<double> outgoing_sorted_omega;
         std::vector<int> diffuse_begin;
         std::vector<int> diffuse_end;
+        std::vector<int> diffuse_roulette_active;
+        std::vector<double> diffuse_roulette_cdf;
     };
     std::vector<int> facet_to_rough_data_;
     std::vector<RoughFacetData> rough_boundary_data_;
@@ -152,4 +159,18 @@ private:
     double timer_update_temp_ = 0.0;
     double timer_lifetime_ = 0.0;
     double timer_stats_ = 0.0;
+
+    // Rough-boundary selection diagnostics (thread-safe counters).
+    mutable std::atomic<long long> rough_events_total_ {0};
+    mutable std::atomic<long long> rough_specular_selected_ {0};
+    mutable std::atomic<long long> rough_diffuse_selected_ {0};
+    mutable std::atomic<long long> rough_fallback_missing_rough_data_ {0};
+    mutable std::atomic<long long> rough_fallback_missing_spec_match_ {0};
+    mutable std::atomic<long long> rough_fallback_outgoing_pool_ {0};
+    mutable std::atomic<long long> rough_fallback_global_random_ {0};
+
+    // Escaped-particle recovery diagnostics.
+    long long escaped_recovery_events_ = 0;
+    long long escaped_recovered_particles_ = 0;
+    int escaped_recovery_check_interval_ = 100;
 };

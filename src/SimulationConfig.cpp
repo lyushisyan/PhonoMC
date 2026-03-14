@@ -228,44 +228,19 @@ std::vector<std::string> parse_string_array(const std::string& value) {
     return out;
 }
 
-// 函数说明：解析三维点数组参数（边界点、周期配对点）。
-std::vector<std::array<double, 3>> parse_point_array(const std::string& value) {
-    std::vector<std::array<double, 3>> points;
-    for (const auto& row : parse_array_elements(value)) {
-        const auto coords = parse_number_array(row);
-        if (coords.size() != 3) {
-            throw std::runtime_error("Point array must contain triplets [x,y,z].");
-        }
-        points.push_back({coords[0], coords[1], coords[2]});
-    }
-    return points;
-}
-
-struct BoundaryPositionSpec {
-    bool use_boxes = false;
-    std::vector<std::array<double, 3>> points;
+// 函数说明：解析区域数组参数（边界选择器/周期配对），每行必须为六元组。
+std::vector<std::array<double, 6>> parse_region_array(const std::string& value, const std::string& field_name) {
     std::vector<std::array<double, 6>> boxes;
-};
-
-// 函数说明：解析 boundary_position，支持点选择 [x,y,z] 与区域选择 [xmin,ymin,zmin,xmax,ymax,zmax]。
-BoundaryPositionSpec parse_boundary_position_array(const std::string& value) {
-    BoundaryPositionSpec out;
     for (const auto& row : parse_array_elements(value)) {
         const auto coords = parse_number_array(row);
-        if (coords.size() == 3) {
-            out.points.push_back({coords[0], coords[1], coords[2]});
-        } else if (coords.size() == 6) {
-            out.boxes.push_back({coords[0], coords[1], coords[2], coords[3], coords[4], coords[5]});
-        } else {
+        if (coords.size() != 6) {
             throw std::runtime_error(
-                "boundary_position row must be [x,y,z] or [xmin,ymin,zmin,xmax,ymax,zmax].");
+                field_name +
+                " row must be [xmin,ymin,zmin,xmax,ymax,zmax]. Point selectors [x,y,z] are no longer supported.");
         }
+        boxes.push_back({coords[0], coords[1], coords[2], coords[3], coords[4], coords[5]});
     }
-    if (!out.points.empty() && !out.boxes.empty()) {
-        throw std::runtime_error("boundary_position cannot mix point rows and region rows.");
-    }
-    out.use_boxes = !out.boxes.empty();
-    return out;
+    return boxes;
 }
 
 // 函数说明：将数值格式化为紧凑字符串，便于输出文件可读性。
@@ -377,19 +352,6 @@ std::optional<std::string> get_first_value(
     return std::nullopt;
 }
 
-// 函数说明：将点集合扁平化为旧接口需要的顺序 token。
-std::vector<std::string> flatten_points(const std::string& mode, const std::vector<std::array<double, 3>>& pts) {
-    std::vector<std::string> out;
-    out.reserve(1 + pts.size() * 3);
-    out.push_back(mode);
-    for (const auto& p : pts) {
-        out.push_back(format_number(p[0]));
-        out.push_back(format_number(p[1]));
-        out.push_back(format_number(p[2]));
-    }
-    return out;
-}
-
 // 函数说明：将区域集合扁平化为 token，供边界赋值阶段按区域匹配 facet。
 std::vector<std::string> flatten_boxes(const std::string& mode, const std::vector<std::array<double, 6>>& boxes) {
     std::vector<std::string> out;
@@ -474,17 +436,12 @@ SimulationConfig parse_toml_file(const std::string& path) {
 
     if (auto pts = get_first_value(kv, {
             "boundary.boundary_position", "boundary_position"}); pts.has_value()) {
-        const auto spec = parse_boundary_position_array(*pts);
-        if (spec.use_boxes) {
-            args.boundary_position = flatten_boxes("relative_box", spec.boxes);
-        } else {
-            args.boundary_position = flatten_points("relative", spec.points);
-        }
+        args.boundary_position = flatten_boxes("relative_box", parse_region_array(*pts, "boundary_position"));
     }
 
     if (auto pts = get_first_value(kv, {
             "boundary.periodic_pair", "periodic_pair"}); pts.has_value()) {
-        args.periodic_pair = flatten_points("relative", parse_point_array(*pts));
+        args.periodic_pair = flatten_boxes("relative_box", parse_region_array(*pts, "periodic_pair"));
     }
 
     if (auto v = get_first_value(kv, {"io.material_folder", "material_folder"}); v.has_value()) {
