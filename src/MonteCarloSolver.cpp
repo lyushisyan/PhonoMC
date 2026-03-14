@@ -69,6 +69,8 @@ std::mt19937_64& MonteCarloSolver::thread_rng() const {
 // 函数说明：构造蒙特卡洛求解器并完成粒子、边界、热流统计与输出初始化。
 MonteCarloSolver::MonteCarloSolver(const SimulationConfig& args, const SimulationDomain& geometry, const PhononMaterial& phonon)
     : args_(args), geometry_(&geometry), phonon_(&phonon) {
+    using Clock = std::chrono::steady_clock;
+    const auto t_init_begin = Clock::now();
     rng_seed_base_ = rng_();
     particle_count_ = std::max(1, static_cast<int>(std::llround(args_.particle_count)));
     time_step_ = std::max(1e-12, args_.time_step);
@@ -102,11 +104,29 @@ MonteCarloSolver::MonteCarloSolver(const SimulationConfig& args, const Simulatio
     write_convergence_header();
     update_heat_flux_and_conductivity(geometry);
     append_convergence_row();
+    const auto t_init_end = Clock::now();
+    const double init_sec = std::chrono::duration<double>(t_init_end - t_init_begin).count();
+    std::cout << "[init] Initialization complete in " << std::fixed << std::setprecision(2)
+              << init_sec << " s\n";
 }
 
 // 函数说明：初始化粒子主状态与碰撞缓存，建立时间推进的初始条件。
 void MonteCarloSolver::initialize_particles(const SimulationDomain& geometry, const PhononMaterial& phonon) {
+    using Clock = std::chrono::steady_clock;
+    auto step_begin = Clock::now();
+    auto begin_step = [&](int idx, int total, const std::string& name) {
+        step_begin = Clock::now();
+        std::cout << "[init] " << idx << "/" << total << " " << name << "...\n";
+    };
+    auto end_step = [&]() {
+        const auto step_end = Clock::now();
+        const double sec = std::chrono::duration<double>(step_end - step_begin).count();
+        std::cout << "        done (" << std::fixed << std::setprecision(2) << sec << " s)\n";
+    };
+    constexpr int total_steps = 8;
+
     const auto& mesh = geometry.mesh();
+    begin_step(1, total_steps, "Sampling particle positions and assigning initial grid IDs");
     particle_positions_ = mesh.sample_volume_points(particle_count_);
     particle_grid_id_.assign(static_cast<size_t>(particle_count_), 0);
 #ifdef _OPENMP
@@ -115,13 +135,24 @@ void MonteCarloSolver::initialize_particles(const SimulationDomain& geometry, co
     for (int i = 0; i < particle_count_; ++i) {
         particle_grid_id_[i] = nearest_grid_index(geometry, particle_positions_[i]);
     }
+    end_step();
 
+    begin_step(2, total_steps, "Assigning phonon modes");
     initialize_particle_modes(phonon);
+    end_step();
+    begin_step(3, total_steps, "Initializing particle temperatures");
     initialize_particle_temperatures(geometry);
+    end_step();
+    begin_step(4, total_steps, "Initializing particle velocities");
     initialize_particle_velocities(phonon);
+    end_step();
+    begin_step(5, total_steps, "Building reservoir injection tables");
     initialize_reservoir_injection(geometry, phonon);
+    end_step();
+    begin_step(6, total_steps, "Precomputing rough-boundary scattering tables");
     initialize_rough_boundary_scattering(geometry, phonon);
-    write_rough_boundary_mode_map(geometry, phonon);
+    end_step();
+    begin_step(7, total_steps, "Initializing particle state arrays and collision cache");
     particle_omega_.resize(static_cast<size_t>(particle_count_));
     particle_occupation_.resize(static_cast<size_t>(particle_count_));
     particle_energies_.resize(static_cast<size_t>(particle_count_));
@@ -147,7 +178,10 @@ void MonteCarloSolver::initialize_particles(const SimulationDomain& geometry, co
     std::vector<int> all_idx(static_cast<size_t>(particle_count_));
     std::iota(all_idx.begin(), all_idx.end(), 0);
     update_collision_cache(geometry, all_idx);
+    end_step();
+    begin_step(8, total_steps, "Computing initial temperature field from particle energy");
     update_particle_temperatures(geometry, phonon);
+    end_step();
 }
 
 // 函数说明：按材料活跃模态集合为每个粒子分配初始声子模态。
@@ -279,9 +313,27 @@ void MonteCarloSolver::initialize_rough_boundary_scattering(const SimulationDoma
         domega_active[static_cast<size_t>(ai)] = phonon.mode_frequency_window(active[static_cast<size_t>(ai)]);
     }
 
+    int rough_total = 0;
+    for (int facet = 0; facet < nfacets; ++facet) {
+        if (geometry.is_rough_facet(facet)) {
+            ++rough_total;
+        }
+    }
+    if (rough_total <= 0) {
+        std::cout << "[init] Rough-boundary preprocessing skipped (0 rough facets).\n";
+        return;
+    }
+    int rough_done = 0;
+    const int report_stride = std::max(1, rough_total / 10);
+
     for (int facet = 0; facet < nfacets; ++facet) {
         if (!geometry.is_rough_facet(facet)) {
             continue;
+        }
+        ++rough_done;
+        if (rough_done == 1 || rough_done == rough_total || (rough_done % report_stride) == 0) {
+            std::cout << "[init]   rough facet " << rough_done << "/" << rough_total
+                      << " (mesh facet id=" << facet << ")\n";
         }
         RoughFacetData rd;
         rd.facet = facet;
@@ -1367,7 +1419,7 @@ void MonteCarloSolver::append_profile_summary(std::ostream& out) const {
     out << "fallback_outgoing_pool = " << rough_fb_pool << '\n';
     out << "fallback_global_random = " << rough_fb_rand << '\n';
     out << "fallback_total = " << (rough_fb_no_data + rough_fb_no_spec + rough_fb_pool + rough_fb_rand) << '\n';
-    out << "mode_map_csv = " << (std::filesystem::path(args_.output_folder) / "rough_boundary_mode_map.csv").string() << '\n';
+    out << "mode_map_csv = disabled\n";
     out << "\n[escaped_particle_recovery]\n";
     out << "check_interval = " << escaped_recovery_check_interval_ << '\n';
     out << "recovery_events = " << escaped_recovery_events_ << '\n';

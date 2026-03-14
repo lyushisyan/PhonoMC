@@ -402,6 +402,12 @@ SimulationConfig parse_toml_file(const std::string& path) {
             "profile_timers"}); v.has_value()) {
         args.profile_timers = parse_bool_scalar(*v);
     }
+    if (auto v = get_first_value(kv, {
+            "simulation.temperature_lookup_dt",
+            "material.temperature_lookup_dt",
+            "temperature_lookup_dt"}); v.has_value()) {
+        args.temperature_lookup_dt = parse_double_scalar(*v);
+    }
 
     if (auto v = get_first_value(kv, {"simulation.initial_temperature", "initial_temperature"}); v.has_value()) {
         const std::string t = trim(*v);
@@ -518,6 +524,9 @@ SimulationConfig parse_legacy_file(const std::string& path) {
     if (auto it = kv.find("--profile_timers"); it != kv.end() && !it->second.empty()) {
         args.profile_timers = parse_bool_scalar(it->second.front());
     }
+    if (auto it = kv.find("--temperature_lookup_dt"); it != kv.end() && !it->second.empty()) {
+        args.temperature_lookup_dt = std::stod(it->second.front());
+    }
     if (auto it = kv.find("--grid_xyz"); it != kv.end() && it->second.size() >= 3) {
         args.grid_layout = {"grid", it->second[0], it->second[1], it->second[2]};
     } else {
@@ -581,10 +590,16 @@ SimulationConfig parse_legacy_file(const std::string& path) {
 
 // 函数说明：根据文件类型选择 TOML 或旧格式解析路径。
 SimulationConfig load_simulation_config(const std::string& path) {
+    SimulationConfig args;
     if (looks_like_toml(path)) {
-        return parse_toml_file(path);
+        args = parse_toml_file(path);
+    } else {
+        args = parse_legacy_file(path);
     }
-    return parse_legacy_file(path);
+    if (!(args.temperature_lookup_dt > 0.0) || !std::isfinite(args.temperature_lookup_dt)) {
+        throw std::runtime_error("temperature_lookup_dt must be a finite positive value.");
+    }
+    return args;
 }
 
 // 函数说明：按序号创建结果目录，避免覆盖历史仿真输出。

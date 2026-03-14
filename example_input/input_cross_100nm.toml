@@ -27,4 +27,4 @@ periodic_pair = [
 
 [io]
 material_folder = "material/Si/"
-output_folder = "results/Cross_100nm_300K/"
+output_folder = "results/Cross_100nm/"

@@ -12,6 +12,7 @@ struct SimulationConfig {
     int iterations = 10000;
     bool compute_kappa = false;
     bool profile_timers = false;
+    double temperature_lookup_dt = 0.1;  // K, lookup-table step for T->E precompute
 
     std::vector<std::string> grid_layout;
     std::vector<std::string> initial_temperature {"cold"};

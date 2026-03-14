@@ -818,6 +818,7 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
     out << "particle_count = " << args.particle_count << '\n';
     out << "time_step = " << args.time_step << '\n';
     out << "iterations = " << args.iterations << '\n';
+    out << "temperature_lookup_dt = " << args.temperature_lookup_dt << '\n';
     out << "compute_kappa = " << (args.compute_kappa ? "true" : "false") << '\n';
     out << "profile_timers = " << (args.profile_timers ? "true" : "false") << '\n';
     out << "initial_temperature = " << join_strings(args.initial_temperature) << '\n';

@@ -53,6 +53,7 @@ private:
     double kb_ = 8.617333262145e-5;  // eV/K
     double unit_cell_volume_ = 1.0;   // A^3
     double zero_point_energy_density_ = 0.0;        // eV/A^3
+    double temperature_lookup_dt_ = 0.1;            // K
     std::array<std::array<double, 3>, 3> reciprocal_lattice_ {{
         std::array<double, 3>{1.0, 0.0, 0.0},
         std::array<double, 3>{0.0, 1.0, 0.0},

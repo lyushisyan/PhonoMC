@@ -30,10 +30,8 @@ Sequence-MC (NTMC) is a C++ phonon Monte Carlo simulator for semiconductor heat 
 ### Build
 
 ```bash
-mkdir -p build
-cd build
-cmake ..
-cmake --build . -j
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNTMC_ENABLE_OPENMP=ON
+cmake --build build -j
 ```
 
 Executable: `build/ntmc`
@@ -100,10 +98,8 @@ Sequence-MC（NTMC）是一个基于 C++ 的声子蒙特卡洛仿真程序，用
 ### 编译
 
 ```bash
-mkdir -p build
-cd build
-cmake ..
-cmake --build . -j
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNTMC_ENABLE_OPENMP=ON
+cmake --build build -j
 ```
 
 可执行文件：`build/ntmc`
@@ -170,10 +166,8 @@ Sequence-MC (NTMC) — C++ симулятор фононного Монте-Ка
 ### Сборка
 
 ```bash
-mkdir -p build
-cd build
-cmake ..
-cmake --build . -j
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNTMC_ENABLE_OPENMP=ON
+cmake --build build -j
 ```
 
 Исполняемый файл: `build/ntmc`

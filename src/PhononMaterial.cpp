@@ -12,6 +12,7 @@
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 
 namespace {
 using Mat3 = std::array<std::array<double, 3>, 3>;
@@ -93,6 +94,9 @@ double vec_norm(const Vec3& v) {
 
 // 函数说明：加载材料声子数据并建立温度-能量查找表。
 PhononMaterial::PhononMaterial(const SimulationConfig& args, int mat_index) {
+    if (std::isfinite(args.temperature_lookup_dt) && args.temperature_lookup_dt > 0.0) {
+        temperature_lookup_dt_ = args.temperature_lookup_dt;
+    }
     std::string err;
     if (!load_hdf5_data(args, mat_index, &err)) {
         const char* allow_fallback = std::getenv("NTMC_ALLOW_SYNTHETIC_MATERIAL");
@@ -641,15 +645,51 @@ void PhononMaterial::initialize_temperature_lookup() {
 
     const double tmin = temperature_samples_.empty() ? 0.0 : *std::min_element(temperature_samples_.begin(), temperature_samples_.end());
     const double tmax = temperature_samples_.empty() ? 1000.0 : *std::max_element(temperature_samples_.begin(), temperature_samples_.end());
-    const double dT = 0.1;
+    const double dT = std::max(1e-6, temperature_lookup_dt_);
     const int n = std::max(2, static_cast<int>(std::floor((tmax - tmin) / dT + 0.5)) + 1);
 
     temperature_lookup_table_.assign(static_cast<size_t>(n), 0.0);
     energy_lookup_table_.assign(static_cast<size_t>(n), 0.0);
+    std::vector<double> raw_energy(static_cast<size_t>(n), 0.0);
+
+#ifdef NTMC_USE_OPENMP
+#pragma omp parallel for schedule(static)
+    for (int i = 0; i < n; ++i) {
+        const double T = tmin + static_cast<double>(i) * dT;
+        raw_energy[static_cast<size_t>(i)] = crystal_energy_density(T);
+    }
+#else
+    const unsigned int workers = std::max(1U, std::thread::hardware_concurrency());
+    if (workers <= 1 || n < 256) {
+        for (int i = 0; i < n; ++i) {
+            const double T = tmin + static_cast<double>(i) * dT;
+            raw_energy[static_cast<size_t>(i)] = crystal_energy_density(T);
+        }
+    } else {
+        std::vector<std::thread> pool;
+        pool.reserve(workers);
+        for (unsigned int w = 0; w < workers; ++w) {
+            const int begin = static_cast<int>((static_cast<long long>(w) * n) / workers);
+            const int end = static_cast<int>((static_cast<long long>(w + 1U) * n) / workers);
+            pool.emplace_back([&, begin, end]() {
+                for (int i = begin; i < end; ++i) {
+                    const double T = tmin + static_cast<double>(i) * dT;
+                    raw_energy[static_cast<size_t>(i)] = crystal_energy_density(T);
+                }
+            });
+        }
+        for (auto& th : pool) {
+            if (th.joinable()) {
+                th.join();
+            }
+        }
+    }
+#endif
+
     for (int i = 0; i < n; ++i) {
         const double T = tmin + static_cast<double>(i) * dT;
         temperature_lookup_table_[static_cast<size_t>(i)] = T;
-        double E = crystal_energy_density(T);
+        double E = raw_energy[static_cast<size_t>(i)];
         if (i > 0) {
             E = std::max(E, std::nextafter(energy_lookup_table_[static_cast<size_t>(i - 1)], std::numeric_limits<double>::infinity()));
         }
