@@ -630,6 +630,14 @@ double PhononMaterial::crystal_energy_density(double temperature) const {
     return normalize_to_energy_density(e) + zero_point_energy_density_;
 }
 
+// 函数说明：由温度正向查表得到能量密度（插值），缺表时回退全模态积分。
+double PhononMaterial::energy_density_from_temperature(double temperature) const {
+    if (temperature_lookup_table_.empty() || energy_lookup_table_.empty()) {
+        return crystal_energy_density(temperature);
+    }
+    return interp_linear_clamped(temperature_lookup_table_, energy_lookup_table_, temperature);
+}
+
 // 函数说明：由能量密度反查温度（查找表插值）。
 double PhononMaterial::temperature_from_energy_density(double energy_density) const {
     return interp_linear_clamped(energy_lookup_table_, temperature_lookup_table_, energy_density);

@@ -723,6 +723,12 @@ std::array<int, 2> MonteCarloSolver::select_reflected_mode(
 
 // 函数说明：将粒子位置映射到最近控制体网格索引。
 int MonteCarloSolver::nearest_grid_index(const SimulationDomain& geometry, const Vec3& p) const {
+    if (geometry.fast_grid_index_enabled()) {
+        const int idx = geometry.fast_grid_index(p);
+        if (idx >= 0) {
+            return idx;
+        }
+    }
     const auto& centers = geometry.grid_centers();
     if (centers.empty()) {
         return 0;
@@ -1096,7 +1102,7 @@ void MonteCarloSolver::update_grid_energy_density(const SimulationDomain& geomet
         }
         double e = grid_energy_density_[static_cast<size_t>(sv)] * norm_fac;
         e = phonon.normalize_to_energy_density(e);
-        e += phonon.crystal_energy_density(grid_temperatures_[static_cast<size_t>(sv)]);
+        e += phonon.energy_density_from_temperature(grid_temperatures_[static_cast<size_t>(sv)]);
         grid_energy_density_[static_cast<size_t>(sv)] = e;
     }
 }

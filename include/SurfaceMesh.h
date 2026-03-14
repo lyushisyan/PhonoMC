@@ -89,6 +89,7 @@ private:
     void compute_bounding_box();
     void compute_edge_list();
     void compute_face_metrics();
+    void build_face_bvh();
     void compute_face_neighbors();
     void compute_facet_groups();
     void compute_facet_neighbors();
@@ -113,6 +114,17 @@ private:
     std::vector<double> face_areas_;
     std::vector<double> face_k_;
     std::vector<std::array<Vec3, 2>> face_bounds_;
+    struct FaceBvhNode {
+        Vec3 bounds_min {};
+        Vec3 bounds_max {};
+        int left = -1;
+        int right = -1;
+        int begin = 0;
+        int end = 0;
+    };
+    std::vector<int> face_bvh_indices_;
+    std::vector<FaceBvhNode> face_bvh_nodes_;
+    int face_bvh_root_ = -1;
     std::vector<int> face_to_facet_;
     std::vector<std::array<int, 3>> face_edges_;
     std::vector<std::vector<int>> edges_faces_;

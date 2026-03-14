@@ -30,6 +30,7 @@ public:
     double mode_energy(double temperature, const Mode& mode) const;
     double mode_lifetime(double temperature, const Mode& mode) const;
     double crystal_energy_density(double temperature) const;
+    double energy_density_from_temperature(double temperature) const;
     double temperature_from_energy_density(double energy_density) const;
     double normalize_to_energy_density(double x) const;
     Vec3 normalize_to_energy_density(const Vec3& x) const;

@@ -22,6 +22,8 @@ public:
     const std::vector<char>& boundary_conditions() const { return facet_boundary_conditions_; }
     const std::vector<int>& reservoir_facets() const { return reservoir_facets_; }
     const std::vector<double>& reservoir_values() const { return reservoir_values_; }
+    bool fast_grid_index_enabled() const { return fast_grid_index_enabled_; }
+    int fast_grid_index(const std::array<double, 3>& p) const;
     char facet_boundary_condition(int facet) const;
     double reservoir_value_for_facet(int facet, double fallback = 300.0) const;
     bool has_periodic_pair(int facet) const;
@@ -60,4 +62,8 @@ private:
     std::vector<std::array<int, 2>> grid_connections_;
     std::vector<int> periodic_pair_;
     std::vector<std::array<double, 3>> periodic_shift_;
+
+    bool fast_grid_index_enabled_ = false;
+    std::array<int, 3> fast_grid_shape_ {1, 1, 1};
+    std::array<double, 3> fast_grid_inv_cell_ {0.0, 0.0, 0.0};
 };

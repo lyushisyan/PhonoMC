@@ -344,6 +344,38 @@ SimulationDomain::SimulationDomain(const SimulationConfig& args) {
               << ", grids=" << grid_count_ << '\n';
 }
 
+int SimulationDomain::fast_grid_index(const std::array<double, 3>& p) const {
+    if (!fast_grid_index_enabled_) {
+        return -1;
+    }
+    const Vec3 ext = sub(bounds_max_, bounds_min_);
+    const int nx = fast_grid_shape_[0];
+    const int ny = fast_grid_shape_[1];
+    const int nz = fast_grid_shape_[2];
+    if (nx <= 0 || ny <= 0 || nz <= 0) {
+        return -1;
+    }
+
+    auto axis_index = [&](int axis, int n) -> int {
+        if (n <= 1 || ext[axis] <= 0.0) {
+            return 0;
+        }
+        const double rel = (p[axis] - bounds_min_[axis]) * fast_grid_inv_cell_[axis];
+        int idx = static_cast<int>(std::floor(rel));
+        if (idx < 0) {
+            idx = 0;
+        } else if (idx >= n) {
+            idx = n - 1;
+        }
+        return idx;
+    };
+
+    const int ix = axis_index(0, nx);
+    const int iy = axis_index(1, ny);
+    const int iz = axis_index(2, nz);
+    return (ix * ny + iy) * nz + iz;
+}
+
 // 函数说明：根据 box/cylinder/文件模型构建并单位化表面网格。
 void SimulationDomain::build_surface_mesh(const SimulationConfig& args) {
     std::vector<Vec3> vertices;
@@ -685,6 +717,13 @@ void SimulationDomain::initialize_grid_cells(const SimulationConfig& args) {
         throw std::runtime_error("Grid sizes must be positive.");
     }
     const Vec3 ext = sub(bounds_max_, bounds_min_);
+    fast_grid_index_enabled_ = false;
+    fast_grid_shape_ = {nx, ny, nz};
+    fast_grid_inv_cell_ = {
+        (ext[0] > 0.0) ? (static_cast<double>(nx) / ext[0]) : 0.0,
+        (ext[1] > 0.0) ? (static_cast<double>(ny) / ext[1]) : 0.0,
+        (ext[2] > 0.0) ? (static_cast<double>(nz) / ext[2]) : 0.0
+    };
     grid_centers_.clear();
     grid_centers_.reserve(static_cast<size_t>(nx * ny * nz));
     const bool is_box = (args.model == "box");
@@ -705,6 +744,9 @@ void SimulationDomain::initialize_grid_cells(const SimulationConfig& args) {
     grid_count_ = static_cast<int>(grid_centers_.size());
     if (grid_count_ == 0) {
         throw std::runtime_error("No valid grid centers found inside mesh.");
+    }
+    if (is_box && grid_count_ == nx * ny * nz) {
+        fast_grid_index_enabled_ = true;
     }
     grid_volumes_.assign(static_cast<size_t>(grid_count_), volume_ / static_cast<double>(grid_count_));
 }

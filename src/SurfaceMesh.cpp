@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <map>
 #include <numeric>
@@ -170,6 +171,45 @@ bool ray_intersects_triangle(const Vec3& orig, const Vec3& dir, const Vec3& a, c
     t = dot(e2, qvec) * inv_det;
     return t > eps;
 }
+
+// 函数说明：执行射线与轴对齐包围盒相交测试，并返回近端参数。
+bool ray_intersects_aabb(
+    const Vec3& orig,
+    const Vec3& dir,
+    const Vec3& bmin,
+    const Vec3& bmax,
+    double t_max_limit,
+    double& t_near_out) {
+    constexpr double eps = 1e-14;
+    double t_near = 0.0;
+    double t_far = t_max_limit;
+    for (int k = 0; k < 3; ++k) {
+        const double o = orig[k];
+        const double d = dir[k];
+        if (std::abs(d) <= eps) {
+            if (o < bmin[k] - 1e-12 || o > bmax[k] + 1e-12) {
+                return false;
+            }
+            continue;
+        }
+        const double inv_d = 1.0 / d;
+        double t0 = (bmin[k] - o) * inv_d;
+        double t1 = (bmax[k] - o) * inv_d;
+        if (t0 > t1) {
+            std::swap(t0, t1);
+        }
+        t_near = std::max(t_near, t0);
+        t_far = std::min(t_far, t1);
+        if (t_far < t_near) {
+            return false;
+        }
+    }
+    if (t_far <= 1e-10) {
+        return false;
+    }
+    t_near_out = std::max(0.0, t_near);
+    return t_near_out <= t_max_limit;
+}
 }  // namespace
 
 // 函数说明：创建表面网格对象并触发几何缓存构建。
@@ -203,6 +243,7 @@ void SurfaceMesh::rebuild_cached_properties() {
     compute_bounding_box();
     compute_edge_list();
     compute_face_metrics();
+    build_face_bvh();
     compute_face_neighbors();
     compute_facet_groups();
     compute_facet_neighbors();
@@ -282,6 +323,81 @@ void SurfaceMesh::compute_face_metrics() {
         face_k_[i] = -dot(face_normals_[i], a);
         face_bounds_[i] = {min_vec(min_vec(a, b), c), max_vec(max_vec(a, b), c)};
     }
+}
+
+// 函数说明：构建面片 BVH，用于加速射线-边界相交查询。
+void SurfaceMesh::build_face_bvh() {
+    face_bvh_indices_.clear();
+    face_bvh_nodes_.clear();
+    face_bvh_root_ = -1;
+    if (faces_.empty()) {
+        return;
+    }
+    // Tiny meshes are faster with direct face scan than BVH traversal overhead.
+    if (faces_.size() <= 64) {
+        return;
+    }
+    face_bvh_indices_.resize(faces_.size());
+    std::iota(face_bvh_indices_.begin(), face_bvh_indices_.end(), 0);
+    face_bvh_nodes_.reserve(faces_.size() * 2);
+
+    constexpr int leaf_size = 8;
+    std::function<int(int, int)> build = [&](int begin, int end) -> int {
+        const int node_idx = static_cast<int>(face_bvh_nodes_.size());
+        face_bvh_nodes_.push_back(FaceBvhNode {});
+        auto& node = face_bvh_nodes_.back();
+        node.begin = begin;
+        node.end = end;
+
+        Vec3 bb_min = face_bounds_[static_cast<size_t>(face_bvh_indices_[static_cast<size_t>(begin)])][0];
+        Vec3 bb_max = face_bounds_[static_cast<size_t>(face_bvh_indices_[static_cast<size_t>(begin)])][1];
+        Vec3 c_min = face_centroids_[static_cast<size_t>(face_bvh_indices_[static_cast<size_t>(begin)])];
+        Vec3 c_max = c_min;
+        for (int i = begin + 1; i < end; ++i) {
+            const int fi = face_bvh_indices_[static_cast<size_t>(i)];
+            bb_min = min_vec(bb_min, face_bounds_[static_cast<size_t>(fi)][0]);
+            bb_max = max_vec(bb_max, face_bounds_[static_cast<size_t>(fi)][1]);
+            c_min = min_vec(c_min, face_centroids_[static_cast<size_t>(fi)]);
+            c_max = max_vec(c_max, face_centroids_[static_cast<size_t>(fi)]);
+        }
+        node.bounds_min = bb_min;
+        node.bounds_max = bb_max;
+
+        const int count = end - begin;
+        if (count <= leaf_size) {
+            return node_idx;
+        }
+
+        const Vec3 c_ext = sub(c_max, c_min);
+        int axis = 0;
+        if (c_ext[1] > c_ext[axis]) {
+            axis = 1;
+        }
+        if (c_ext[2] > c_ext[axis]) {
+            axis = 2;
+        }
+        if (c_ext[axis] <= 1e-18) {
+            return node_idx;
+        }
+
+        const int mid = begin + count / 2;
+        std::nth_element(
+            face_bvh_indices_.begin() + begin,
+            face_bvh_indices_.begin() + mid,
+            face_bvh_indices_.begin() + end,
+            [&](int a, int b) {
+                return face_centroids_[static_cast<size_t>(a)][axis] <
+                    face_centroids_[static_cast<size_t>(b)][axis];
+            });
+
+        const int left = build(begin, mid);
+        const int right = build(mid, end);
+        node.left = left;
+        node.right = right;
+        return node_idx;
+    };
+
+    face_bvh_root_ = build(0, static_cast<int>(faces_.size()));
 }
 
 // 函数说明：构建面邻接关系用于后续分组与拓扑查询。
@@ -839,29 +955,96 @@ std::tuple<Vec3, double, int> SurfaceMesh::trace_boundary_intersection(const Vec
     int best_face = -1;
     Vec3 best_p {0.0, 0.0, 0.0};
 
-    for (size_t i = 0; i < faces_.size(); ++i) {
+    auto try_face = [&](int face_idx) {
+        const size_t i = static_cast<size_t>(face_idx);
         const auto denom = dot(v, face_normals_[i]);
         if (std::abs(denom) < eps) {
-            continue;
+            return;
         }
         const double t = -(dot(x, face_normals_[i]) + face_k_[i]) / denom;
         if (t <= eps || t >= best_t) {
-            continue;
+            return;
         }
         const Vec3 p = add(x, mul(v, t));
         const auto& bb = face_bounds_[i];
         if (p[0] < bb[0][0] - 1e-9 || p[1] < bb[0][1] - 1e-9 || p[2] < bb[0][2] - 1e-9 ||
             p[0] > bb[1][0] + 1e-9 || p[1] > bb[1][1] + 1e-9 || p[2] > bb[1][2] + 1e-9) {
-            continue;
+            return;
         }
         const auto& f = faces_[i];
         const Vec3 cp = closest_point_on_triangle(p, vertices_[f[0]], vertices_[f[1]], vertices_[f[2]]);
         if (norm(sub(cp, p)) > 1e-7) {
-            continue;
+            return;
         }
         best_t = t;
         best_p = p;
-        best_face = static_cast<int>(i);
+        best_face = face_idx;
+    };
+
+    if (face_bvh_root_ >= 0 && !face_bvh_nodes_.empty() && !face_bvh_indices_.empty()) {
+        static thread_local std::vector<int> stack;
+        stack.clear();
+        stack.reserve(64);
+        stack.push_back(face_bvh_root_);
+
+        while (!stack.empty()) {
+            const int node_idx = stack.back();
+            stack.pop_back();
+            if (node_idx < 0 || node_idx >= static_cast<int>(face_bvh_nodes_.size())) {
+                continue;
+            }
+            const auto& node = face_bvh_nodes_[static_cast<size_t>(node_idx)];
+            double node_t_near = 0.0;
+            if (!ray_intersects_aabb(x, v, node.bounds_min, node.bounds_max, best_t, node_t_near)) {
+                continue;
+            }
+            const bool is_leaf = (node.left < 0 && node.right < 0);
+            if (is_leaf) {
+                for (int pos = node.begin; pos < node.end; ++pos) {
+                    if (pos < 0 || pos >= static_cast<int>(face_bvh_indices_.size())) {
+                        continue;
+                    }
+                    try_face(face_bvh_indices_[static_cast<size_t>(pos)]);
+                }
+                continue;
+            }
+
+            int near_child = -1;
+            int far_child = -1;
+            double near_t = std::numeric_limits<double>::infinity();
+            double far_t = std::numeric_limits<double>::infinity();
+            auto eval_child = [&](int child) {
+                if (child < 0 || child >= static_cast<int>(face_bvh_nodes_.size())) {
+                    return;
+                }
+                double t_near = 0.0;
+                const auto& cnode = face_bvh_nodes_[static_cast<size_t>(child)];
+                if (!ray_intersects_aabb(x, v, cnode.bounds_min, cnode.bounds_max, best_t, t_near)) {
+                    return;
+                }
+                if (t_near < near_t) {
+                    far_child = near_child;
+                    far_t = near_t;
+                    near_child = child;
+                    near_t = t_near;
+                } else if (t_near < far_t) {
+                    far_child = child;
+                    far_t = t_near;
+                }
+            };
+            eval_child(node.left);
+            eval_child(node.right);
+            if (far_child >= 0) {
+                stack.push_back(far_child);
+            }
+            if (near_child >= 0) {
+                stack.push_back(near_child);
+            }
+        }
+    } else {
+        for (size_t i = 0; i < faces_.size(); ++i) {
+            try_face(static_cast<int>(i));
+        }
     }
 
     if (best_face < 0) {
