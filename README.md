@@ -53,14 +53,13 @@ OMP_NUM_THREADS=64 ./build/ntmc input_cross_100nm.toml
 - Strict key set is expected.
 - Required simulation grid key: `grid_xyz = [nx, ny, nz]`.
 - `initial_temperature` supports:
-  - `["t0", "300"]` (uniform initial temperature, unit: K)
-  - `["linear"]` (linear profile from cold reservoir to hot reservoir)
+  - `300` (uniform initial temperature, unit: K)
+  - `"linear"` (linear profile from cold reservoir to hot reservoir)
 - If no valid thermal reservoirs are present, fallback temperature range is `299/301 K`.
-- `sizes` in TOML are in **nm**; internally converted to **Angstrom**.
-- STL coordinates are read as **nm**; internally converted to **Angstrom**.
-- Rough boundary value (`R` in `boundary_conditions`) is entered in **nm**, internally multiplied by 10.
+- `sizes` in TOML use **nm**.
+- STL coordinates use **nm**.
+- Rough boundary value (`R` in `boundary_conditions`) in `boundary_values` uses **nm**.
 - If HDF5 material loading fails, run aborts by default.
-  - Test-only fallback is allowed with: `NTMC_ALLOW_SYNTHETIC_MATERIAL=1`.
 
 ### Outputs
 
@@ -124,14 +123,13 @@ OMP_NUM_THREADS=64 ./build/ntmc input_cross_100nm.toml
 - 采用严格关键词集合。
 - 网格参数必填：`grid_xyz = [nx, ny, nz]`。
 - `initial_temperature` 支持：
-  - `["t0", "300"]`（全域统一初始温度，单位 K）
-  - `["linear"]`（按冷热库方向线性初始化）
+  - `300`（全域统一初始温度，单位 K）
+  - `"linear"`（按冷热库方向线性初始化）
 - 若没有可用热库，默认回退温度范围为 `299/301 K`。
-- TOML 中 `sizes` 单位是 **nm**，程序内部转换为 **Å**。
-- STL 坐标按 **nm** 读取，内部转换为 **Å**。
-- 粗糙边界（`boundary_conditions` 中的 `R`）在 `boundary_values` 里按 **nm** 填写，内部乘 10。
+- TOML 中 `sizes` 单位是 **nm**。
+- STL 坐标单位是 **nm**。
+- 粗糙边界（`boundary_conditions` 中的 `R`）在 `boundary_values` 里单位是 **nm**。
 - HDF5 材料加载失败时默认直接报错终止。
-  - 仅测试场景可设：`NTMC_ALLOW_SYNTHETIC_MATERIAL=1` 启用回退。
 
 ### 输出文件
 
@@ -195,14 +193,13 @@ OMP_NUM_THREADS=64 ./build/ntmc input_cross_100nm.toml
 - Используется строгий набор ключей.
 - Обязательный ключ сетки: `grid_xyz = [nx, ny, nz]`.
 - `initial_temperature` поддерживает:
-  - `["t0", "300"]` (равномерная начальная температура, K)
-  - `["linear"]` (линейный профиль между холодным и горячим резервуарами)
+  - `300` (равномерная начальная температура, K)
+  - `"linear"` (линейный профиль между холодным и горячим резервуарами)
 - Если валидные терморезервуары отсутствуют, используется диапазон по умолчанию `299/301 K`.
-- `sizes` в TOML задаются в **nm**, внутри переводятся в **Å**.
-- STL-координаты читаются как **nm**, внутри переводятся в **Å**.
-- Для шероховатой границы (`R` в `boundary_conditions`) значение в `boundary_values` задается в **nm**, внутри умножается на 10.
+- `sizes` в TOML задаются в **nm**.
+- STL-координаты задаются в **nm**.
+- Для шероховатой границы (`R` в `boundary_conditions`) значение в `boundary_values` задается в **nm**.
 - При ошибке загрузки HDF5 расчёт по умолчанию прерывается.
-  - Тестовый fallback включается только при `NTMC_ALLOW_SYNTHETIC_MATERIAL=1`.
 
 ### Выходные файлы
 
