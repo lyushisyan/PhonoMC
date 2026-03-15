@@ -11,10 +11,37 @@
 #include <string>
 #include <vector>
 
+static void print_startup_banner() {
+    static constexpr std::size_t kInnerWidth = 68;
+    const auto print_border = []() {
+        std::cout << "+" << std::string(kInnerWidth + 2, '-') << "+\n";
+    };
+    const auto print_line = [](const std::string& content) {
+        std::cout << "| " << content;
+        if (content.size() < kInnerWidth) {
+            std::cout << std::string(kInnerWidth - content.size(), ' ');
+        }
+        std::cout << " |\n";
+    };
+
+    print_border();
+    print_line(" _   _   _   _   __  __    _____");
+    print_line("| \\ | | | | | | |  \\/  |  / ____|");
+    print_line("|  \\| | | |_| | | \\  / | | |");
+    print_line("| . ` | |  _  | | |\\/| | | |");
+    print_line("| |\\  | | | | | | |  | | | |____");
+    print_line("|_| \\_| |_| |_| |_|  |_|  \\_____|");
+    print_line("");
+    print_line("                  Nano Heat Monte Carlo");
+    print_border();
+    std::cout << std::flush;
+}
+
 // 函数说明：程序入口：读取输入、构建几何与材料、执行时间步并输出汇总结果。
 int main(int argc, char** argv) {
     try {
         namespace fs = std::filesystem;
+        print_startup_banner();
 
         std::string input_file;
         if (argc > 1) {

@@ -22,7 +22,7 @@ failed=0
 
 for z in "${Z_VALUES[@]}"; do
     for r in "${ROUGH_LABELS[@]}"; do
-        input_file="${INPUT_DIR}/input_inplane_x10000nm_z${z}nm_${r}.toml"
+        input_file="${INPUT_DIR}/input_inplane_x1000nm_z${z}nm_${r}.toml"
         total=$((total + 1))
 
         if [[ ! -f "${input_file}" ]]; then
@@ -51,4 +51,3 @@ echo "Completed ${total} runs, failed ${failed}."
 if [[ "${failed}" -ne 0 ]]; then
     exit 1
 fi
-
