@@ -5,7 +5,7 @@ set -uo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_PATH="${ROOT_DIR}/build/ntmc"
 INPUT_PATH="${ROOT_DIR}/input_cross_100nm.toml"
-OUT_ROOT="${ROOT_DIR}/cross_100nm_test_threads"
+OUT_ROOT="${ROOT_DIR}/test_threads/cross_100nm_test_threads"
 SUMMARY_CSV="${OUT_ROOT}/run_summary.csv"
 THREADS=(1 2 4 8 16 32 64)
 

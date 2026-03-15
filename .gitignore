@@ -8,6 +8,8 @@ build-mac/
 results/
 cross_100nm_test_threads/
 cross_1000nm_test_threads/
+calculation-cross/
+calculation-inplane/
 
 # Python caches
 **/__pycache__/

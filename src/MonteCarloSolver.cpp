@@ -349,12 +349,18 @@ void MonteCarloSolver::initialize_reservoir_injection(const SimulationDomain& ge
     reservoir_count_ = static_cast<int>(reservoir_facets_.size());
     reservoir_modes_ = phonon.active_mode_list();
     reservoir_entry_probability_.assign(static_cast<size_t>(reservoir_count_), std::vector<double>(reservoir_modes_.size(), 0.0));
-    reservoir_emit_counter_.assign(static_cast<size_t>(reservoir_count_), std::vector<double>(reservoir_modes_.size(), 0.0));
     reservoir_areas_.assign(static_cast<size_t>(reservoir_count_), 0.0);
     reservoir_normals_.assign(static_cast<size_t>(reservoir_count_), {0.0, 0.0, 1.0});
+    facet_to_reservoir_index_.assign(static_cast<size_t>(geometry.mesh().facet_count()), -1);
+    for (int r = 0; r < reservoir_count_; ++r) {
+        const int facet = reservoir_facets_[static_cast<size_t>(r)];
+        if (facet >= 0 && facet < static_cast<int>(facet_to_reservoir_index_.size())) {
+            facet_to_reservoir_index_[static_cast<size_t>(facet)] = r;
+        }
+    }
+    reservoir_leaving_prev_step_.assign(static_cast<size_t>(reservoir_count_), 0);
+    reservoir_leaving_curr_step_.assign(static_cast<size_t>(reservoir_count_), 0);
 
-    auto& rng = thread_rng();
-    std::uniform_real_distribution<double> U(0.0, 1.0);
     const auto& mesh = geometry.mesh();
     const auto& areas = mesh.facet_areas();
     const auto& normals = mesh.facet_normals();
@@ -373,9 +379,14 @@ void MonteCarloSolver::initialize_reservoir_injection(const SimulationDomain& ge
             const double gv_parallel = -dot(reservoir_normals_[static_cast<size_t>(r)], gv);
             const double p = std::max(0.0, gv_parallel * time_step_ / std::max(1e-18, bound_thickness));
             reservoir_entry_probability_[static_cast<size_t>(r)][m] = p;
-            reservoir_emit_counter_[static_cast<size_t>(r)][m] = U(rng);
         }
+        double expected = 0.0;
+        for (double p : reservoir_entry_probability_[static_cast<size_t>(r)]) {
+            expected += std::max(0.0, p);
+        }
+        reservoir_leaving_prev_step_[static_cast<size_t>(r)] = std::max(0, static_cast<int>(std::llround(expected)));
     }
+    std::cout << "[init] reservoir_gen=one_to_one\n";
 }
 
 // 函数说明：构建粗糙边界散射查找表，包含镜面率与漫反射候选映射。
@@ -879,6 +890,13 @@ void MonteCarloSolver::process_boundary_collision(const SimulationDomain& geomet
     const double vn = dot(particle_velocities_[i], n);
 
     if (cond == 'T') {
+        ++step_absorbed_particles_;
+        if (facet >= 0 && facet < static_cast<int>(facet_to_reservoir_index_.size())) {
+            const int rid = facet_to_reservoir_index_[static_cast<size_t>(facet)];
+            if (rid >= 0 && rid < static_cast<int>(reservoir_leaving_curr_step_.size())) {
+                reservoir_leaving_curr_step_[static_cast<size_t>(rid)] += 1;
+            }
+        }
         if (i >= 0 && i < static_cast<int>(particle_alive_flags_.size())) {
             particle_alive_flags_[static_cast<size_t>(i)] = static_cast<std::uint8_t>(0);
         }
@@ -949,17 +967,18 @@ double MonteCarloSolver::compute_roughness_specularity(const SimulationDomain& g
 }
 
 // 函数说明：移除已吸收粒子并压缩所有粒子状态数组。
-void MonteCarloSolver::remove_absorbed_particles() {
+int MonteCarloSolver::remove_absorbed_particles() {
     if (particle_alive_flags_.empty()) {
-        return;
+        return 0;
     }
     size_t alive_count = 0;
     for (std::uint8_t a : particle_alive_flags_) {
         alive_count += (a != 0) ? 1u : 0u;
     }
     if (alive_count == particle_alive_flags_.size()) {
-        return;
+        return 0;
     }
+    const int removed = static_cast<int>(particle_alive_flags_.size() - alive_count);
 
     std::vector<size_t> keep;
     keep.reserve(alive_count);
@@ -1024,12 +1043,13 @@ void MonteCarloSolver::remove_absorbed_particles() {
     remap_vecc(cached_collision_conditions_);
     particle_alive_flags_.assign(alive_count, static_cast<std::uint8_t>(1));
     particle_count_ = static_cast<int>(alive_count);
+    return removed;
 }
 
 // 函数说明：将数值误差导致越界的粒子重采样回几何体内部，并重建碰撞缓存。
-void MonteCarloSolver::recover_escaped_particles(const SimulationDomain& geometry) {
+int MonteCarloSolver::recover_escaped_particles(const SimulationDomain& geometry) {
     if (particle_count_ <= 0 || particle_positions_.empty()) {
-        return;
+        return 0;
     }
     const auto& bmin = geometry.bounds_min();
     const auto& bmax = geometry.bounds_max();
@@ -1050,7 +1070,7 @@ void MonteCarloSolver::recover_escaped_particles(const SimulationDomain& geometr
         }
     }
     if (escaped_idx.empty()) {
-        return;
+        return 0;
     }
 
     const auto& mesh = geometry.mesh();
@@ -1064,6 +1084,7 @@ void MonteCarloSolver::recover_escaped_particles(const SimulationDomain& geometr
 
     escaped_recovery_events_ += 1;
     escaped_recovered_particles_ += static_cast<long long>(escaped_idx.size());
+    return static_cast<int>(escaped_idx.size());
 }
 
 // 函数说明：从热库边界按统计规则注入新粒子并返回注入时刻偏移。
@@ -1084,23 +1105,35 @@ std::vector<std::pair<int, double>> MonteCarloSolver::inject_particles_from_rese
         mode_idx.reserve(128);
         dt_in.reserve(128);
         auto& row_prob = reservoir_entry_probability_[static_cast<size_t>(r)];
-        auto& row_counter = reservoir_emit_counter_[static_cast<size_t>(r)];
-
-        for (size_t m = 0; m < row_prob.size(); ++m) {
-            const double p = std::max(0.0, row_prob[m]);
-            if (p <= 0.0) {
-                continue;
+        const int n_emit = (r < static_cast<int>(reservoir_leaving_prev_step_.size()))
+            ? std::max(0, reservoir_leaving_prev_step_[static_cast<size_t>(r)]) : 0;
+        if (n_emit > 0) {
+            std::vector<double> roulette;
+            roulette.reserve(row_prob.size());
+            double acc = 0.0;
+            for (double p : row_prob) {
+                acc += std::max(0.0, p);
+                roulette.push_back(acc);
             }
-            const int fixed = static_cast<int>(std::floor(p));
-            row_counter[m] += p - static_cast<double>(fixed);
-            int n_emit = fixed;
-            while (row_counter[m] >= 1.0) {
-                row_counter[m] -= 1.0;
-                ++n_emit;
-            }
-            for (int c = 0; c < n_emit; ++c) {
-                mode_idx.push_back(m);
-                dt_in.push_back(time_step_ * U01(rng));
+            if (acc > 0.0) {
+                for (double& v : roulette) {
+                    v /= acc;
+                }
+                for (int c = 0; c < n_emit; ++c) {
+                    const double rr = U01(rng);
+                    const auto it = std::lower_bound(roulette.begin(), roulette.end(), rr);
+                    const size_t m = (it == roulette.end())
+                        ? (roulette.empty() ? 0u : roulette.size() - 1u)
+                        : static_cast<size_t>(it - roulette.begin());
+                    mode_idx.push_back(m);
+                    dt_in.push_back(time_step_ * U01(rng));
+                }
+            } else {
+                std::uniform_int_distribution<int> Uidx(0, static_cast<int>(row_prob.size()) - 1);
+                for (int c = 0; c < n_emit; ++c) {
+                    mode_idx.push_back(static_cast<size_t>(Uidx(rng)));
+                    dt_in.push_back(time_step_ * U01(rng));
+                }
             }
         }
 
@@ -1470,7 +1503,7 @@ void MonteCarloSolver::write_convergence_header() {
     for (int i = 0; i < ngrid; ++i) {
         out << " T_" << (i + 1);
     }
-    out << " heatflux kappa_fit kappa_end\n";
+    out << " heatflux kappa_fit kappa_end absorbed injected recovered net\n";
 }
 
 // 函数说明：追加当前时间步温度、热流与导热率统计结果。
@@ -1484,7 +1517,8 @@ void MonteCarloSolver::append_convergence_row() const {
     for (double tsv : grid_temperatures_) {
         out << " " << tsv;
     }
-    out << " " << average_heat_flux_along_axis_ << " " << thermal_conductivity_fit_ << " " << thermal_conductivity_endpoints_ << '\n';
+    out << " " << average_heat_flux_along_axis_ << " " << thermal_conductivity_fit_ << " " << thermal_conductivity_endpoints_
+        << " " << step_absorbed_particles_ << " " << step_injected_particles_ << " " << step_recovered_particles_ << " " << step_net_particles_ << '\n';
 }
 
 void MonteCarloSolver::append_profile_summary(std::ostream& out) const {
@@ -1520,6 +1554,12 @@ void MonteCarloSolver::append_profile_summary(std::ostream& out) const {
     out << "check_interval = " << escaped_recovery_check_interval_ << '\n';
     out << "recovery_events = " << escaped_recovery_events_ << '\n';
     out << "recovered_particles_total = " << escaped_recovered_particles_ << '\n';
+    out << "\n[reservoir_balance_diagnostics]\n";
+    out << "reservoir_gen = one_to_one\n";
+    out << "absorbed_particles_total = " << total_absorbed_particles_ << '\n';
+    out << "injected_particles_total = " << total_injected_particles_ << '\n';
+    out << "recovered_particles_total = " << total_recovered_particles_ << '\n';
+    out << "net_particles_total = " << total_net_particles_ << '\n';
     if (!profile_timers_enabled_) {
         return;
     }
@@ -1574,6 +1614,11 @@ void MonteCarloSolver::run_timestep() {
     const PhononMaterial& phonon = *phonon_;
     using Clock = std::chrono::steady_clock;
     const auto t_step_begin = Clock::now();
+    step_absorbed_particles_ = 0;
+    step_injected_particles_ = 0;
+    step_recovered_particles_ = 0;
+    step_net_particles_ = 0;
+    std::fill(reservoir_leaving_curr_step_.begin(), reservoir_leaving_curr_step_.end(), 0);
 
     const int n_before = particle_count_;
     const auto t_advance_begin = Clock::now();
@@ -1588,11 +1633,12 @@ void MonteCarloSolver::run_timestep() {
     }
     const auto t_advance_end = Clock::now();
     const auto t_remove1_begin = t_advance_end;
-    remove_absorbed_particles();
+    (void) remove_absorbed_particles();
     const auto t_remove1_end = Clock::now();
 
     const auto t_inject_begin = t_remove1_end;
     const auto injected = inject_particles_from_reservoirs(geometry, phonon);
+    step_injected_particles_ = static_cast<long long>(injected.size());
     const auto t_inject_end = Clock::now();
     if (!injected.empty()) {
         const auto t_cache_begin = Clock::now();
@@ -1622,7 +1668,7 @@ void MonteCarloSolver::run_timestep() {
         }
         const auto t_adv_inj_end = Clock::now();
         const auto t_remove2_begin = t_adv_inj_end;
-        remove_absorbed_particles();
+        (void) remove_absorbed_particles();
         const auto t_remove2_end = Clock::now();
         if (profile_timers_enabled_) {
             timer_inject_cache_ += std::chrono::duration<double>(t_cache_end - t_cache_begin).count();
@@ -1633,7 +1679,16 @@ void MonteCarloSolver::run_timestep() {
 
     if (escaped_recovery_check_interval_ > 0 &&
         (current_timestep_ % escaped_recovery_check_interval_) == 0) {
-        recover_escaped_particles(geometry);
+        step_recovered_particles_ = static_cast<long long>(recover_escaped_particles(geometry));
+    }
+    step_net_particles_ = step_injected_particles_ - step_absorbed_particles_;
+    total_absorbed_particles_ += step_absorbed_particles_;
+    total_injected_particles_ += step_injected_particles_;
+    total_recovered_particles_ += step_recovered_particles_;
+    total_net_particles_ += step_net_particles_;
+    if (!reservoir_leaving_curr_step_.empty() &&
+        reservoir_leaving_curr_step_.size() == reservoir_leaving_prev_step_.size()) {
+        reservoir_leaving_prev_step_ = reservoir_leaving_curr_step_;
     }
 
     const auto t_temp_begin = Clock::now();
@@ -1679,6 +1734,10 @@ void MonteCarloSolver::run_timestep() {
             std::cout << "Current Conductivity (Fit): " << thermal_conductivity_fit_ << " W/mK" << std::endl;
             std::cout << "Current Conductivity (End): " << thermal_conductivity_endpoints_ << " W/mK" << std::endl;
         }
+        std::cout << "Reservoir Balance (step): absorbed=" << step_absorbed_particles_
+                  << ", injected=" << step_injected_particles_
+                  << ", recovered=" << step_recovered_particles_
+                  << ", net=" << step_net_particles_ << std::endl;
         std::cout << "-------------------------" << std::endl;
     }
     report_timestep_timers_if_needed();

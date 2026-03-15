@@ -55,6 +55,7 @@ OMP_NUM_THREADS=64 ./build/ntmc input_cross_100nm.toml
 - `initial_temperature` supports:
   - `300` (uniform initial temperature, unit: K)
   - `"linear"` (linear profile from cold reservoir to hot reservoir)
+- Reservoir refill uses `one_to_one` (inject by previous-step leaving counts).
 - If no valid thermal reservoirs are present, fallback temperature range is `299/301 K`.
 - `sizes` in TOML use **nm**.
 - STL coordinates use **nm**.
@@ -64,7 +65,7 @@ OMP_NUM_THREADS=64 ./build/ntmc input_cross_100nm.toml
 ### Outputs
 
 - `convergence.txt`
-  - Columns include: `timestep`, `time_ps`, `T_1 ... T_n`, `heatflux`, `kappa_fit`, `kappa_end`.
+  - Columns include: `timestep`, `time_ps`, `T_1 ... T_n`, `heatflux`, `kappa_fit`, `kappa_end`, `absorbed`, `injected`, `recovered`, `net`.
 - `summary.txt`
   - Consolidated input/geometry/grid/boundary/runtime summary.
 - `grid_centers.csv`
@@ -125,6 +126,7 @@ OMP_NUM_THREADS=64 ./build/ntmc input_cross_100nm.toml
 - `initial_temperature` 支持：
   - `300`（全域统一初始温度，单位 K）
   - `"linear"`（按冷热库方向线性初始化）
+- 热库回填固定为 `one_to_one`（按上一步离开热库的粒子数回填）。
 - 若没有可用热库，默认回退温度范围为 `299/301 K`。
 - TOML 中 `sizes` 单位是 **nm**。
 - STL 坐标单位是 **nm**。
@@ -134,7 +136,7 @@ OMP_NUM_THREADS=64 ./build/ntmc input_cross_100nm.toml
 ### 输出文件
 
 - `convergence.txt`
-  - 包含：`timestep`、`time_ps`、`T_1 ... T_n`、`heatflux`、`kappa_fit`、`kappa_end`。
+  - 包含：`timestep`、`time_ps`、`T_1 ... T_n`、`heatflux`、`kappa_fit`、`kappa_end`、`absorbed`、`injected`、`recovered`、`net`。
 - `summary.txt`
   - 汇总关键输入与几何/网格/边界/运行时间信息。
 - `grid_centers.csv`
@@ -195,6 +197,7 @@ OMP_NUM_THREADS=64 ./build/ntmc input_cross_100nm.toml
 - `initial_temperature` поддерживает:
   - `300` (равномерная начальная температура, K)
   - `"linear"` (линейный профиль между холодным и горячим резервуарами)
+- Пополнение резервуаров фиксировано как `one_to_one` (инжекция по числу частиц, покинувших резервуары на предыдущем шаге).
 - Если валидные терморезервуары отсутствуют, используется диапазон по умолчанию `299/301 K`.
 - `sizes` в TOML задаются в **nm**.
 - STL-координаты задаются в **nm**.
@@ -204,7 +207,7 @@ OMP_NUM_THREADS=64 ./build/ntmc input_cross_100nm.toml
 ### Выходные файлы
 
 - `convergence.txt`
-  - Колонки: `timestep`, `time_ps`, `T_1 ... T_n`, `heatflux`, `kappa_fit`, `kappa_end`.
+  - Колонки: `timestep`, `time_ps`, `T_1 ... T_n`, `heatflux`, `kappa_fit`, `kappa_end`, `absorbed`, `injected`, `recovered`, `net`.
 - `summary.txt`
   - Сводка ключевых входных параметров и статистики geometry/grid/boundary/runtime.
 - `grid_centers.csv`

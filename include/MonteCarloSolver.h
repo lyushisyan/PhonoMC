@@ -48,8 +48,8 @@ private:
     void update_collision_cache_single(const SimulationDomain& geometry, int i);
     int nearest_grid_index(const SimulationDomain& geometry, const Vec3& p) const;
     void process_boundary_collision(const SimulationDomain& geometry, int i);
-    void remove_absorbed_particles();
-    void recover_escaped_particles(const SimulationDomain& geometry);
+    int remove_absorbed_particles();
+    int recover_escaped_particles(const SimulationDomain& geometry);
     std::vector<std::pair<int, double>> inject_particles_from_reservoirs(const SimulationDomain& geometry, const PhononMaterial& phonon);
     void advance_particle(const SimulationDomain& geometry, const PhononMaterial& phonon, int i, double dt_remaining);
     void update_particle_temperatures(const SimulationDomain& geometry, const PhononMaterial& phonon);
@@ -110,12 +110,14 @@ private:
 
     int reservoir_count_ = 0;
     std::vector<int> reservoir_facets_;
+    std::vector<int> facet_to_reservoir_index_;
     std::vector<double> reservoir_temperatures_;
     std::vector<double> reservoir_areas_;
     std::vector<Vec3> reservoir_normals_;
     std::vector<std::array<int, 2>> reservoir_modes_;
     std::vector<std::vector<double>> reservoir_entry_probability_;
-    std::vector<std::vector<double>> reservoir_emit_counter_;
+    std::vector<int> reservoir_leaving_prev_step_;
+    std::vector<int> reservoir_leaving_curr_step_;
 
     struct RoughFacetData {
         int facet = -1;
@@ -173,4 +175,14 @@ private:
     long long escaped_recovery_events_ = 0;
     long long escaped_recovered_particles_ = 0;
     int escaped_recovery_check_interval_ = 100;
+
+    // Per-step reservoir bookkeeping diagnostics.
+    long long step_absorbed_particles_ = 0;
+    long long step_injected_particles_ = 0;
+    long long step_recovered_particles_ = 0;
+    long long step_net_particles_ = 0;  // injected - absorbed
+    long long total_absorbed_particles_ = 0;
+    long long total_injected_particles_ = 0;
+    long long total_recovered_particles_ = 0;
+    long long total_net_particles_ = 0;  // cumulative(injected - absorbed)
 };
