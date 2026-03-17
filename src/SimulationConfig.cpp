@@ -393,6 +393,11 @@ SimulationConfig parse_toml_file(const std::string& path) {
         args.iterations = parse_int_scalar(*v);
     }
     if (auto v = get_first_value(kv, {
+            "simulation.convergence_write_interval",
+            "convergence_write_interval"}); v.has_value()) {
+        args.convergence_write_interval = parse_int_scalar(*v);
+    }
+    if (auto v = get_first_value(kv, {
             "simulation.compute_kappa",
             "compute_kappa"}); v.has_value()) {
         args.compute_kappa = parse_bool_scalar(*v);
@@ -401,6 +406,11 @@ SimulationConfig parse_toml_file(const std::string& path) {
             "simulation.profile_timers",
             "profile_timers"}); v.has_value()) {
         args.profile_timers = parse_bool_scalar(*v);
+    }
+    if (auto v = get_first_value(kv, {
+            "simulation.progress_temperature_summary_only",
+            "progress_temperature_summary_only"}); v.has_value()) {
+        args.progress_temperature_summary_only = parse_bool_scalar(*v);
     }
     if (auto v = get_first_value(kv, {
             "simulation.temperature_lookup_dt",
@@ -527,11 +537,17 @@ SimulationConfig parse_legacy_file(const std::string& path) {
     if (auto it = kv.find("--iterations"); it != kv.end() && !it->second.empty()) {
         args.iterations = std::stoi(it->second.front());
     }
+    if (auto it = kv.find("--convergence_write_interval"); it != kv.end() && !it->second.empty()) {
+        args.convergence_write_interval = std::stoi(it->second.front());
+    }
     if (auto it = kv.find("--compute_kappa"); it != kv.end() && !it->second.empty()) {
         args.compute_kappa = parse_bool_scalar(it->second.front());
     }
     if (auto it = kv.find("--profile_timers"); it != kv.end() && !it->second.empty()) {
         args.profile_timers = parse_bool_scalar(it->second.front());
+    }
+    if (auto it = kv.find("--progress_temperature_summary_only"); it != kv.end() && !it->second.empty()) {
+        args.progress_temperature_summary_only = parse_bool_scalar(it->second.front());
     }
     if (auto it = kv.find("--temperature_lookup_dt"); it != kv.end() && !it->second.empty()) {
         args.temperature_lookup_dt = std::stod(it->second.front());
@@ -622,6 +638,9 @@ SimulationConfig load_simulation_config(const std::string& path) {
     }
     if (!(args.temperature_lookup_dt > 0.0) || !std::isfinite(args.temperature_lookup_dt)) {
         throw std::runtime_error("temperature_lookup_dt must be a finite positive value.");
+    }
+    if (args.convergence_write_interval <= 0) {
+        throw std::runtime_error("convergence_write_interval must be a positive integer.");
     }
     return args;
 }

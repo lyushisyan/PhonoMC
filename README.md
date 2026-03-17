@@ -52,6 +52,8 @@ OMP_NUM_THREADS=64 ./build/EPMC input_cross_100nm.toml
 
 - Strict key set is expected.
 - Required simulation grid key: `grid_xyz = [nx, ny, nz]`.
+- Temperature export stride: `convergence_write_interval = 10` (write `convergence.txt` every N steps).
+- Progress print mode: `progress_temperature_summary_only = true` prints only `Tmin/Tavg/Tmax`.
 - `initial_temperature` supports:
   - `300` (uniform initial temperature, unit: K)
   - `"linear"` (linear profile from cold reservoir to hot reservoir)
@@ -123,6 +125,8 @@ OMP_NUM_THREADS=64 ./build/EPMC input_cross_100nm.toml
 
 - 采用严格关键词集合。
 - 网格参数必填：`grid_xyz = [nx, ny, nz]`。
+- 温度导出步长：`convergence_write_interval = 10`（每 N 步写一次 `convergence.txt`）。
+- 进度打印模式：`progress_temperature_summary_only = true` 时只打印 `Tmin/Tavg/Tmax`。
 - `initial_temperature` 支持：
   - `300`（全域统一初始温度，单位 K）
   - `"linear"`（按冷热库方向线性初始化）
@@ -194,6 +198,8 @@ OMP_NUM_THREADS=64 ./build/EPMC input_cross_100nm.toml
 
 - Используется строгий набор ключей.
 - Обязательный ключ сетки: `grid_xyz = [nx, ny, nz]`.
+- Шаг вывода температуры: `convergence_write_interval = 10` (запись `convergence.txt` каждые N шагов).
+- Режим вывода прогресса: `progress_temperature_summary_only = true` печатает только `Tmin/Tavg/Tmax`.
 - `initial_temperature` поддерживает:
   - `300` (равномерная начальная температура, K)
   - `"linear"` (линейный профиль между холодным и горячим резервуарами)

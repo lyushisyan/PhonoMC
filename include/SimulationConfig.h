@@ -10,8 +10,10 @@ struct SimulationConfig {
     double particle_count = 1e4;
     double time_step = 1.0;
     int iterations = 10000;
+    int convergence_write_interval = 10;
     bool compute_kappa = false;
     bool profile_timers = false;
+    bool progress_temperature_summary_only = false;
     double temperature_lookup_dt = 0.1;  // K, lookup-table step for T->E precompute
 
     std::vector<std::string> grid_layout;

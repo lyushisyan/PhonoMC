@@ -32,7 +32,7 @@ static void print_startup_banner() {
     print_line(" | |____| |    | |  | || |____");
     print_line(" |______|_|    |_|  |_| \\_____|");
     print_line("");
-    print_line("                          EPMC");
+    print_line("                     Ensemble Phono Monte Carlo");
     print_border();
     std::cout << std::flush;
 }

@@ -75,11 +75,15 @@ MonteCarloSolver::MonteCarloSolver(const SimulationConfig& args, const Simulatio
     rng_seed_base_ = rng_();
     particle_count_ = std::max(1, static_cast<int>(std::llround(args_.particle_count)));
     time_step_ = std::max(1e-12, args_.time_step);
+    convergence_write_interval_ = std::max(1, args_.convergence_write_interval);
     push_eps_ = 1e-10 * std::max(time_step_, 1.0);
     particle_density_ = static_cast<double>(particle_count_) / std::max(geometry.volume(), 1e-12);
 
     std::cout << "MonteCarloSolver initialized: particle_count=" << particle_count_
               << ", time_step=" << time_step_
+              << ", convergence_write_interval=" << convergence_write_interval_
+              << ", progress_temperature_summary_only="
+              << (args_.progress_temperature_summary_only ? "true" : "false")
               << ", density=" << particle_density_ << '\n';
     std::cout << "Thermal conductivity estimation: "
               << (args_.compute_kappa ? "enabled" : "disabled")
@@ -1794,11 +1798,24 @@ void MonteCarloSolver::run_timestep() {
         
         std::cout << "--- Progress: " << std::fixed << std::setprecision(1) << progress << "% ---" << std::endl;
         
-        std::cout << "Temperature Profile (K): ";
-        for (double t : grid_temperatures_) {
-            std::cout << std::setprecision(2) << t << " ";
+        if (args_.progress_temperature_summary_only) {
+            if (grid_temperatures_.empty()) {
+                std::cout << "Temperature Summary (K): Tmin=nan, Tavg=nan, Tmax=nan" << std::endl;
+            } else {
+                const auto mm = std::minmax_element(grid_temperatures_.begin(), grid_temperatures_.end());
+                const double tsum = std::accumulate(grid_temperatures_.begin(), grid_temperatures_.end(), 0.0);
+                const double tavg = tsum / static_cast<double>(grid_temperatures_.size());
+                std::cout << "Temperature Summary (K): Tmin=" << std::setprecision(2) << *mm.first
+                          << ", Tavg=" << tavg
+                          << ", Tmax=" << *mm.second << std::endl;
+            }
+        } else {
+            std::cout << "Temperature Profile (K): ";
+            for (double t : grid_temperatures_) {
+                std::cout << std::setprecision(2) << t << " ";
+            }
+            std::cout << std::endl;
         }
-        std::cout << std::endl;
 
         if (args_.compute_kappa) {
             std::cout << "Current Conductivity (Fit): " << thermal_conductivity_fit_ << " W/mK" << std::endl;
