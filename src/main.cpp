@@ -25,14 +25,14 @@ static void print_startup_banner() {
     };
 
     print_border();
-    print_line(" _   _   _   _   __  __    _____");
-    print_line("| \\ | | | | | | |  \\/  |  / ____|");
-    print_line("|  \\| | | |_| | | \\  / | | |");
-    print_line("| . ` | |  _  | | |\\/| | | |");
-    print_line("| |\\  | | | | | | |  | | | |____");
-    print_line("|_| \\_| |_| |_| |_|  |_|  \\_____|");
+    print_line("  ______ _____  __  __   _____");
+    print_line(" |  ____|  __ \\|  \\/  | / ____|");
+    print_line(" | |__  | |__) | \\  / || |");
+    print_line(" |  __| |  ___/| |\\/| || |");
+    print_line(" | |____| |    | |  | || |____");
+    print_line(" |______|_|    |_|  |_| \\_____|");
     print_line("");
-    print_line("                  Nano Heat Monte Carlo");
+    print_line("                          EPMC");
     print_border();
     std::cout << std::flush;
 }

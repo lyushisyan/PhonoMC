@@ -1,4 +1,4 @@
-# Sequence-MC
+# EPMC
 
 [English](#english-version) | [中文](#中文版) | [Русский](#русский)
 
@@ -9,7 +9,7 @@
 
 ### Overview
 
-Sequence-MC (NTMC) is a C++ phonon Monte Carlo simulator for semiconductor heat transport (e.g., Si/Ge/GaN). It supports box/mesh geometries, HDF5 material data, rough/periodic boundaries, and thermal conductivity estimation.
+EPMC is a C++ phonon Monte Carlo simulator for semiconductor heat transport (e.g., Si/Ge/GaN). It supports box/mesh geometries, HDF5 material data, rough/periodic boundaries, and thermal conductivity estimation.
 
 ### Core Features
 
@@ -30,22 +30,22 @@ Sequence-MC (NTMC) is a C++ phonon Monte Carlo simulator for semiconductor heat 
 ### Build
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNTMC_ENABLE_OPENMP=ON
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DEPMC_ENABLE_OPENMP=ON
 cmake --build build -j
 ```
 
-Executable: `build/ntmc`
+Executable: `build/EPMC`
 
 ### Run
 
 ```bash
-./build/ntmc input_cross_100nm.toml
+./build/EPMC input_cross_100nm.toml
 ```
 
 Optional thread setting:
 
 ```bash
-OMP_NUM_THREADS=64 ./build/ntmc input_cross_100nm.toml
+OMP_NUM_THREADS=64 ./build/EPMC input_cross_100nm.toml
 ```
 
 ### Input Rules (Current)
@@ -80,7 +80,7 @@ OMP_NUM_THREADS=64 ./build/ntmc input_cross_100nm.toml
 
 ### 项目简介
 
-Sequence-MC（NTMC）是一个基于 C++ 的声子蒙特卡洛仿真程序，用于半导体（如 Si/Ge/GaN）热输运计算。支持 box/网格模型、HDF5 材料数据、粗糙/周期边界和热导率评估。
+EPMC 是一个基于 C++ 的声子蒙特卡洛仿真程序，用于半导体（如 Si/Ge/GaN）热输运计算。支持 box/网格模型、HDF5 材料数据、粗糙/周期边界和热导率评估。
 
 ### 核心功能
 
@@ -101,22 +101,22 @@ Sequence-MC（NTMC）是一个基于 C++ 的声子蒙特卡洛仿真程序，用
 ### 编译
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNTMC_ENABLE_OPENMP=ON
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DEPMC_ENABLE_OPENMP=ON
 cmake --build build -j
 ```
 
-可执行文件：`build/ntmc`
+可执行文件：`build/EPMC`
 
 ### 运行
 
 ```bash
-./build/ntmc input_cross_100nm.toml
+./build/EPMC input_cross_100nm.toml
 ```
 
 可指定线程数：
 
 ```bash
-OMP_NUM_THREADS=64 ./build/ntmc input_cross_100nm.toml
+OMP_NUM_THREADS=64 ./build/EPMC input_cross_100nm.toml
 ```
 
 ### 当前输入规则
@@ -151,7 +151,7 @@ OMP_NUM_THREADS=64 ./build/ntmc input_cross_100nm.toml
 
 ### Обзор
 
-Sequence-MC (NTMC) — C++ симулятор фононного Монте-Карло для теплопереноса в полупроводниках (например, Si/Ge/GaN). Поддерживаются box/mesh геометрии, HDF5-материалы, шероховатые/периодические границы и оценка теплопроводности.
+EPMC — C++ симулятор фононного Монте-Карло для теплопереноса в полупроводниках (например, Si/Ge/GaN). Поддерживаются box/mesh геометрии, HDF5-материалы, шероховатые/периодические границы и оценка теплопроводности.
 
 ### Основные возможности
 
@@ -172,22 +172,22 @@ Sequence-MC (NTMC) — C++ симулятор фононного Монте-Ка
 ### Сборка
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNTMC_ENABLE_OPENMP=ON
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DEPMC_ENABLE_OPENMP=ON
 cmake --build build -j
 ```
 
-Исполняемый файл: `build/ntmc`
+Исполняемый файл: `build/EPMC`
 
 ### Запуск
 
 ```bash
-./build/ntmc input_cross_100nm.toml
+./build/EPMC input_cross_100nm.toml
 ```
 
 Ограничение потоков:
 
 ```bash
-OMP_NUM_THREADS=64 ./build/ntmc input_cross_100nm.toml
+OMP_NUM_THREADS=64 ./build/EPMC input_cross_100nm.toml
 ```
 
 ### Правила входных данных (текущие)

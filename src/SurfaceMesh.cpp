@@ -709,7 +709,7 @@ void SurfaceMesh::build_volume_tetrahedra() {
     namespace fs = std::filesystem;
     std::mt19937_64 tmp_rng(std::random_device{}());
     const auto tmp_tag = std::to_string(static_cast<unsigned long long>(tmp_rng()));
-    const fs::path tmp = fs::temp_directory_path() / ("ntmc_qhull_" + tmp_tag + ".txt");
+    const fs::path tmp = fs::temp_directory_path() / ("epmc_qhull_" + tmp_tag + ".txt");
     {
         std::ofstream in(tmp);
         in << "3 " << uniq_points.size() << '\n';
