@@ -472,6 +472,15 @@ SimulationConfig parse_toml_file(const std::string& path) {
     if (auto v = get_first_value(kv, {"heat_source.power_density"}); v.has_value()) {
         args.heat_source_power_density = parse_double_scalar(*v);
     }
+    if (auto v = get_first_value(kv, {"heat_source.profile"}); v.has_value()) {
+        args.heat_source_profile = to_lower(unquote(*v));
+    }
+    if (auto v = get_first_value(kv, {"heat_source.center"}); v.has_value()) {
+        args.heat_source_center = parse_number_array(*v);
+    }
+    if (auto v = get_first_value(kv, {"heat_source.sigma"}); v.has_value()) {
+        args.heat_source_sigma = parse_number_array(*v);
+    }
     if (!heat_source_enabled_set &&
         args.heat_source_min.size() == 3 &&
         args.heat_source_max.size() == 3 &&
@@ -576,6 +585,21 @@ SimulationConfig parse_legacy_file(const std::string& path) {
     }
     if (auto it = kv.find("--heat_source_power_density"); it != kv.end() && !it->second.empty()) {
         args.heat_source_power_density = std::stod(it->second.front());
+    }
+    if (auto it = kv.find("--heat_source_profile"); it != kv.end() && !it->second.empty()) {
+        args.heat_source_profile = to_lower(it->second.front());
+    }
+    if (auto it = kv.find("--heat_source_center"); it != kv.end()) {
+        args.heat_source_center.clear();
+        for (const auto& v : it->second) {
+            args.heat_source_center.push_back(std::stod(v));
+        }
+    }
+    if (auto it = kv.find("--heat_source_sigma"); it != kv.end()) {
+        args.heat_source_sigma.clear();
+        for (const auto& v : it->second) {
+            args.heat_source_sigma.push_back(std::stod(v));
+        }
     }
     if (!heat_source_enabled_set &&
         args.heat_source_min.size() == 3 &&

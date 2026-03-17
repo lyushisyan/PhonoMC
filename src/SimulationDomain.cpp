@@ -880,8 +880,11 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
     out << "material_folder = " << args.material_folder << '\n';
     out << "output_folder = " << args.output_folder << '\n';
     out << "heat_source_enabled = " << (args.heat_source_enabled ? "true" : "false") << '\n';
+    out << "heat_source_profile = " << args.heat_source_profile << '\n';
     out << "heat_source_min = " << join_numbers(args.heat_source_min) << '\n';
     out << "heat_source_max = " << join_numbers(args.heat_source_max) << '\n';
+    out << "heat_source_center = " << join_numbers(args.heat_source_center) << '\n';
+    out << "heat_source_sigma = " << join_numbers(args.heat_source_sigma) << '\n';
     out << "heat_source_power_density = " << args.heat_source_power_density << '\n';
     out << '\n';
 

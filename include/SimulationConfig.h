@@ -28,6 +28,9 @@ struct SimulationConfig {
     std::vector<double> heat_source_min;         // 3 values
     std::vector<double> heat_source_max;         // 3 values
     double heat_source_power_density = 0.0;      // W/m^3
+    std::string heat_source_profile = "uniform"; // uniform | gaussian
+    std::vector<double> heat_source_center;      // optional 3 relative values in [0,1]
+    std::vector<double> heat_source_sigma;       // optional 3 relative values in [0,1]
 };
 
 SimulationConfig load_simulation_config(const std::string& path);

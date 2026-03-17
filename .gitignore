@@ -6,10 +6,11 @@
 build/
 build-mac/
 results/
-cross_100nm_test_threads/
-cross_1000nm_test_threads/
 calculation-cross/
 calculation-inplane/
+test-conv-cross/
+test-conv-inplane/
+test-roughness/
 
 # Python caches
 **/__pycache__/

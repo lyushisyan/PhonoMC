@@ -903,14 +903,26 @@ std::vector<SurfaceMesh::PointQuery> SurfaceMesh::nearest_point(const std::vecto
 bool SurfaceMesh::contains_point_ray_cast(const Vec3& p) const {
     // Ray casting in +x direction.
     const Vec3 dir {1.0, 0.0, 0.0};
-    int hits = 0;
+    std::vector<double> hits_t;
+    hits_t.reserve(faces_.size());
     for (const auto& f : faces_) {
         double t = 0.0;
         if (ray_intersects_triangle(p, dir, vertices_[f[0]], vertices_[f[1]], vertices_[f[2]], t)) {
-            ++hits;
+            hits_t.push_back(t);
         }
     }
-    return (hits % 2) == 1;
+    if (hits_t.empty()) {
+        return false;
+    }
+    std::sort(hits_t.begin(), hits_t.end());
+    int unique_hits = 1;
+    constexpr double tol = 1e-9;
+    for (size_t i = 1; i < hits_t.size(); ++i) {
+        if (std::abs(hits_t[i] - hits_t[i - 1]) > tol) {
+            ++unique_hits;
+        }
+    }
+    return (unique_hits % 2) == 1;
 }
 
 // 函数说明：优先基于四面体分解判断点是否在几何体内。
@@ -935,7 +947,9 @@ bool SurfaceMesh::contains_point(const Vec3& p) const {
             return true;
         }
     }
-    return false;
+    // Qhull-based tetra decomposition can under-cover narrow/concave regions.
+    // Fallback to robust surface ray-cast membership to avoid false negatives.
+    return contains_point_ray_cast(p);
 }
 
 // 函数说明：优先基于四面体分解判断点是否在几何体内。

@@ -637,7 +637,8 @@ void MonteCarloSolver::write_rough_boundary_mode_map(const SimulationDomain& geo
 // 函数说明：解析局部热源区域并生成网格掩码与功率参数。
 void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geometry) {
     local_heat_source_enabled_ = false;
-    local_heat_source_grid_mask_.clear();
+    local_heat_source_grid_weights_.clear();
+    local_heat_source_profile_ = "uniform";
     local_heat_source_power_density_wm3_ = args_.heat_source_power_density;
 
     if (!args_.heat_source_enabled) {
@@ -658,6 +659,17 @@ void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geom
     local_heat_source_max_ = {
         args_.heat_source_max[0], args_.heat_source_max[1], args_.heat_source_max[2]
     };
+    local_heat_source_profile_ = args_.heat_source_profile.empty() ? "uniform" : args_.heat_source_profile;
+    std::transform(
+        local_heat_source_profile_.begin(),
+        local_heat_source_profile_.end(),
+        local_heat_source_profile_.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (local_heat_source_profile_ != "uniform" && local_heat_source_profile_ != "gaussian") {
+        std::cerr << "Warning: unsupported heat_source.profile='" << local_heat_source_profile_
+                  << "', fallback to uniform.\n";
+        local_heat_source_profile_ = "uniform";
+    }
 
     // Heat source coordinates are always interpreted as relative [0, 1] box fractions.
     const auto& bmin = geometry.bounds_min();
@@ -674,9 +686,37 @@ void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geom
         }
     }
 
+    for (int k = 0; k < 3; ++k) {
+        local_heat_source_center_[k] = 0.5 * (local_heat_source_min_[k] + local_heat_source_max_[k]);
+    }
+    if (args_.heat_source_center.size() == 3) {
+        for (int k = 0; k < 3; ++k) {
+            local_heat_source_center_[k] = bmin[k] + args_.heat_source_center[k] * ext[k];
+        }
+    }
+
+    std::array<bool, 3> gaussian_axis_enabled {true, true, true};
+    for (int k = 0; k < 3; ++k) {
+        const double box_w = std::max(0.0, local_heat_source_max_[k] - local_heat_source_min_[k]);
+        const double default_sigma = std::max(box_w * 0.25, ext[k] * 1e-3);
+        local_heat_source_sigma_[k] = std::max(1e-12, default_sigma);
+    }
+    if (args_.heat_source_sigma.size() == 3) {
+        for (int k = 0; k < 3; ++k) {
+            if (std::isfinite(args_.heat_source_sigma[k]) && args_.heat_source_sigma[k] > 0.0) {
+                local_heat_source_sigma_[k] = std::max(1e-12, args_.heat_source_sigma[k] * ext[k]);
+                gaussian_axis_enabled[k] = true;
+            } else {
+                // sigma<=0 means this axis is uniform (no Gaussian variation).
+                gaussian_axis_enabled[k] = false;
+            }
+        }
+    }
+
     const auto& centers = geometry.grid_centers();
-    local_heat_source_grid_mask_.assign(centers.size(), static_cast<std::uint8_t>(0));
+    local_heat_source_grid_weights_.assign(centers.size(), 0.0);
     int selected = 0;
+    double weight_sum = 0.0;
     for (size_t i = 0; i < centers.size(); ++i) {
         const Vec3 c = centers[i];
         const bool inside =
@@ -684,7 +724,19 @@ void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geom
             c[1] >= local_heat_source_min_[1] && c[1] <= local_heat_source_max_[1] &&
             c[2] >= local_heat_source_min_[2] && c[2] <= local_heat_source_max_[2];
         if (inside) {
-            local_heat_source_grid_mask_[i] = static_cast<std::uint8_t>(1);
+            double w = 1.0;
+            if (local_heat_source_profile_ == "gaussian") {
+                double r2 = 0.0;
+                for (int k = 0; k < 3; ++k) {
+                    if (gaussian_axis_enabled[k]) {
+                        const double dx = (c[k] - local_heat_source_center_[k]) / local_heat_source_sigma_[k];
+                        r2 += dx * dx;
+                    }
+                }
+                w = std::exp(-0.5 * r2);
+            }
+            local_heat_source_grid_weights_[i] = w;
+            weight_sum += w;
             ++selected;
         }
     }
@@ -694,8 +746,25 @@ void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geom
         return;
     }
 
+    // Keep average source intensity equal to power_density inside selected region.
+    if (weight_sum > 0.0) {
+        const double scale = static_cast<double>(selected) / weight_sum;
+        for (double& w : local_heat_source_grid_weights_) {
+            if (w > 0.0) {
+                w *= scale;
+            }
+        }
+    } else {
+        for (double& w : local_heat_source_grid_weights_) {
+            if (w > 0.0) {
+                w = 1.0;
+            }
+        }
+    }
+
     local_heat_source_enabled_ = true;
     std::cout << "Local heat source enabled: selected_grids=" << selected
+              << ", profile=" << local_heat_source_profile_
               << ", power_density=" << local_heat_source_power_density_wm3_ << " W/m^3\n";
 }
 
@@ -708,10 +777,11 @@ void MonteCarloSolver::apply_local_heat_source() {
     if (!std::isfinite(delta_e) || std::abs(delta_e) <= 0.0) {
         return;
     }
-    const size_t n = std::min(grid_energy_density_.size(), local_heat_source_grid_mask_.size());
+    const size_t n = std::min(grid_energy_density_.size(), local_heat_source_grid_weights_.size());
     for (size_t i = 0; i < n; ++i) {
-        if (local_heat_source_grid_mask_[i] != 0) {
-            grid_energy_density_[i] += delta_e;
+        const double w = local_heat_source_grid_weights_[i];
+        if (w > 0.0) {
+            grid_energy_density_[i] += delta_e * w;
         }
     }
 }

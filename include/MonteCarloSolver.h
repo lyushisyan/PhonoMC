@@ -139,8 +139,11 @@ private:
     bool local_heat_source_enabled_ = false;
     Vec3 local_heat_source_min_ {0.0, 0.0, 0.0};
     Vec3 local_heat_source_max_ {0.0, 0.0, 0.0};
+    Vec3 local_heat_source_center_ {0.0, 0.0, 0.0};
+    Vec3 local_heat_source_sigma_ {1.0, 1.0, 1.0};
+    std::string local_heat_source_profile_ {"uniform"};
     double local_heat_source_power_density_wm3_ = 0.0;
-    std::vector<std::uint8_t> local_heat_source_grid_mask_;
+    std::vector<double> local_heat_source_grid_weights_;
 
     // Reusable per-thread scratch buffers to avoid per-step allocations in OpenMP paths.
     std::vector<double> energy_tls_buffer_;

@@ -68,7 +68,7 @@ def _resolve_results_dir(input_path: Path, cfg: dict, explicit: str | None) -> P
     return best_dir
 
 
-def _load_convergence(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]:
+def _load_convergence(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, List[str]]:
     if not path.exists():
         raise FileNotFoundError(f"Missing convergence file: {path}")
 
@@ -85,15 +85,25 @@ def _load_convergence(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray, L
     if "heatflux" not in cols:
         raise ValueError("Invalid convergence header: missing 'heatflux'.")
     heatflux_idx = cols.index("heatflux")
-    temp_cols = cols[1:heatflux_idx]
+    temp_idx = [i for i, c in enumerate(cols[:heatflux_idx]) if c.startswith("T_")]
+    if not temp_idx:
+        # Backward compatibility: legacy files may not label T_* explicitly.
+        start_idx = 2 if (len(cols) > 1 and cols[1] == "time_ps") else 1
+        temp_idx = list(range(start_idx, heatflux_idx))
+    temp_cols = [cols[i] for i in temp_idx]
 
     data = np.loadtxt(path, comments="#")
     if data.ndim == 1:
         data = data.reshape(1, -1)
     timesteps = data[:, 0]
-    temps = data[:, 1:heatflux_idx]
+    if "time_ps" in cols:
+        tps_idx = cols.index("time_ps")
+        time_ps = data[:, tps_idx]
+    else:
+        time_ps = np.full_like(timesteps, np.nan, dtype=float)
+    temps = data[:, temp_idx] if temp_idx else np.zeros((data.shape[0], 0), dtype=float)
     rest = data[:, heatflux_idx:]
-    return timesteps, temps, rest, temp_cols
+    return timesteps, time_ps, temps, rest, temp_cols
 
 
 def _triangulate_polygon(indices: Sequence[int]) -> List[Tri]:
@@ -385,6 +395,137 @@ def _infer_block_size(centers: np.ndarray, scale: float) -> np.ndarray:
     return np.maximum(size * float(scale), 1e-15)
 
 
+def _nearest_slice_mask(values: np.ndarray, target: float) -> Tuple[np.ndarray, float]:
+    vals = values.astype(float)
+    if vals.size == 0:
+        raise ValueError("Cannot build slice on empty coordinates.")
+    uniq = np.unique(np.round(vals, 12))
+    nearest = float(uniq[int(np.argmin(np.abs(uniq - target)))])
+    spacing = _infer_axis_spacing(vals)
+    tol = max(1e-12, 0.51 * spacing) if spacing > 0.0 else 1e-12
+    mask = np.abs(vals - nearest) <= tol
+    if not np.any(mask):
+        idx = int(np.argmin(np.abs(vals - nearest)))
+        mask = np.zeros(vals.shape, dtype=bool)
+        mask[idx] = True
+    return mask, nearest
+
+
+def _plot_slice_distribution(
+    points2d: np.ndarray,
+    temps: np.ndarray,
+    out_png: Path,
+    out_csv: Path,
+    title: str,
+    xlabel: str,
+    ylabel: str,
+    cmap_name: str,
+) -> None:
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    csv_data = np.column_stack([points2d, temps])
+    np.savetxt(out_csv, csv_data, delimiter=",", header=f"{xlabel},{ylabel},temp_mean", comments="", fmt="%.10g")
+
+    # Build a regular 2D grid from center coordinates and render as block cloud map
+    # (no visual gaps between neighboring cells).
+    x_centers = np.unique(np.round(points2d[:, 0].astype(float), 12))
+    y_centers = np.unique(np.round(points2d[:, 1].astype(float), 12))
+    x_centers.sort()
+    y_centers.sort()
+    x_to_i = {float(v): i for i, v in enumerate(x_centers)}
+    y_to_i = {float(v): i for i, v in enumerate(y_centers)}
+
+    grid = np.full((y_centers.size, x_centers.size), np.nan, dtype=float)
+    for (xv, yv), tv in zip(points2d, temps):
+        ix = x_to_i[float(round(float(xv), 12))]
+        iy = y_to_i[float(round(float(yv), 12))]
+        grid[iy, ix] = float(tv)
+
+    def _centers_to_edges(c: np.ndarray) -> np.ndarray:
+        if c.size == 1:
+            return np.array([c[0] - 0.5, c[0] + 0.5], dtype=float)
+        mids = 0.5 * (c[:-1] + c[1:])
+        left = c[0] - 0.5 * (c[1] - c[0])
+        right = c[-1] + 0.5 * (c[-1] - c[-2])
+        return np.concatenate(([left], mids, [right]))
+
+    x_edges = _centers_to_edges(x_centers)
+    y_edges = _centers_to_edges(y_centers)
+
+    fig, ax = plt.subplots(figsize=(7.4, 6.0), dpi=220)
+    norm = colors.Normalize(vmin=float(np.nanmin(grid)), vmax=float(np.nanmax(grid)))
+    pm = ax.pcolormesh(
+        x_edges,
+        y_edges,
+        np.ma.masked_invalid(grid),
+        cmap=plt.get_cmap(cmap_name),
+        norm=norm,
+        shading="flat",
+        edgecolors="none",
+        linewidth=0.0,
+        antialiased=False,
+    )
+    cbar = fig.colorbar(pm, ax=ax, shrink=0.86, pad=0.02)
+    cbar.set_label("Temperature (K)")
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    fig.tight_layout()
+    fig.savefig(out_png, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_topk_convergence(
+    timesteps: np.ndarray,
+    time_ps: np.ndarray,
+    temps: np.ndarray,
+    topk: int,
+    out_png: Path,
+    out_csv: Path,
+) -> int:
+    if temps.size == 0:
+        raise ValueError("No temperature data available for top-k convergence plot.")
+    k = max(1, min(int(topk), temps.shape[1]))
+    topk_vals = np.partition(temps, temps.shape[1] - k, axis=1)[:, -k:]
+    topk_vals.sort(axis=1)
+    topk_vals = topk_vals[:, ::-1]  # top1 >= top2 >= ...
+
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+
+    if np.all(np.isfinite(time_ps)):
+        x = time_ps
+        xlabel = "time (ps)"
+    else:
+        x = timesteps
+        xlabel = "timestep"
+
+    fig, ax = plt.subplots(figsize=(8.2, 5.2), dpi=220)
+    for i in range(k):
+        ax.plot(x, topk_vals[:, i], lw=1.5, label=f"Top{i + 1}")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("Temperature (K)")
+    ax.set_title(f"Top-{k} Highest Grid Temperatures vs {xlabel}")
+    ax.grid(alpha=0.25, linewidth=0.6)
+    ax.legend(frameon=False, ncol=1)
+    fig.tight_layout()
+    fig.savefig(out_png, bbox_inches="tight")
+    plt.close(fig)
+
+    cols = [timesteps, time_ps] + [topk_vals[:, i] for i in range(k)]
+    header = ["timestep", "time_ps"] + [f"top{i + 1}" for i in range(k)]
+    np.savetxt(
+        out_csv,
+        np.column_stack(cols),
+        delimiter=",",
+        header=",".join(header),
+        comments="",
+        fmt="%.10g",
+    )
+    return k
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Plot 3D grid temperature from NTMC convergence output.")
     parser.add_argument("--input", required=True, help="Input TOML path")
@@ -395,6 +536,9 @@ def main() -> int:
     parser.add_argument("--cmap", default="turbo", help="Matplotlib colormap")
     parser.add_argument("--block-scale", type=float, default=0.88, help="Block size scale relative to center spacing")
     parser.add_argument("--block-alpha", type=float, default=1.0, help="Block opacity in [0,1]")
+    parser.add_argument("--x-slice-rel", type=float, default=0.5, help="Relative x location for YZ slice (0~1)")
+    parser.add_argument("--y-slice-rel", type=float, default=0.6, help="Relative y location for XZ slice (0~1)")
+    parser.add_argument("--topk", type=int, default=5, help="Number of highest-temperature convergence lines")
     args = parser.parse_args()
 
     input_path = Path(args.input).resolve()
@@ -402,7 +546,7 @@ def main() -> int:
     results_dir = _resolve_results_dir(input_path, cfg, args.results or None)
 
     conv_path = results_dir / "convergence.txt"
-    ts, temps, _rest, temp_cols = _load_convergence(conv_path)
+    ts, tps, temps, _rest, temp_cols = _load_convergence(conv_path)
     if temps.shape[1] == 0:
         raise ValueError("No grid temperature columns found in convergence.txt.")
 
@@ -478,12 +622,72 @@ def main() -> int:
     fig.savefig(out_png, bbox_inches="tight")
     plt.close(fig)
 
+    centers_nm = centers / 10.0
+    xmin, ymin, _zmin = centers_nm.min(axis=0)
+    xmax, ymax, _zmax = centers_nm.max(axis=0)
+
+    x_rel = float(np.clip(args.x_slice_rel, 0.0, 1.0))
+    y_rel = float(np.clip(args.y_slice_rel, 0.0, 1.0))
+    x_target = xmin + x_rel * (xmax - xmin)
+    y_target = ymin + y_rel * (ymax - ymin)
+
+    x_mask, x_plane = _nearest_slice_mask(centers_nm[:, 0], x_target)
+    x_slice_points = centers_nm[x_mask][:, [1, 2]]  # y,z
+    x_slice_t = t_mean[x_mask]
+    out_xslice_png = results_dir / f"temperature_slice_xrel{x_rel:.3f}_yz.png"
+    out_xslice_csv = results_dir / f"temperature_slice_xrel{x_rel:.3f}_yz.csv"
+    _plot_slice_distribution(
+        points2d=x_slice_points,
+        temps=x_slice_t,
+        out_png=out_xslice_png,
+        out_csv=out_xslice_csv,
+        title=f"YZ Slice @ x={x_plane:.3f} nm (x_rel={x_rel:.3f})",
+        xlabel="y_nm",
+        ylabel="z_nm",
+        cmap_name=args.cmap,
+    )
+
+    y_mask, y_plane = _nearest_slice_mask(centers_nm[:, 1], y_target)
+    y_slice_points = centers_nm[y_mask][:, [0, 2]]  # x,z
+    y_slice_t = t_mean[y_mask]
+    out_yslice_png = results_dir / f"temperature_slice_yrel{y_rel:.3f}_xz.png"
+    out_yslice_csv = results_dir / f"temperature_slice_yrel{y_rel:.3f}_xz.csv"
+    _plot_slice_distribution(
+        points2d=y_slice_points,
+        temps=y_slice_t,
+        out_png=out_yslice_png,
+        out_csv=out_yslice_csv,
+        title=f"XZ Slice @ y={y_plane:.3f} nm (y_rel={y_rel:.3f})",
+        xlabel="x_nm",
+        ylabel="z_nm",
+        cmap_name=args.cmap,
+    )
+
+    out_topk_png = results_dir / "temperature_topk_convergence.png"
+    out_topk_csv = results_dir / "temperature_topk_convergence.csv"
+    k_used = _plot_topk_convergence(
+        timesteps=ts,
+        time_ps=tps,
+        temps=temps,
+        topk=args.topk,
+        out_png=out_topk_png,
+        out_csv=out_topk_csv,
+    )
+
     print(f"[ok] results_dir: {results_dir}")
     print(f"[ok] convergence: {conv_path}")
     print(f"[ok] tail rows: {tail_n}")
     print(f"[ok] grids: {len(temp_cols)}")
     print(f"[ok] csv: {out_csv}")
     print(f"[ok] png: {out_png}")
+    print(f"[ok] x-slice png: {out_xslice_png}")
+    print(f"[ok] x-slice csv: {out_xslice_csv}")
+    print(f"[ok] y-slice png: {out_yslice_png}")
+    print(f"[ok] y-slice csv: {out_yslice_csv}")
+    print(f"[ok] x-slice plane: x={x_plane:.6g} nm, points={int(np.count_nonzero(x_mask))}")
+    print(f"[ok] y-slice plane: y={y_plane:.6g} nm, points={int(np.count_nonzero(y_mask))}")
+    print(f"[ok] top{k_used} png: {out_topk_png}")
+    print(f"[ok] top{k_used} csv: {out_topk_csv}")
     return 0
 
 
