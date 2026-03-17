@@ -14,6 +14,7 @@ import numpy as np
 
 import matplotlib.pyplot as plt
 from matplotlib import cm, colors
+import matplotlib.tri as mtri
 
 try:
     import tomllib  # Python 3.11+
@@ -420,14 +421,16 @@ def _plot_slice_distribution(
     xlabel: str,
     ylabel: str,
     cmap_name: str,
+    render_mode: str,
+    smooth_levels: int,
+    smooth_grid_scale: float,
 ) -> None:
     out_png.parent.mkdir(parents=True, exist_ok=True)
     out_csv.parent.mkdir(parents=True, exist_ok=True)
     csv_data = np.column_stack([points2d, temps])
     np.savetxt(out_csv, csv_data, delimiter=",", header=f"{xlabel},{ylabel},temp_mean", comments="", fmt="%.10g")
 
-    # Build a regular 2D grid from center coordinates and render as block cloud map
-    # (no visual gaps between neighboring cells).
+    # Build a regular 2D grid for block mode (no visual gaps between neighboring cells).
     x_centers = np.unique(np.round(points2d[:, 0].astype(float), 12))
     y_centers = np.unique(np.round(points2d[:, 1].astype(float), 12))
     x_centers.sort()
@@ -453,18 +456,56 @@ def _plot_slice_distribution(
     y_edges = _centers_to_edges(y_centers)
 
     fig, ax = plt.subplots(figsize=(7.4, 6.0), dpi=220)
-    norm = colors.Normalize(vmin=float(np.nanmin(grid)), vmax=float(np.nanmax(grid)))
-    pm = ax.pcolormesh(
-        x_edges,
-        y_edges,
-        np.ma.masked_invalid(grid),
-        cmap=plt.get_cmap(cmap_name),
-        norm=norm,
-        shading="flat",
-        edgecolors="none",
-        linewidth=0.0,
-        antialiased=False,
+    vmin = float(np.nanmin(temps))
+    vmax = float(np.nanmax(temps))
+    same_level = abs(vmax - vmin) <= 1e-12
+    norm = colors.Normalize(vmin=vmin, vmax=vmax if not same_level else vmin + 1e-12)
+    cmap = plt.get_cmap(cmap_name)
+
+    smooth_ok = (
+        render_mode == "smooth"
+        and not same_level
+        and points2d.shape[0] >= 3
     )
+    if smooth_ok:
+        triang = mtri.Triangulation(points2d[:, 0], points2d[:, 1])
+        if triang.triangles.size > 0:
+            x_min = float(np.min(points2d[:, 0]))
+            x_max = float(np.max(points2d[:, 0]))
+            y_min = float(np.min(points2d[:, 1]))
+            y_max = float(np.max(points2d[:, 1]))
+            nx = max(80, int(round(x_centers.size * max(1.0, smooth_grid_scale))))
+            ny = max(80, int(round(y_centers.size * max(1.0, smooth_grid_scale))))
+            xi = np.linspace(x_min, x_max, nx)
+            yi = np.linspace(y_min, y_max, ny)
+            Xi, Yi = np.meshgrid(xi, yi)
+            interp = mtri.LinearTriInterpolator(triang, temps.astype(float))
+            Zi = interp(Xi, Yi)
+            levels = max(16, int(smooth_levels))
+            pm = ax.contourf(
+                Xi,
+                Yi,
+                Zi,
+                levels=levels,
+                cmap=cmap,
+                norm=norm,
+                antialiased=True,
+            )
+        else:
+            smooth_ok = False
+    if not smooth_ok:
+        pm = ax.pcolormesh(
+            x_edges,
+            y_edges,
+            np.ma.masked_invalid(grid),
+            cmap=cmap,
+            norm=norm,
+            shading="flat",
+            edgecolors="none",
+            linewidth=0.0,
+            antialiased=False,
+        )
+
     cbar = fig.colorbar(pm, ax=ax, shrink=0.86, pad=0.02)
     cbar.set_label("Temperature (K)")
     ax.set_aspect("equal", adjustable="box")
@@ -536,6 +577,19 @@ def main() -> int:
     parser.add_argument("--cmap", default="turbo", help="Matplotlib colormap")
     parser.add_argument("--block-scale", type=float, default=0.88, help="Block size scale relative to center spacing")
     parser.add_argument("--block-alpha", type=float, default=1.0, help="Block opacity in [0,1]")
+    parser.add_argument(
+        "--slice-render",
+        choices=["smooth", "block"],
+        default="smooth",
+        help="2D slice render mode: smooth interpolation contour or block map",
+    )
+    parser.add_argument("--slice-smooth-levels", type=int, default=96, help="Contour levels for smooth slice rendering")
+    parser.add_argument(
+        "--slice-smooth-grid-scale",
+        type=float,
+        default=3.0,
+        help="Interpolation grid density multiplier relative to unique center counts",
+    )
     parser.add_argument("--x-slice-rel", type=float, default=0.5, help="Relative x location for YZ slice (0~1)")
     parser.add_argument("--y-slice-rel", type=float, default=0.6, help="Relative y location for XZ slice (0~1)")
     parser.add_argument("--topk", type=int, default=5, help="Number of highest-temperature convergence lines")
@@ -645,6 +699,9 @@ def main() -> int:
         xlabel="y_nm",
         ylabel="z_nm",
         cmap_name=args.cmap,
+        render_mode=args.slice_render,
+        smooth_levels=args.slice_smooth_levels,
+        smooth_grid_scale=args.slice_smooth_grid_scale,
     )
 
     y_mask, y_plane = _nearest_slice_mask(centers_nm[:, 1], y_target)
@@ -661,6 +718,9 @@ def main() -> int:
         xlabel="x_nm",
         ylabel="z_nm",
         cmap_name=args.cmap,
+        render_mode=args.slice_render,
+        smooth_levels=args.slice_smooth_levels,
+        smooth_grid_scale=args.slice_smooth_grid_scale,
     )
 
     out_topk_png = results_dir / "temperature_topk_convergence.png"
