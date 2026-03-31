@@ -39,6 +39,7 @@ private:
     static Vec3 random_unit_vector(std::mt19937_64& rng);
     static int nearest_index(const std::vector<double>& arr, double x);
     bool load_hdf5_data(const SimulationConfig& args, int mat_index, std::string* err);
+    bool load_tau_csv_override(const std::string& folder, std::string* err);
     void build_fallback_modes(const SimulationConfig& args);
     int flatten_mode_index(const Mode& mode) const;
     void initialize_temperature_lookup();
@@ -63,6 +64,7 @@ private:
     std::array<int, 3> mesh_grid_size_ {1, 1, 1};
     std::string material_folder_path_;
     std::vector<Vec3> qpoint_fractions_;
+    std::vector<int> qpoint_grid_index_data_;
     std::vector<double> mode_angular_frequency_data_;
     std::vector<double> mode_wavevector_norm_data_;
     std::vector<double> mode_frequency_window_data_;
@@ -73,6 +75,7 @@ private:
     std::vector<int> active_to_flat_index_;
     std::vector<double> temperature_samples_;
     std::vector<double> gamma_table_;  // (nT, nQ, nB) flattened
+    std::vector<double> tau_override_table_ps_;  // (nQ, nB) flattened, <0 means unavailable
     std::vector<double> energy_lookup_table_;
     std::vector<double> temperature_lookup_table_;
 };

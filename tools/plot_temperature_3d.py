@@ -14,7 +14,6 @@ import numpy as np
 
 import matplotlib.pyplot as plt
 from matplotlib import cm, colors
-import matplotlib.tri as mtri
 
 try:
     import tomllib  # Python 3.11+
@@ -236,6 +235,290 @@ def _load_mesh(path: Path) -> Tuple[np.ndarray, np.ndarray]:
     return v, f
 
 
+def _resolve_model_path(model: str, input_path: Path) -> Path:
+    mesh_path = Path(model)
+    if mesh_path.is_absolute():
+        return mesh_path
+    p1 = (Path.cwd() / mesh_path).resolve()
+    if p1.exists():
+        return p1
+    return (input_path.parent / mesh_path).resolve()
+
+
+def _build_box_surface_mesh(cfg: dict) -> Tuple[np.ndarray, np.ndarray]:
+    geo = cfg.get("geometry", {})
+    dims = geo.get("sizes")
+    if not isinstance(dims, list) or len(dims) != 3:
+        raise ValueError("Box model requires `sizes = [Lx, Ly, Lz]`.")
+    lx = float(dims[0]) * 10.0
+    ly = float(dims[1]) * 10.0
+    lz = float(dims[2]) * 10.0
+    vertices = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [lx, 0.0, 0.0],
+            [lx, ly, 0.0],
+            [0.0, ly, 0.0],
+            [0.0, 0.0, lz],
+            [lx, 0.0, lz],
+            [lx, ly, lz],
+            [0.0, ly, lz],
+        ],
+        dtype=float,
+    )
+    # 12 triangles (2 per face)
+    faces = np.array(
+        [
+            [0, 1, 2], [0, 2, 3],  # bottom z=0
+            [4, 6, 5], [4, 7, 6],  # top z=lz
+            [0, 4, 5], [0, 5, 1],  # y=0
+            [1, 5, 6], [1, 6, 2],  # x=lx
+            [2, 6, 7], [2, 7, 3],  # y=ly
+            [3, 7, 4], [3, 4, 0],  # x=0
+        ],
+        dtype=int,
+    )
+    return vertices, faces
+
+
+def _load_surface_mesh_from_config(cfg: dict, input_path: Path) -> Tuple[np.ndarray, np.ndarray]:
+    geo = cfg.get("geometry", {})
+    model = geo.get("model")
+    if not isinstance(model, str):
+        raise ValueError("Missing `[geometry].model` in input TOML.")
+    if model == "box":
+        return _build_box_surface_mesh(cfg)
+
+    mesh_path = _resolve_model_path(model, input_path)
+    vertices, faces = _load_mesh(mesh_path)
+    if mesh_path.suffix.lower() == ".stl":
+        # STL geometry is in nm; solver converts to Angstrom internally.
+        vertices = vertices * 10.0
+    return vertices, faces
+
+
+def _idw_interpolate_knn(
+    sample_points: np.ndarray,
+    sample_values: np.ndarray,
+    query_points: np.ndarray,
+    k: int,
+    power: float,
+) -> np.ndarray:
+    if sample_points.shape[0] == 0:
+        raise ValueError("No sample points for interpolation.")
+    n = query_points.shape[0]
+    out = np.empty(n, dtype=float)
+    k = max(1, min(int(k), sample_points.shape[0]))
+    p = max(0.1, float(power))
+    eps = 1e-24
+    chunk = 256
+    for beg in range(0, n, chunk):
+        end = min(n, beg + chunk)
+        q = query_points[beg:end]  # (cq,3)
+        d2 = np.sum((q[:, None, :] - sample_points[None, :, :]) ** 2, axis=2)  # (cq,ns)
+        idx = np.argpartition(d2, kth=k - 1, axis=1)[:, :k]
+        d2k = np.take_along_axis(d2, idx, axis=1)
+        vk = sample_values[idx]
+        near = np.argmin(d2k, axis=1)
+        exact = d2k[np.arange(d2k.shape[0]), near] <= eps
+        w = 1.0 / np.maximum(d2k, eps) ** (0.5 * p)
+        val = np.sum(w * vk, axis=1) / np.sum(w, axis=1)
+        if np.any(exact):
+            val[exact] = vk[np.arange(vk.shape[0]), near][exact]
+        out[beg:end] = val
+    return out
+
+
+def _geometry_bounds_from_config(cfg: dict, input_path: Path) -> Tuple[np.ndarray, np.ndarray]:
+    geo = cfg.get("geometry", {})
+    model = geo.get("model")
+    if model == "box":
+        dims = geo.get("sizes")
+        if not isinstance(dims, list) or len(dims) != 3:
+            raise ValueError("Box model requires `sizes = [Lx, Ly, Lz]`.")
+        bmin = np.array([0.0, 0.0, 0.0], dtype=float)
+        bmax = np.array([float(dims[0]), float(dims[1]), float(dims[2])], dtype=float) * 10.0
+        return bmin, bmax
+    vertices, _faces = _load_surface_mesh_from_config(cfg, input_path)
+    return vertices.min(axis=0), vertices.max(axis=0)
+
+
+def _compute_heat_source_grid_power_density(
+    cfg: dict,
+    input_path: Path,
+    centers: np.ndarray,
+) -> Tuple[np.ndarray, dict]:
+    out = np.zeros(centers.shape[0], dtype=float)
+    hs = cfg.get("heat_source", {})
+    if not isinstance(hs, dict):
+        return out, {"enabled": False, "reason": "no_heat_source_section"}
+
+    def _vec3(v: object) -> np.ndarray | None:
+        if not isinstance(v, list) or len(v) != 3:
+            return None
+        try:
+            arr = np.array([float(v[0]), float(v[1]), float(v[2])], dtype=float)
+        except Exception:
+            return None
+        if not np.all(np.isfinite(arr)):
+            return None
+        return arr
+
+    enabled = bool(hs.get("enabled", False))
+    min_rel = _vec3(hs.get("min"))
+    max_rel = _vec3(hs.get("max"))
+    try:
+        power_density = float(hs.get("power_density", 0.0))
+    except Exception:
+        power_density = 0.0
+    if (not enabled) and (min_rel is not None) and (max_rel is not None) and abs(power_density) > 0.0:
+        enabled = True
+    if not enabled:
+        return out, {"enabled": False, "reason": "heat_source_disabled"}
+    if min_rel is None or max_rel is None:
+        return out, {"enabled": False, "reason": "heat_source_min_max_invalid"}
+    if not np.isfinite(power_density) or abs(power_density) <= 0.0:
+        return out, {"enabled": False, "reason": "heat_source_power_density_zero"}
+
+    bmin, bmax = _geometry_bounds_from_config(cfg, input_path)
+    ext = bmax - bmin
+    hs_min = bmin + min_rel * ext
+    hs_max = bmin + max_rel * ext
+    hs_lo = np.minimum(hs_min, hs_max)
+    hs_hi = np.maximum(hs_min, hs_max)
+
+    profile = str(hs.get("profile", "uniform")).strip().lower()
+    if profile not in ("uniform", "gaussian"):
+        profile = "uniform"
+
+    center = 0.5 * (hs_lo + hs_hi)
+    center_rel = _vec3(hs.get("center"))
+    if center_rel is not None:
+        center = bmin + center_rel * ext
+
+    box_w = np.maximum(0.0, hs_hi - hs_lo)
+    sigma = np.maximum(np.maximum(box_w * 0.25, ext * 1e-3), 1e-12)
+    gaussian_axis_enabled = np.array([True, True, True], dtype=bool)
+    sigma_rel = _vec3(hs.get("sigma"))
+    if sigma_rel is not None:
+        for k in range(3):
+            sv = float(sigma_rel[k])
+            if np.isfinite(sv) and sv > 0.0:
+                sigma[k] = max(1e-12, sv * ext[k])
+                gaussian_axis_enabled[k] = True
+            else:
+                gaussian_axis_enabled[k] = False
+
+    inside = (
+        (centers[:, 0] >= hs_lo[0]) & (centers[:, 0] <= hs_hi[0]) &
+        (centers[:, 1] >= hs_lo[1]) & (centers[:, 1] <= hs_hi[1]) &
+        (centers[:, 2] >= hs_lo[2]) & (centers[:, 2] <= hs_hi[2])
+    )
+    selected = int(np.count_nonzero(inside))
+    if selected <= 0:
+        return out, {"enabled": False, "reason": "heat_source_selects_no_grid"}
+
+    if profile == "uniform":
+        out[inside] = 1.0
+    else:
+        d = (centers[inside] - center[None, :]) / sigma[None, :]
+        for k in range(3):
+            if not gaussian_axis_enabled[k]:
+                d[:, k] = 0.0
+        r2 = np.sum(d * d, axis=1)
+        out[inside] = np.exp(-0.5 * r2)
+
+    weight_sum = float(np.sum(out))
+    if weight_sum > 0.0:
+        out[out > 0.0] *= float(selected) / weight_sum
+    else:
+        out[inside] = 1.0
+
+    out *= power_density
+    info = {
+        "enabled": True,
+        "profile": profile,
+        "power_density": power_density,
+        "selected_grids": selected,
+    }
+    return out, info
+
+
+def _render_3d_scalar_field(
+    cfg: dict,
+    input_path: Path,
+    centers: np.ndarray,
+    values: np.ndarray,
+    out_png: Path,
+    cmap_name: str,
+    cbar_label: str,
+    title_template: str,
+    view3d_render: str,
+    block_scale: float,
+    block_alpha: float,
+    surface_knn: int,
+    surface_idw_power: float,
+    surface_alpha: float,
+    block_positive_only: bool = False,
+) -> str:
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    fig = plt.figure(figsize=(10, 8), dpi=220)
+    ax = fig.add_subplot(111, projection="3d")
+
+    vmin = float(np.nanmin(values)) if values.size else 0.0
+    vmax = float(np.nanmax(values)) if values.size else 0.0
+    if abs(vmax - vmin) <= 1e-12:
+        vmax = vmin + 1e-12
+    norm = colors.Normalize(vmin=vmin, vmax=vmax)
+    cmap = plt.get_cmap(cmap_name)
+
+    _ = (cfg, input_path, view3d_render, surface_knn, surface_idw_power, surface_alpha)
+    if block_positive_only:
+        mask = values > 0.0
+        if np.any(mask):
+            pcenters = centers[mask]
+            pvals = values[mask]
+        else:
+            pcenters = centers
+            pvals = values
+    else:
+        pcenters = centers
+        pvals = values
+
+    block_size = _infer_block_size(centers, block_scale)
+    dx, dy, dz = float(block_size[0]), float(block_size[1]), float(block_size[2])
+    x0 = pcenters[:, 0] - 0.5 * dx
+    y0 = pcenters[:, 1] - 0.5 * dy
+    z0 = pcenters[:, 2] - 0.5 * dz
+    facecolors = cmap(norm(pvals))
+    facecolors[:, 3] = np.clip(float(block_alpha), 0.0, 1.0)
+
+    ax.bar3d(
+        x0,
+        y0,
+        z0,
+        np.full_like(x0, dx),
+        np.full_like(y0, dy),
+        np.full_like(z0, dz),
+        color=facecolors,
+        shade=False,
+        linewidth=0.0,
+    )
+    _set_equal_axes(ax, centers)
+    render_mode_3d = "block"
+
+    cbar = fig.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax, shrink=0.78, pad=0.08)
+    cbar.set_label(cbar_label)
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_zlabel("Z")
+    ax.set_title(title_template.format(mode=render_mode_3d))
+    fig.tight_layout()
+    fig.savefig(out_png, bbox_inches="tight")
+    plt.close(fig)
+    return render_mode_3d
+
+
 def _ray_intersects_triangle(orig: np.ndarray, direction: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray) -> float | None:
     eps = 1e-12
     e1 = b - a
@@ -312,11 +595,7 @@ def _build_centers_from_grid(cfg: dict, input_path: Path) -> np.ndarray:
                     centers.append(p)
         return np.array(centers, dtype=float)
 
-    mesh_path = Path(model)
-    if not mesh_path.is_absolute():
-        p1 = (Path.cwd() / mesh_path).resolve()
-        p2 = (input_path.parent / mesh_path).resolve()
-        mesh_path = p1 if p1.exists() else p2
+    mesh_path = _resolve_model_path(model, input_path)
     vertices, faces = _load_mesh(mesh_path)
     if mesh_path.suffix.lower() == ".stl":
         # STL geometry is in nm; solver converts to Angstrom internally.
@@ -461,43 +740,33 @@ def _plot_slice_distribution(
     same_level = abs(vmax - vmin) <= 1e-12
     norm = colors.Normalize(vmin=vmin, vmax=vmax if not same_level else vmin + 1e-12)
     cmap = plt.get_cmap(cmap_name)
-
-    smooth_ok = (
-        render_mode == "smooth"
-        and not same_level
-        and points2d.shape[0] >= 3
-    )
+    grid_masked = np.ma.masked_invalid(grid)
+    smooth_ok = (render_mode == "smooth") and (not same_level)
     if smooth_ok:
-        triang = mtri.Triangulation(points2d[:, 0], points2d[:, 1])
-        if triang.triangles.size > 0:
-            x_min = float(np.min(points2d[:, 0]))
-            x_max = float(np.max(points2d[:, 0]))
-            y_min = float(np.min(points2d[:, 1]))
-            y_max = float(np.max(points2d[:, 1]))
-            nx = max(80, int(round(x_centers.size * max(1.0, smooth_grid_scale))))
-            ny = max(80, int(round(y_centers.size * max(1.0, smooth_grid_scale))))
-            xi = np.linspace(x_min, x_max, nx)
-            yi = np.linspace(y_min, y_max, ny)
-            Xi, Yi = np.meshgrid(xi, yi)
-            interp = mtri.LinearTriInterpolator(triang, temps.astype(float))
-            Zi = interp(Xi, Yi)
-            levels = max(16, int(smooth_levels))
+        valid_nodes = int(np.count_nonzero(~grid_masked.mask))
+        smooth_ok = valid_nodes >= 3
+    if smooth_ok:
+        # Smooth contour on regular grid with mask kept: void/outside cells stay unpainted.
+        Xc, Yc = np.meshgrid(x_centers, y_centers)
+        levels = max(16, int(round(float(smooth_levels) * max(0.5, min(2.0, float(smooth_grid_scale) / 3.0)))))
+        try:
             pm = ax.contourf(
-                Xi,
-                Yi,
-                Zi,
+                Xc,
+                Yc,
+                grid_masked,
                 levels=levels,
                 cmap=cmap,
                 norm=norm,
+                corner_mask=False,
                 antialiased=True,
             )
-        else:
+        except Exception:
             smooth_ok = False
     if not smooth_ok:
         pm = ax.pcolormesh(
             x_edges,
             y_edges,
-            np.ma.masked_invalid(grid),
+            grid_masked,
             cmap=cmap,
             norm=norm,
             shading="flat",
@@ -567,6 +836,58 @@ def _plot_topk_convergence(
     return k
 
 
+def _plot_xavg_profile_vs_z(
+    xz_points: np.ndarray,
+    temps: np.ndarray,
+    out_png: Path,
+    out_csv: Path,
+    title: str,
+) -> None:
+    if xz_points.shape[0] == 0 or temps.size == 0:
+        raise ValueError("No slice points available for x-averaged z profile.")
+
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+
+    z = xz_points[:, 1].astype(float)
+    z_key = np.round(z, 12)
+    z_unique = np.unique(z_key)
+    z_unique.sort()
+
+    z_vals = np.empty(z_unique.size, dtype=float)
+    t_mean = np.empty(z_unique.size, dtype=float)
+    nx_count = np.empty(z_unique.size, dtype=int)
+    for i, zk in enumerate(z_unique):
+        mask = z_key == zk
+        z_vals[i] = float(np.mean(z[mask]))
+        t_mean[i] = float(np.mean(temps[mask]))
+        nx_count[i] = int(np.count_nonzero(mask))
+
+    order = np.argsort(z_vals)
+    z_vals = z_vals[order]
+    t_mean = t_mean[order]
+    nx_count = nx_count[order]
+
+    np.savetxt(
+        out_csv,
+        np.column_stack([z_vals, t_mean, nx_count]),
+        delimiter=",",
+        header="z_nm,temp_xavg,n_x_points",
+        comments="",
+        fmt=["%.10g", "%.10g", "%d"],
+    )
+
+    fig, ax = plt.subplots(figsize=(7.4, 5.2), dpi=220)
+    ax.plot(z_vals, t_mean, lw=1.8, marker="o", markersize=2.8)
+    ax.set_xlabel("z_nm")
+    ax.set_ylabel("Temperature (K)")
+    ax.set_title(title)
+    ax.grid(alpha=0.25, linewidth=0.6)
+    fig.tight_layout()
+    fig.savefig(out_png, bbox_inches="tight")
+    plt.close(fig)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Plot 3D grid temperature from EPMC convergence output.")
     parser.add_argument("--input", required=True, help="Input TOML path")
@@ -575,25 +896,36 @@ def main() -> int:
     parser.add_argument("--out", default="", help="Output PNG path")
     parser.add_argument("--csv-out", default="", help="Output CSV path")
     parser.add_argument("--cmap", default="turbo", help="Matplotlib colormap")
+    parser.add_argument(
+        "--view3d-render",
+        choices=["surface", "block"],
+        default="block",
+        help="3D render mode (currently forced to block voxels)",
+    )
+    parser.add_argument("--surface-knn", type=int, default=12, help="KNN count for surface temperature interpolation")
+    parser.add_argument("--surface-idw-power", type=float, default=2.0, help="IDW power for surface interpolation")
+    parser.add_argument("--surface-alpha", type=float, default=1.0, help="Surface opacity in [0,1]")
     parser.add_argument("--block-scale", type=float, default=0.88, help="Block size scale relative to center spacing")
     parser.add_argument("--block-alpha", type=float, default=1.0, help="Block opacity in [0,1]")
     parser.add_argument(
         "--slice-render",
         choices=["smooth", "block"],
         default="smooth",
-        help="2D slice render mode: smooth interpolation contour or block map",
+        help="2D slice render mode: smooth contour or block map",
     )
     parser.add_argument("--slice-smooth-levels", type=int, default=96, help="Contour levels for smooth slice rendering")
     parser.add_argument(
         "--slice-smooth-grid-scale",
         type=float,
         default=3.0,
-        help="Interpolation grid density multiplier relative to unique center counts",
+        help="Smooth contour density scale (multiplies contour levels)",
     )
     parser.add_argument("--x-slice-rel", type=float, default=0.5, help="Relative x location for YZ slice (0~1)")
     parser.add_argument("--y-slice-rel", type=float, default=0.6, help="Relative y location for XZ slice (0~1)")
     parser.add_argument("--topk", type=int, default=5, help="Number of highest-temperature convergence lines")
     args = parser.parse_args()
+    if args.view3d_render != "block":
+        print("[info] --view3d-render=surface is ignored; using block voxel rendering.")
 
     input_path = Path(args.input).resolve()
     cfg = _load_toml(input_path)
@@ -635,46 +967,66 @@ def main() -> int:
         fmt="%.10g",
     )
 
-    fig = plt.figure(figsize=(10, 8), dpi=220)
-    ax = fig.add_subplot(111, projection="3d")
-
-    block_size = _infer_block_size(centers, args.block_scale)
-    dx, dy, dz = float(block_size[0]), float(block_size[1]), float(block_size[2])
-    x0 = centers[:, 0] - 0.5 * dx
-    y0 = centers[:, 1] - 0.5 * dy
-    z0 = centers[:, 2] - 0.5 * dz
-
-    norm = colors.Normalize(vmin=float(np.min(t_mean)), vmax=float(np.max(t_mean)))
-    cmap = plt.get_cmap(args.cmap)
-    facecolors = cmap(norm(t_mean))
-    facecolors[:, 3] = np.clip(float(args.block_alpha), 0.0, 1.0)
-
-    ax.bar3d(
-        x0,
-        y0,
-        z0,
-        np.full_like(x0, dx),
-        np.full_like(y0, dy),
-        np.full_like(z0, dz),
-        color=facecolors,
-        shade=False,
-        linewidth=0.0,
+    render_mode_3d = _render_3d_scalar_field(
+        cfg=cfg,
+        input_path=input_path,
+        centers=centers,
+        values=t_mean,
+        out_png=out_png,
+        cmap_name=args.cmap,
+        cbar_label="Temperature (K)",
+        title_template=(
+            f"3D Temperature ({{mode}}, tail mean, N={tail_n})\n"
+            f"timestep: {int(ts[-tail_n])} ~ {int(ts[-1])}"
+        ),
+        view3d_render=args.view3d_render,
+        block_scale=args.block_scale,
+        block_alpha=args.block_alpha,
+        surface_knn=args.surface_knn,
+        surface_idw_power=args.surface_idw_power,
+        surface_alpha=args.surface_alpha,
     )
 
-    cbar = fig.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax, shrink=0.78, pad=0.08)
-    cbar.set_label("Temperature (K)")
-
-    _set_equal_axes(ax, centers)
-    ax.set_xlabel("X")
-    ax.set_ylabel("Y")
-    ax.set_zlabel("Z")
-    ax.set_title(
-        f"3D Temperature (tail mean, N={tail_n})\n"
-        f"timestep: {int(ts[-tail_n])} ~ {int(ts[-1])}"
-    )
-    fig.tight_layout()
-    fig.savefig(out_png, bbox_inches="tight")
-    plt.close(fig)
+    source_wm3, source_info = _compute_heat_source_grid_power_density(cfg, input_path, centers)
+    out_source_csv = results_dir / "heat_source_distribution.csv"
+    out_source_png = results_dir / "heat_source_distribution_3d.png"
+    source_render_mode = "disabled"
+    if source_info.get("enabled", False):
+        source_csv = np.column_stack([centers, source_wm3])
+        np.savetxt(
+            out_source_csv,
+            source_csv,
+            delimiter=",",
+            header="x,y,z,source_wm3",
+            comments="",
+            fmt="%.10g",
+        )
+        profile = str(source_info.get("profile", "uniform"))
+        selected = int(source_info.get("selected_grids", 0))
+        power0 = float(source_info.get("power_density", 0.0))
+        source_render_mode = _render_3d_scalar_field(
+            cfg=cfg,
+            input_path=input_path,
+            centers=centers,
+            values=source_wm3,
+            out_png=out_source_png,
+            cmap_name=args.cmap,
+            cbar_label="Heat source (W/m^3)",
+            title_template=(
+                f"Heat Source Distribution ({{mode}})\n"
+                f"profile={profile}, base_power_density={power0:.6g} W/m^3, selected_grids={selected}"
+            ),
+            view3d_render=args.view3d_render,
+            block_scale=args.block_scale,
+            block_alpha=args.block_alpha,
+            surface_knn=args.surface_knn,
+            surface_idw_power=args.surface_idw_power,
+            surface_alpha=args.surface_alpha,
+            block_positive_only=True,
+        )
+    else:
+        reason = source_info.get("reason", "unknown")
+        print(f"[info] heat source plot skipped: {reason}")
 
     centers_nm = centers / 10.0
     xmin, ymin, _zmin = centers_nm.min(axis=0)
@@ -722,6 +1074,15 @@ def main() -> int:
         smooth_levels=args.slice_smooth_levels,
         smooth_grid_scale=args.slice_smooth_grid_scale,
     )
+    out_yzprof_png = results_dir / f"temperature_profile_yrel{y_rel:.3f}_xavg_vs_z.png"
+    out_yzprof_csv = results_dir / f"temperature_profile_yrel{y_rel:.3f}_xavg_vs_z.csv"
+    _plot_xavg_profile_vs_z(
+        xz_points=y_slice_points,
+        temps=y_slice_t,
+        out_png=out_yzprof_png,
+        out_csv=out_yzprof_csv,
+        title=f"X-averaged Temperature vs z @ y={y_plane:.3f} nm (y_rel={y_rel:.3f})",
+    )
 
     out_topk_png = results_dir / "temperature_topk_convergence.png"
     out_topk_csv = results_dir / "temperature_topk_convergence.csv"
@@ -738,12 +1099,19 @@ def main() -> int:
     print(f"[ok] convergence: {conv_path}")
     print(f"[ok] tail rows: {tail_n}")
     print(f"[ok] grids: {len(temp_cols)}")
+    print(f"[ok] 3d_render: {render_mode_3d}")
     print(f"[ok] csv: {out_csv}")
     print(f"[ok] png: {out_png}")
+    if source_info.get("enabled", False):
+        print(f"[ok] heat_source_3d_render: {source_render_mode}")
+        print(f"[ok] heat_source csv: {out_source_csv}")
+        print(f"[ok] heat_source png: {out_source_png}")
     print(f"[ok] x-slice png: {out_xslice_png}")
     print(f"[ok] x-slice csv: {out_xslice_csv}")
     print(f"[ok] y-slice png: {out_yslice_png}")
     print(f"[ok] y-slice csv: {out_yslice_csv}")
+    print(f"[ok] y-slice xavg-vs-z png: {out_yzprof_png}")
+    print(f"[ok] y-slice xavg-vs-z csv: {out_yzprof_csv}")
     print(f"[ok] x-slice plane: x={x_plane:.6g} nm, points={int(np.count_nonzero(x_mask))}")
     print(f"[ok] y-slice plane: y={y_plane:.6g} nm, points={int(np.count_nonzero(y_mask))}")
     print(f"[ok] top{k_used} png: {out_topk_png}")

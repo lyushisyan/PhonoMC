@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -13,6 +14,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <unordered_map>
 
 namespace {
 using Mat3 = std::array<std::array<double, 3>, 3>;
@@ -45,6 +47,42 @@ std::string trim(const std::string& s) {
     }
     const auto e = std::find_if_not(s.rbegin(), s.rend(), [](unsigned char c) { return std::isspace(c) != 0; }).base();
     return std::string(b, e);
+}
+
+// 函数说明：按逗号切分 CSV 行，支持基础引号包裹字段。
+std::vector<std::string> split_csv_line(const std::string& line) {
+    std::vector<std::string> out;
+    std::string cur;
+    bool in_quote = false;
+    for (char c : line) {
+        if (c == '"') {
+            in_quote = !in_quote;
+            continue;
+        }
+        if (c == ',' && !in_quote) {
+            out.push_back(trim(cur));
+            cur.clear();
+            continue;
+        }
+        cur.push_back(c);
+    }
+    out.push_back(trim(cur));
+    return out;
+}
+
+// 函数说明：将字符串规整为小写无空白，便于 CSV 列名匹配。
+std::string normalize_token(std::string s) {
+    s = trim(s);
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    s.erase(std::remove_if(s.begin(), s.end(), [](unsigned char c) { return std::isspace(c) != 0; }), s.end());
+    return s;
+}
+
+// 函数说明：将 (grid_index, branch) 组合编码为哈希键。
+std::uint64_t tau_key(int grid_index, int branch_index) {
+    const std::uint64_t hi = static_cast<std::uint64_t>(static_cast<std::uint32_t>(grid_index));
+    const std::uint64_t lo = static_cast<std::uint64_t>(static_cast<std::uint32_t>(branch_index));
+    return (hi << 32) | lo;
 }
 
 // 函数说明：由散射率 gamma 换算模态寿命 tau。
@@ -255,6 +293,149 @@ bool PhononMaterial::load_poscar_lattice_volume(const std::string& folder, std::
     }
 }
 
+// 函数说明：可选加载 tau_fbz_erta.csv，并将 tau_MC(ps)/(2pi) 作为 FBZ 模态寿命覆盖表。
+bool PhononMaterial::load_tau_csv_override(const std::string& folder, std::string* err) {
+    try {
+        namespace fs = std::filesystem;
+        tau_override_table_ps_.clear();
+        const int nmode = qpoint_count_ * branch_count_;
+        if (qpoint_count_ <= 0 || branch_count_ <= 0 || nmode <= 0) {
+            return false;
+        }
+
+        const fs::path csv_path = fs::path(folder) / "tau_fbz_erta.csv";
+        if (!fs::exists(csv_path)) {
+            return false;
+        }
+        std::ifstream in(csv_path);
+        if (!in) {
+            throw std::runtime_error("Failed to open CSV: " + csv_path.string());
+        }
+
+        std::string line;
+        if (!std::getline(in, line)) {
+            throw std::runtime_error("CSV is empty: " + csv_path.string());
+        }
+        const std::vector<std::string> header = split_csv_line(line);
+        if (header.size() < 3) {
+            throw std::runtime_error("CSV header has too few columns: " + csv_path.string());
+        }
+
+        int grid_col = -1;
+        int band_col = -1;
+        int tau_col = -1;
+        for (int i = 0; i < static_cast<int>(header.size()); ++i) {
+            const std::string key = normalize_token(header[static_cast<size_t>(i)]);
+            if (key == "grid_index" || key == "gridpoint" || key == "grid_point") {
+                grid_col = i;
+            } else if (key == "band" || key == "branch") {
+                band_col = i;
+            } else if (key.find("tau_mc") != std::string::npos) {
+                tau_col = i;
+            }
+        }
+        if (grid_col < 0) {
+            grid_col = 0;
+        }
+        if (band_col < 0) {
+            band_col = 1;
+        }
+        if (tau_col < 0) {
+            tau_col = static_cast<int>(header.size()) - 1;
+        }
+        const int need_col = std::max(grid_col, std::max(band_col, tau_col));
+
+        std::unordered_map<std::uint64_t, double> tau_map;
+        tau_map.reserve(static_cast<size_t>(nmode) * 2u);
+        int valid_rows = 0;
+        int bad_rows = 0;
+        while (std::getline(in, line)) {
+            line = trim(line);
+            if (line.empty()) {
+                continue;
+            }
+            const std::vector<std::string> cols = split_csv_line(line);
+            if (static_cast<int>(cols.size()) <= need_col) {
+                ++bad_rows;
+                continue;
+            }
+            try {
+                const int grid_idx = static_cast<int>(std::llround(std::stod(cols[static_cast<size_t>(grid_col)])));
+                const int band_raw = static_cast<int>(std::llround(std::stod(cols[static_cast<size_t>(band_col)])));
+                const double tau_mc_ps = std::stod(cols[static_cast<size_t>(tau_col)]);
+
+                int branch_idx = band_raw;
+                if (band_raw >= 1 && band_raw <= branch_count_) {
+                    branch_idx = band_raw - 1;
+                }
+                if (branch_idx < 0 || branch_idx >= branch_count_) {
+                    ++bad_rows;
+                    continue;
+                }
+
+                double tau_ps = tau_mc_ps / (2.0 * M_PI);
+                if (!std::isfinite(tau_ps) || tau_ps < 0.0) {
+                    tau_ps = 0.0;
+                }
+                tau_map[tau_key(grid_idx, branch_idx)] = tau_ps;
+                ++valid_rows;
+            } catch (const std::exception&) {
+                ++bad_rows;
+            }
+        }
+        if (tau_map.empty()) {
+            throw std::runtime_error("No valid tau rows parsed from CSV: " + csv_path.string());
+        }
+
+        if (qpoint_grid_index_data_.size() != static_cast<size_t>(qpoint_count_)) {
+            qpoint_grid_index_data_.assign(static_cast<size_t>(qpoint_count_), 0);
+            for (int q = 0; q < qpoint_count_; ++q) {
+                qpoint_grid_index_data_[static_cast<size_t>(q)] = q;
+            }
+        }
+
+        tau_override_table_ps_.assign(static_cast<size_t>(nmode), -1.0);
+        int matched_modes = 0;
+        for (int q = 0; q < qpoint_count_; ++q) {
+            const int grid_idx = qpoint_grid_index_data_[static_cast<size_t>(q)];
+            for (int b = 0; b < branch_count_; ++b) {
+                const auto it = tau_map.find(tau_key(grid_idx, b));
+                if (it == tau_map.end()) {
+                    continue;
+                }
+                tau_override_table_ps_[static_cast<size_t>(q * branch_count_ + b)] = std::max(0.0, it->second);
+                ++matched_modes;
+            }
+        }
+        if (matched_modes == 0) {
+            tau_override_table_ps_.clear();
+            throw std::runtime_error(
+                "tau_fbz_erta.csv was found but no (grid_index, band) matched HDF5 grid_point/branch.");
+        }
+
+        std::cout << "PhononMaterial tau override: " << matched_modes << "/" << nmode
+                  << " modes loaded from " << csv_path.string()
+                  << ", tau=tau_MC(ps)/(2pi).\n";
+        if (bad_rows > 0) {
+            std::cerr << "Warning: tau_fbz_erta.csv ignored " << bad_rows << " malformed rows.\n";
+        }
+        if (matched_modes < nmode) {
+            std::cerr << "Warning: tau_fbz_erta.csv only matched " << matched_modes << "/" << nmode
+                      << " modes. Unmatched modes fall back to gamma-based tau.\n";
+        }
+        if (valid_rows == 0) {
+            std::cerr << "Warning: tau_fbz_erta.csv parsed zero valid rows.\n";
+        }
+        return true;
+    } catch (const std::exception& ex) {
+        if (err != nullptr) {
+            *err = ex.what();
+        }
+        tau_override_table_ps_.clear();
+        return false;
+    }
+}
+
 // 函数说明：从 HDF5 加载频率、群速度、散射率等声子数据库。
 bool PhononMaterial::load_hdf5_data(const SimulationConfig& args, int mat_index, std::string* err) {
     try {
@@ -329,6 +510,24 @@ bool PhononMaterial::load_hdf5_data(const SimulationConfig& args, int mat_index,
             const size_t b = static_cast<size_t>(q) * 3u;
             qpoint_fractions_[static_cast<size_t>(q)] = {qp[b + 0], qp[b + 1], qp[b + 2]};
         }
+        qpoint_grid_index_data_.assign(static_cast<size_t>(qpoint_count_), 0);
+        for (int q = 0; q < qpoint_count_; ++q) {
+            qpoint_grid_index_data_[static_cast<size_t>(q)] = q;
+        }
+        try {
+            std::vector<hsize_t> d_grid_point;
+            std::vector<double> grid_point = read_dataset_nd_double(file, "grid_point", d_grid_point);
+            if (d_grid_point.size() == 1 && static_cast<int>(d_grid_point[0]) == qpoint_count_) {
+                for (int q = 0; q < qpoint_count_; ++q) {
+                    qpoint_grid_index_data_[static_cast<size_t>(q)] =
+                        static_cast<int>(std::llround(grid_point[static_cast<size_t>(q)]));
+                }
+            } else {
+                std::cerr << "Warning: grid_point shape mismatch, fallback to sequential q indices.\n";
+            }
+        } catch (const std::exception&) {
+            // Some material packs may not provide grid_point; sequential q index fallback is used.
+        }
 
         std::vector<hsize_t> d_mesh;
         std::vector<double> mesh_data = read_dataset_nd_double(file, "mesh", d_mesh);
@@ -385,6 +584,11 @@ bool PhononMaterial::load_hdf5_data(const SimulationConfig& args, int mat_index,
             static_cast<int>(d_gamma[2]) != branch_count_) {
             throw std::runtime_error("gamma shape mismatch");
         }
+        std::string tau_csv_err;
+        if (!load_tau_csv_override(material_folder_path_, &tau_csv_err) && !tau_csv_err.empty()) {
+            std::cerr << "Warning: failed to load tau_fbz_erta.csv (" << tau_csv_err
+                      << "). Falling back to gamma-based tau.\n";
+        }
 
         active_mode_list_.clear();
         for (int q = 0; q < qpoint_count_; ++q) {
@@ -429,6 +633,11 @@ void PhononMaterial::build_fallback_modes(const SimulationConfig& args) {
     branch_count_ = 3;
     active_mode_count_ = n_q * branch_count_;
     unit_cell_volume_ = 1.0;
+    tau_override_table_ps_.clear();
+    qpoint_grid_index_data_.assign(static_cast<size_t>(qpoint_count_), 0);
+    for (int q = 0; q < qpoint_count_; ++q) {
+        qpoint_grid_index_data_[static_cast<size_t>(q)] = q;
+    }
     mode_angular_frequency_data_.resize(static_cast<size_t>(active_mode_count_));
     mode_wavevector_norm_data_.assign(static_cast<size_t>(active_mode_count_), 1.0);
     mode_frequency_window_data_.assign(static_cast<size_t>(active_mode_count_), 1e-3);
@@ -563,15 +772,21 @@ double PhononMaterial::mode_energy(double temperature, const Mode& mode) const {
 
 // 函数说明：按温度和散射率表计算模态寿命。
 double PhononMaterial::mode_lifetime(double temperature, const Mode& mode) const {
+    const int m = flatten_mode_index(mode);
+    if (m < 0) {
+        return 0.0;
+    }
+    if (!tau_override_table_ps_.empty()) {
+        const size_t idx = static_cast<size_t>(m);
+        if (idx < tau_override_table_ps_.size() && tau_override_table_ps_[idx] >= 0.0) {
+            return tau_override_table_ps_[idx];
+        }
+    }
     if (gamma_table_.empty() || temperature_samples_.empty()) {
         const double T = std::max(1.0, temperature);
         const double w = std::max(1e-9, mode_angular_frequency(mode));
         const double tau = 12.0 / (1.0 + 0.05 * w + 0.002 * (T - 300.0) * (T - 300.0) / 100.0);
         return std::max(0.1, tau);
-    }
-    const int m = flatten_mode_index(mode);
-    if (m < 0) {
-        return 0.0;
     }
     const size_t nmode = static_cast<size_t>(qpoint_count_ * branch_count_);
     if (nmode == 0 || gamma_table_.empty()) {
