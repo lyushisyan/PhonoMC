@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <sstream>
@@ -425,6 +426,78 @@ bool PhononMaterial::load_tau_csv_override(const std::string& folder, std::strin
         }
         if (valid_rows == 0) {
             std::cerr << "Warning: tau_fbz_erta.csv parsed zero valid rows.\n";
+        }
+
+        int max_compare_rows = 20;
+        if (const char* env_rows = std::getenv("EPMC_TAU_COMPARE_ROWS")) {
+            try {
+                max_compare_rows = std::stoi(env_rows);
+            } catch (const std::exception&) {
+                max_compare_rows = 20;
+            }
+        }
+        if (max_compare_rows != 0) {
+            const int tref_idx = temperature_samples_.empty() ? 0 : nearest_index(temperature_samples_, 300.0);
+            const double tref = temperature_samples_.empty() ? 0.0 : temperature_samples_[static_cast<size_t>(tref_idx)];
+            const bool show_all = (max_compare_rows < 0);
+
+            std::cout << "[tau-compare] gamma-vs-csv table"
+                      << " (T_ref=" << std::fixed << std::setprecision(1) << tref << " K)\n";
+            std::cout << std::left
+                      << std::setw(8) << "q_idx"
+                      << std::setw(10) << "grid_idx"
+                      << std::setw(8) << "band"
+                      << std::setw(16) << "tau_gamma(ps)"
+                      << std::setw(16) << "tau_csv(ps)"
+                      << std::setw(14) << "csv/gamma"
+                      << '\n';
+            std::cout << std::string(72, '-') << '\n';
+
+            int printed_rows = 0;
+            for (int q = 0; q < qpoint_count_; ++q) {
+                for (int b = 0; b < branch_count_; ++b) {
+                    const size_t mode_idx = static_cast<size_t>(q * branch_count_ + b);
+                    if (mode_idx >= tau_override_table_ps_.size()) {
+                        continue;
+                    }
+                    const double tau_csv_ps = tau_override_table_ps_[mode_idx];
+                    if (tau_csv_ps < 0.0) {
+                        continue;
+                    }
+
+                    double tau_gamma_ps = 0.0;
+                    if (!temperature_samples_.empty() && !gamma_table_.empty()) {
+                        const size_t gamma_idx = static_cast<size_t>(tref_idx) * static_cast<size_t>(nmode) + mode_idx;
+                        if (gamma_idx < gamma_table_.size()) {
+                            tau_gamma_ps = tau_from_gamma(gamma_table_[gamma_idx]);
+                        }
+                    }
+                    const double ratio = (tau_gamma_ps > 0.0) ? (tau_csv_ps / tau_gamma_ps) : 0.0;
+
+                    std::cout << std::left
+                              << std::setw(8) << q
+                              << std::setw(10) << qpoint_grid_index_data_[static_cast<size_t>(q)]
+                              << std::setw(8) << (b + 1)
+                              << std::setw(16) << std::scientific << std::setprecision(6) << tau_gamma_ps
+                              << std::setw(16) << std::scientific << std::setprecision(6) << tau_csv_ps
+                              << std::setw(14) << std::scientific << std::setprecision(6) << ratio
+                              << '\n';
+
+                    ++printed_rows;
+                    if (!show_all && printed_rows >= max_compare_rows) {
+                        break;
+                    }
+                }
+                if (!show_all && printed_rows >= max_compare_rows) {
+                    break;
+                }
+            }
+            if (!show_all && matched_modes > printed_rows) {
+                std::cout << "[tau-compare] ... " << (matched_modes - printed_rows)
+                          << " matched modes omitted. "
+                          << "Set EPMC_TAU_COMPARE_ROWS=-1 to print all.\n";
+            }
+            std::cout.unsetf(std::ios::floatfield);
         }
         return true;
     } catch (const std::exception& ex) {
