@@ -8,8 +8,12 @@ build-mac/
 results/
 calculation-cross/
 calculation-inplane/
+calculation-finfet/
+calculation-gaafet/
 test-conv-cross/
 test-conv-inplane/
+test-conv-finfet/
+test-conv-gaafet/
 test-roughness/
 
 # Python caches

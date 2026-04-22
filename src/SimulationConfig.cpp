@@ -365,6 +365,18 @@ std::vector<std::string> flatten_boxes(const std::string& mode, const std::vecto
     return out;
 }
 
+// 函数说明：在未显式给出 enabled 时，根据 profile 与关键参数推断是否启用热源。
+bool infer_heat_source_enabled(const SimulationConfig& args) {
+    if (std::abs(args.heat_source_power_density) <= 0.0) {
+        return false;
+    }
+    const std::string profile = to_lower(trim(args.heat_source_profile));
+    if (profile == "gaussian") {
+        return args.heat_source_center.size() == 3 && args.heat_source_sigma.size() == 3;
+    }
+    return args.heat_source_min.size() == 3 && args.heat_source_max.size() == 3;
+}
+
 // 函数说明：解析 TOML 输入并构造仿真配置对象（含单位与默认规则）。
 SimulationConfig parse_toml_file(const std::string& path) {
     SimulationConfig args;
@@ -491,10 +503,7 @@ SimulationConfig parse_toml_file(const std::string& path) {
     if (auto v = get_first_value(kv, {"heat_source.sigma"}); v.has_value()) {
         args.heat_source_sigma = parse_number_array(*v);
     }
-    if (!heat_source_enabled_set &&
-        args.heat_source_min.size() == 3 &&
-        args.heat_source_max.size() == 3 &&
-        std::abs(args.heat_source_power_density) > 0.0) {
+    if (!heat_source_enabled_set && infer_heat_source_enabled(args)) {
         args.heat_source_enabled = true;
     }
 
@@ -617,10 +626,7 @@ SimulationConfig parse_legacy_file(const std::string& path) {
             args.heat_source_sigma.push_back(std::stod(v));
         }
     }
-    if (!heat_source_enabled_set &&
-        args.heat_source_min.size() == 3 &&
-        args.heat_source_max.size() == 3 &&
-        std::abs(args.heat_source_power_density) > 0.0) {
+    if (!heat_source_enabled_set && infer_heat_source_enabled(args)) {
         args.heat_source_enabled = true;
     }
 

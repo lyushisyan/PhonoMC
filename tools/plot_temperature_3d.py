@@ -364,81 +364,79 @@ def _compute_heat_source_grid_power_density(
             return None
         return arr
 
+    profile = str(hs.get("profile", "uniform")).strip().lower()
+    if profile not in ("uniform", "gaussian"):
+        profile = "uniform"
+
     enabled = bool(hs.get("enabled", False))
     min_rel = _vec3(hs.get("min"))
     max_rel = _vec3(hs.get("max"))
+    center_rel = _vec3(hs.get("center"))
+    sigma_rel = _vec3(hs.get("sigma"))
     try:
         power_density = float(hs.get("power_density", 0.0))
     except Exception:
         power_density = 0.0
-    if (not enabled) and (min_rel is not None) and (max_rel is not None) and abs(power_density) > 0.0:
-        enabled = True
+    if not enabled and abs(power_density) > 0.0:
+        if profile == "uniform":
+            enabled = (min_rel is not None) and (max_rel is not None)
+        else:
+            enabled = (center_rel is not None) and (sigma_rel is not None)
     if not enabled:
         return out, {"enabled": False, "reason": "heat_source_disabled"}
-    if min_rel is None or max_rel is None:
-        return out, {"enabled": False, "reason": "heat_source_min_max_invalid"}
     if not np.isfinite(power_density) or abs(power_density) <= 0.0:
         return out, {"enabled": False, "reason": "heat_source_power_density_zero"}
 
     bmin, bmax = _geometry_bounds_from_config(cfg, input_path)
     ext = bmax - bmin
-    hs_min = bmin + min_rel * ext
-    hs_max = bmin + max_rel * ext
-    hs_lo = np.minimum(hs_min, hs_max)
-    hs_hi = np.maximum(hs_min, hs_max)
 
-    profile = str(hs.get("profile", "uniform")).strip().lower()
-    if profile not in ("uniform", "gaussian"):
-        profile = "uniform"
-
-    center = 0.5 * (hs_lo + hs_hi)
-    center_rel = _vec3(hs.get("center"))
-    if center_rel is not None:
+    power_density_role = "region_value"
+    if profile == "uniform":
+        if min_rel is None or max_rel is None:
+            return out, {"enabled": False, "reason": "heat_source_min_max_invalid"}
+        hs_min = bmin + min_rel * ext
+        hs_max = bmin + max_rel * ext
+        hs_lo = np.minimum(hs_min, hs_max)
+        hs_hi = np.maximum(hs_min, hs_max)
+        inside = (
+            (centers[:, 0] >= hs_lo[0]) & (centers[:, 0] <= hs_hi[0]) &
+            (centers[:, 1] >= hs_lo[1]) & (centers[:, 1] <= hs_hi[1]) &
+            (centers[:, 2] >= hs_lo[2]) & (centers[:, 2] <= hs_hi[2])
+        )
+        selected = int(np.count_nonzero(inside))
+        if selected <= 0:
+            return out, {"enabled": False, "reason": "heat_source_selects_no_grid"}
+        out[inside] = power_density
+    else:
+        if center_rel is None or sigma_rel is None:
+            return out, {"enabled": False, "reason": "heat_source_center_sigma_invalid"}
+        if centers.shape[0] <= 0:
+            return out, {"enabled": False, "reason": "heat_source_selects_no_grid"}
         center = bmin + center_rel * ext
-
-    box_w = np.maximum(0.0, hs_hi - hs_lo)
-    sigma = np.maximum(np.maximum(box_w * 0.25, ext * 1e-3), 1e-12)
-    gaussian_axis_enabled = np.array([True, True, True], dtype=bool)
-    sigma_rel = _vec3(hs.get("sigma"))
-    if sigma_rel is not None:
+        sigma = np.ones(3, dtype=float)
+        gaussian_axis_enabled = np.array([True, True, True], dtype=bool)
         for k in range(3):
             sv = float(sigma_rel[k])
             if np.isfinite(sv) and sv > 0.0:
                 sigma[k] = max(1e-12, sv * ext[k])
                 gaussian_axis_enabled[k] = True
             else:
+                sigma[k] = 1.0
                 gaussian_axis_enabled[k] = False
-
-    inside = (
-        (centers[:, 0] >= hs_lo[0]) & (centers[:, 0] <= hs_hi[0]) &
-        (centers[:, 1] >= hs_lo[1]) & (centers[:, 1] <= hs_hi[1]) &
-        (centers[:, 2] >= hs_lo[2]) & (centers[:, 2] <= hs_hi[2])
-    )
-    selected = int(np.count_nonzero(inside))
-    if selected <= 0:
-        return out, {"enabled": False, "reason": "heat_source_selects_no_grid"}
-
-    if profile == "uniform":
-        out[inside] = 1.0
-    else:
-        d = (centers[inside] - center[None, :]) / sigma[None, :]
+        d = (centers - center[None, :]) / sigma[None, :]
         for k in range(3):
             if not gaussian_axis_enabled[k]:
                 d[:, k] = 0.0
         r2 = np.sum(d * d, axis=1)
-        out[inside] = np.exp(-0.5 * r2)
+        out = power_density * np.exp(-0.5 * r2)
+        selected = int(centers.shape[0])
+        power_density_role = "peak_value"
 
-    weight_sum = float(np.sum(out))
-    if weight_sum > 0.0:
-        out[out > 0.0] *= float(selected) / weight_sum
-    else:
-        out[inside] = 1.0
-
-    out *= power_density
     info = {
         "enabled": True,
         "profile": profile,
         "power_density": power_density,
+        "power_density_role": power_density_role,
         "selected_grids": selected,
     }
     return out, info
@@ -1004,6 +1002,7 @@ def main() -> int:
         profile = str(source_info.get("profile", "uniform"))
         selected = int(source_info.get("selected_grids", 0))
         power0 = float(source_info.get("power_density", 0.0))
+        power_role = str(source_info.get("power_density_role", "value"))
         source_render_mode = _render_3d_scalar_field(
             cfg=cfg,
             input_path=input_path,
@@ -1014,7 +1013,7 @@ def main() -> int:
             cbar_label="Heat source (W/m^3)",
             title_template=(
                 f"Heat Source Distribution ({{mode}})\n"
-                f"profile={profile}, base_power_density={power0:.6g} W/m^3, selected_grids={selected}"
+                f"profile={profile}, power_density({power_role})={power0:.6g} W/m^3, selected_grids={selected}"
             ),
             view3d_render=args.view3d_render,
             block_scale=args.block_scale,

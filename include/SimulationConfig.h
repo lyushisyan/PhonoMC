@@ -27,12 +27,12 @@ struct SimulationConfig {
 
     // Optional local volumetric heat source.
     bool heat_source_enabled = false;
-    std::vector<double> heat_source_min;         // 3 values
-    std::vector<double> heat_source_max;         // 3 values
-    double heat_source_power_density = 0.0;      // W/m^3
+    std::vector<double> heat_source_min;         // uniform profile: 3 relative values in [0,1]
+    std::vector<double> heat_source_max;         // uniform profile: 3 relative values in [0,1]
+    double heat_source_power_density = 0.0;      // W/m^3 (uniform: region value, gaussian: peak value)
     std::string heat_source_profile = "uniform"; // uniform | gaussian
-    std::vector<double> heat_source_center;      // optional 3 relative values in [0,1]
-    std::vector<double> heat_source_sigma;       // optional 3 relative values in [0,1]
+    std::vector<double> heat_source_center;      // gaussian profile: 3 relative values in [0,1]
+    std::vector<double> heat_source_sigma;       // gaussian profile: 3 relative values in [0,1], <=0 => uniform axis
 };
 
 SimulationConfig load_simulation_config(const std::string& path);

@@ -648,21 +648,10 @@ void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geom
     if (!args_.heat_source_enabled) {
         return;
     }
-    if (args_.heat_source_min.size() != 3 || args_.heat_source_max.size() != 3) {
-        std::cerr << "Warning: heat source enabled but min/max are not 3D vectors. Ignoring local heat source.\n";
-        return;
-    }
     if (std::abs(local_heat_source_power_density_wm3_) <= 0.0) {
         std::cerr << "Warning: heat source enabled but power_density is zero. Ignoring local heat source.\n";
         return;
     }
-
-    local_heat_source_min_ = {
-        args_.heat_source_min[0], args_.heat_source_min[1], args_.heat_source_min[2]
-    };
-    local_heat_source_max_ = {
-        args_.heat_source_max[0], args_.heat_source_max[1], args_.heat_source_max[2]
-    };
     local_heat_source_profile_ = args_.heat_source_profile.empty() ? "uniform" : args_.heat_source_profile;
     std::transform(
         local_heat_source_profile_.begin(),
@@ -679,97 +668,88 @@ void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geom
     const auto& bmin = geometry.bounds_min();
     const auto& bmax = geometry.bounds_max();
     const Vec3 ext {bmax[0] - bmin[0], bmax[1] - bmin[1], bmax[2] - bmin[2]};
-    for (int k = 0; k < 3; ++k) {
-        local_heat_source_min_[k] = bmin[k] + local_heat_source_min_[k] * ext[k];
-        local_heat_source_max_[k] = bmin[k] + local_heat_source_max_[k] * ext[k];
-    }
-
-    for (int k = 0; k < 3; ++k) {
-        if (local_heat_source_min_[k] > local_heat_source_max_[k]) {
-            std::swap(local_heat_source_min_[k], local_heat_source_max_[k]);
-        }
-    }
-
-    for (int k = 0; k < 3; ++k) {
-        local_heat_source_center_[k] = 0.5 * (local_heat_source_min_[k] + local_heat_source_max_[k]);
-    }
-    if (args_.heat_source_center.size() == 3) {
-        for (int k = 0; k < 3; ++k) {
-            local_heat_source_center_[k] = bmin[k] + args_.heat_source_center[k] * ext[k];
-        }
-    }
-
-    std::array<bool, 3> gaussian_axis_enabled {true, true, true};
-    for (int k = 0; k < 3; ++k) {
-        const double box_w = std::max(0.0, local_heat_source_max_[k] - local_heat_source_min_[k]);
-        const double default_sigma = std::max(box_w * 0.25, ext[k] * 1e-3);
-        local_heat_source_sigma_[k] = std::max(1e-12, default_sigma);
-    }
-    if (args_.heat_source_sigma.size() == 3) {
-        for (int k = 0; k < 3; ++k) {
-            if (std::isfinite(args_.heat_source_sigma[k]) && args_.heat_source_sigma[k] > 0.0) {
-                local_heat_source_sigma_[k] = std::max(1e-12, args_.heat_source_sigma[k] * ext[k]);
-                gaussian_axis_enabled[k] = true;
-            } else {
-                // sigma<=0 means this axis is uniform (no Gaussian variation).
-                gaussian_axis_enabled[k] = false;
-            }
-        }
-    }
 
     const auto& centers = geometry.grid_centers();
     local_heat_source_grid_weights_.assign(centers.size(), 0.0);
     int selected = 0;
-    double weight_sum = 0.0;
-    for (size_t i = 0; i < centers.size(); ++i) {
-        const Vec3 c = centers[i];
-        const bool inside =
-            c[0] >= local_heat_source_min_[0] && c[0] <= local_heat_source_max_[0] &&
-            c[1] >= local_heat_source_min_[1] && c[1] <= local_heat_source_max_[1] &&
-            c[2] >= local_heat_source_min_[2] && c[2] <= local_heat_source_max_[2];
-        if (inside) {
-            double w = 1.0;
-            if (local_heat_source_profile_ == "gaussian") {
-                double r2 = 0.0;
-                for (int k = 0; k < 3; ++k) {
-                    if (gaussian_axis_enabled[k]) {
-                        const double dx = (c[k] - local_heat_source_center_[k]) / local_heat_source_sigma_[k];
-                        r2 += dx * dx;
-                    }
-                }
-                w = std::exp(-0.5 * r2);
-            }
-            local_heat_source_grid_weights_[i] = w;
-            weight_sum += w;
-            ++selected;
+
+    if (local_heat_source_profile_ == "uniform") {
+        if (args_.heat_source_min.size() != 3 || args_.heat_source_max.size() != 3) {
+            std::cerr << "Warning: uniform heat source requires min/max 3D vectors. Ignoring local heat source.\n";
+            return;
         }
-    }
-
-    if (selected == 0) {
-        std::cerr << "Warning: heat source region does not include any grid center. Ignoring local heat source.\n";
-        return;
-    }
-
-    // Keep average source intensity equal to power_density inside selected region.
-    if (weight_sum > 0.0) {
-        const double scale = static_cast<double>(selected) / weight_sum;
-        for (double& w : local_heat_source_grid_weights_) {
-            if (w > 0.0) {
-                w *= scale;
+        Vec3 hs_min = {
+            args_.heat_source_min[0], args_.heat_source_min[1], args_.heat_source_min[2]
+        };
+        Vec3 hs_max = {
+            args_.heat_source_max[0], args_.heat_source_max[1], args_.heat_source_max[2]
+        };
+        for (int k = 0; k < 3; ++k) {
+            hs_min[k] = bmin[k] + hs_min[k] * ext[k];
+            hs_max[k] = bmin[k] + hs_max[k] * ext[k];
+            if (hs_min[k] > hs_max[k]) {
+                std::swap(hs_min[k], hs_max[k]);
             }
+        }
+        for (size_t i = 0; i < centers.size(); ++i) {
+            const Vec3 c = centers[i];
+            const bool inside =
+                c[0] >= hs_min[0] && c[0] <= hs_max[0] &&
+                c[1] >= hs_min[1] && c[1] <= hs_max[1] &&
+                c[2] >= hs_min[2] && c[2] <= hs_max[2];
+            if (inside) {
+                local_heat_source_grid_weights_[i] = 1.0;
+                ++selected;
+            }
+        }
+        if (selected == 0) {
+            std::cerr << "Warning: uniform heat source region does not include any grid center. Ignoring local heat source.\n";
+            return;
         }
     } else {
-        for (double& w : local_heat_source_grid_weights_) {
-            if (w > 0.0) {
-                w = 1.0;
+        if (args_.heat_source_center.size() != 3 || args_.heat_source_sigma.size() != 3) {
+            std::cerr << "Warning: gaussian heat source requires center/sigma 3D vectors. Ignoring local heat source.\n";
+            return;
+        }
+        Vec3 hs_center {0.0, 0.0, 0.0};
+        Vec3 hs_sigma {1.0, 1.0, 1.0};
+        for (int k = 0; k < 3; ++k) {
+            hs_center[k] = bmin[k] + args_.heat_source_center[k] * ext[k];
+        }
+        std::array<bool, 3> gaussian_axis_enabled {true, true, true};
+        for (int k = 0; k < 3; ++k) {
+            if (std::isfinite(args_.heat_source_sigma[k]) && args_.heat_source_sigma[k] > 0.0) {
+                hs_sigma[k] = std::max(1e-12, args_.heat_source_sigma[k] * ext[k]);
+                gaussian_axis_enabled[k] = true;
+            } else {
+                // sigma<=0 means this axis is uniform (no Gaussian variation).
+                hs_sigma[k] = 1.0;
+                gaussian_axis_enabled[k] = false;
             }
+        }
+        for (size_t i = 0; i < centers.size(); ++i) {
+            const Vec3 c = centers[i];
+            double r2 = 0.0;
+            for (int k = 0; k < 3; ++k) {
+                if (gaussian_axis_enabled[k]) {
+                    const double dx = (c[k] - hs_center[k]) / hs_sigma[k];
+                    r2 += dx * dx;
+                }
+            }
+            local_heat_source_grid_weights_[i] = std::exp(-0.5 * r2);
+            ++selected;
+        }
+        if (selected == 0) {
+            std::cerr << "Warning: gaussian heat source cannot be applied because grid is empty.\n";
+            return;
         }
     }
 
     local_heat_source_enabled_ = true;
     std::cout << "Local heat source enabled: selected_grids=" << selected
               << ", profile=" << local_heat_source_profile_
-              << ", power_density=" << local_heat_source_power_density_wm3_ << " W/m^3\n";
+              << ", power_density=" << local_heat_source_power_density_wm3_ << " W/m^3"
+              << (local_heat_source_profile_ == "gaussian" ? " (peak)" : " (uniform value)") << '\n';
 }
 
 // 函数说明：在每步能量更新后向热源区域叠加体热源能量。

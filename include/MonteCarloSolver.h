@@ -137,10 +137,6 @@ private:
     std::vector<RoughFacetData> rough_boundary_data_;
 
     bool local_heat_source_enabled_ = false;
-    Vec3 local_heat_source_min_ {0.0, 0.0, 0.0};
-    Vec3 local_heat_source_max_ {0.0, 0.0, 0.0};
-    Vec3 local_heat_source_center_ {0.0, 0.0, 0.0};
-    Vec3 local_heat_source_sigma_ {1.0, 1.0, 1.0};
     std::string local_heat_source_profile_ {"uniform"};
     double local_heat_source_power_density_wm3_ = 0.0;
     std::vector<double> local_heat_source_grid_weights_;
