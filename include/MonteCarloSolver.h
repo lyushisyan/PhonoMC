@@ -33,7 +33,6 @@ private:
     void initialize_reservoir_injection(const SimulationDomain& geometry, const PhononMaterial& phonon);
     void initialize_rough_boundary_scattering(const SimulationDomain& geometry, const PhononMaterial& phonon);
     void initialize_local_heat_source(const SimulationDomain& geometry);
-    void apply_local_heat_source();
     std::mt19937_64& thread_rng() const;
     int sample_diffuse_active_mode(int rough_idx, int in_ai, int* source = nullptr) const;
     std::array<int, 2> select_reflected_mode(
@@ -51,6 +50,7 @@ private:
     int remove_absorbed_particles();
     int recover_escaped_particles(const SimulationDomain& geometry);
     std::vector<std::pair<int, double>> inject_particles_from_reservoirs(const SimulationDomain& geometry, const PhononMaterial& phonon);
+    std::vector<std::pair<int, double>> inject_particles_from_local_heat_source(const SimulationDomain& geometry, const PhononMaterial& phonon);
     void advance_particle(const SimulationDomain& geometry, const PhononMaterial& phonon, int i, double dt_remaining);
     void update_particle_temperatures(const SimulationDomain& geometry, const PhononMaterial& phonon);
     void update_grid_energy_density(const SimulationDomain& geometry, const PhononMaterial& phonon);
@@ -178,10 +178,14 @@ private:
     // Per-step reservoir bookkeeping diagnostics.
     long long step_absorbed_particles_ = 0;
     long long step_injected_particles_ = 0;
+    long long step_heat_source_injected_particles_ = 0;
+    double step_heat_source_injected_energy_ev_ = 0.0;
     long long step_recovered_particles_ = 0;
     long long step_net_particles_ = 0;  // injected - absorbed
     long long total_absorbed_particles_ = 0;
     long long total_injected_particles_ = 0;
+    long long total_heat_source_injected_particles_ = 0;
+    double total_heat_source_injected_energy_ev_ = 0.0;
     long long total_recovered_particles_ = 0;
     long long total_net_particles_ = 0;  // cumulative(injected - absorbed)
 };

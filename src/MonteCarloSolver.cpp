@@ -648,8 +648,9 @@ void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geom
     if (!args_.heat_source_enabled) {
         return;
     }
-    if (std::abs(local_heat_source_power_density_wm3_) <= 0.0) {
-        std::cerr << "Warning: heat source enabled but power_density is zero. Ignoring local heat source.\n";
+    if (!(local_heat_source_power_density_wm3_ > 0.0)) {
+        std::cerr << "Warning: heat source enabled but power_density is non-positive. "
+                  << "Only positive volumetric source is supported for particle injection. Ignoring local heat source.\n";
         return;
     }
     local_heat_source_profile_ = args_.heat_source_profile.empty() ? "uniform" : args_.heat_source_profile;
@@ -752,22 +753,107 @@ void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geom
               << (local_heat_source_profile_ == "gaussian" ? " (peak)" : " (uniform value)") << '\n';
 }
 
-// 函数说明：在每步能量更新后向热源区域叠加体热源能量。
-void MonteCarloSolver::apply_local_heat_source() {
+// 函数说明：将局部体热源功率转化为带正偏离能量的新粒子注入。
+std::vector<std::pair<int, double>> MonteCarloSolver::inject_particles_from_local_heat_source(
+    const SimulationDomain& geometry,
+    const PhononMaterial& phonon) {
+    std::vector<std::pair<int, double>> inserted;
+    step_heat_source_injected_energy_ev_ = 0.0;
     if (!local_heat_source_enabled_) {
-        return;
+        return inserted;
     }
-    const double delta_e = local_heat_source_power_density_wm3_ * wm3_to_evpsa3_ * time_step_;
-    if (!std::isfinite(delta_e) || std::abs(delta_e) <= 0.0) {
-        return;
+    const double power_density_evpsa3 = local_heat_source_power_density_wm3_ * wm3_to_evpsa3_;
+    if (!std::isfinite(power_density_evpsa3) || power_density_evpsa3 <= 0.0) {
+        return inserted;
     }
-    const size_t n = std::min(grid_energy_density_.size(), local_heat_source_grid_weights_.size());
-    for (size_t i = 0; i < n; ++i) {
-        const double w = local_heat_source_grid_weights_[i];
-        if (w > 0.0) {
-            grid_energy_density_[i] += delta_e * w;
+
+    const auto& centers = geometry.grid_centers();
+    const auto& volumes = geometry.grid_volumes();
+    const size_t n = std::min({local_heat_source_grid_weights_.size(), centers.size(), volumes.size()});
+    if (n == 0) {
+        return inserted;
+    }
+
+    auto& rng = thread_rng();
+    std::uniform_real_distribution<double> U01(0.0, 1.0);
+    constexpr double kHbarEvPs = 6.582119569e-4;
+    constexpr double kMinOmega = 1e-9;
+    constexpr double kMinHwEv = 1e-10;
+    constexpr double kMinSpeed = 1e-12;
+    constexpr double kTargetDnPerParticle = 0.5;
+    constexpr int kMaxParticlesPerGridPerStep = 200000;
+
+    for (size_t sv = 0; sv < n; ++sv) {
+        const double w = local_heat_source_grid_weights_[sv];
+        if (!std::isfinite(w) || w <= 0.0) {
+            continue;
+        }
+        const double vol = volumes[sv];
+        if (!std::isfinite(vol) || vol <= 0.0) {
+            continue;
+        }
+        const double source_energy = power_density_evpsa3 * time_step_ * vol * w;
+        if (!std::isfinite(source_energy) || source_energy <= 0.0) {
+            continue;
+        }
+
+        const double Tlocal = (sv < grid_temperatures_.size() && std::isfinite(grid_temperatures_[sv]) && grid_temperatures_[sv] > 0.0)
+            ? grid_temperatures_[sv]
+            : 300.0;
+
+        const auto ref_mode = phonon.sample_active_mode(rng);
+        const double omega_ref = std::max(kMinOmega, phonon.mode_angular_frequency(ref_mode));
+        const double hw_ref = std::max(kMinHwEv, kHbarEvPs * omega_ref);
+        int n_emit = static_cast<int>(std::ceil(source_energy / (hw_ref * kTargetDnPerParticle)));
+        n_emit = std::clamp(n_emit, 1, kMaxParticlesPerGridPerStep);
+        const double packet_energy = source_energy / static_cast<double>(n_emit);
+
+        for (int k = 0; k < n_emit; ++k) {
+            auto mode = phonon.sample_active_mode(rng);
+            Vec3 gv = phonon.mode_group_velocity(mode);
+            double speed = norm(gv);
+            int resample_guard = 0;
+            while ((!std::isfinite(speed) || speed <= kMinSpeed) && resample_guard < 8) {
+                mode = phonon.sample_active_mode(rng);
+                gv = phonon.mode_group_velocity(mode);
+                speed = norm(gv);
+                ++resample_guard;
+            }
+            if (!std::isfinite(speed) || speed <= kMinSpeed) {
+                gv = mul(random_unit_vector(), 1e-9);
+                speed = 1e-9;
+            }
+
+            const double omega = std::max(kMinOmega, phonon.mode_angular_frequency(mode));
+            const double hw = std::max(kMinHwEv, kHbarEvPs * omega);
+            const double dn = packet_energy / hw;
+            if (!std::isfinite(dn) || dn <= 0.0) {
+                continue;
+            }
+            const double n_eq = phonon.bose_occupation(Tlocal, mode);
+            const double n_src = n_eq + dn;  // Positive deviational occupation by construction.
+
+            const Vec3 pos = add(centers[sv], mul(gv, push_eps_ / std::max(speed, kMinSpeed)));
+            const int new_idx = particle_count_;
+            particle_modes_.push_back(mode);
+            particle_positions_.push_back(pos);
+            particle_velocities_.push_back(gv);
+            cached_collision_positions_.push_back(pos);
+            timesteps_to_collision_.push_back(std::numeric_limits<double>::infinity());
+            particle_temperatures_.push_back(Tlocal);
+            particle_omega_.push_back(omega);
+            particle_occupation_.push_back(n_src);
+            particle_energies_.push_back(hw * dn);
+            particle_grid_id_.push_back(nearest_grid_index(geometry, pos));
+            cached_collision_facets_.push_back(-1);
+            cached_collision_conditions_.push_back('R');
+            particle_alive_flags_.push_back(static_cast<std::uint8_t>(1));
+            ++particle_count_;
+            inserted.push_back({new_idx, time_step_ * U01(rng)});
+            step_heat_source_injected_energy_ev_ += hw * dn;
         }
     }
+    return inserted;
 }
 
 // 函数说明：在粗糙边界条件下采样漫反射后的活跃模态索引。
@@ -1316,7 +1402,6 @@ void MonteCarloSolver::update_particle_temperatures(const SimulationDomain& geom
 #endif
 
     update_grid_energy_density(geometry, phonon);
-    apply_local_heat_source();
 
 #ifdef _OPENMP
 #pragma omp parallel for
@@ -1557,7 +1642,7 @@ void MonteCarloSolver::write_convergence_header() {
     for (int i = 0; i < ngrid; ++i) {
         out << " T_" << (i + 1);
     }
-    out << " heatflux kappa_fit kappa_end absorbed injected recovered net\n";
+    out << " heatflux kappa_fit kappa_end absorbed injected recovered net hs_injected hs_injected_energy_ev\n";
 }
 
 // 函数说明：追加当前时间步温度、热流与导热率统计结果。
@@ -1572,7 +1657,8 @@ void MonteCarloSolver::append_convergence_row() const {
         out << " " << tsv;
     }
     out << " " << average_heat_flux_along_axis_ << " " << thermal_conductivity_fit_ << " " << thermal_conductivity_endpoints_
-        << " " << step_absorbed_particles_ << " " << step_injected_particles_ << " " << step_recovered_particles_ << " " << step_net_particles_ << '\n';
+        << " " << step_absorbed_particles_ << " " << step_injected_particles_ << " " << step_recovered_particles_ << " " << step_net_particles_
+        << " " << step_heat_source_injected_particles_ << " " << step_heat_source_injected_energy_ev_ << '\n';
 }
 
 void MonteCarloSolver::append_profile_summary(std::ostream& out) const {
@@ -1614,6 +1700,13 @@ void MonteCarloSolver::append_profile_summary(std::ostream& out) const {
     out << "injected_particles_total = " << total_injected_particles_ << '\n';
     out << "recovered_particles_total = " << total_recovered_particles_ << '\n';
     out << "net_particles_total = " << total_net_particles_ << '\n';
+    out << "\n[local_heat_source_particle_injection]\n";
+    out << "enabled = " << (local_heat_source_enabled_ ? "true" : "false") << '\n';
+    out << "power_density_wm3 = " << local_heat_source_power_density_wm3_ << '\n';
+    out << "injected_particles_total = " << total_heat_source_injected_particles_ << '\n';
+    out << "injected_energy_total_ev = " << total_heat_source_injected_energy_ev_ << '\n';
+    out << "injected_particles_last_step = " << step_heat_source_injected_particles_ << '\n';
+    out << "injected_energy_last_step_ev = " << step_heat_source_injected_energy_ev_ << '\n';
     if (!profile_timers_enabled_) {
         return;
     }
@@ -1670,6 +1763,8 @@ void MonteCarloSolver::run_timestep() {
     const auto t_step_begin = Clock::now();
     step_absorbed_particles_ = 0;
     step_injected_particles_ = 0;
+    step_heat_source_injected_particles_ = 0;
+    step_heat_source_injected_energy_ev_ = 0.0;
     step_recovered_particles_ = 0;
     step_net_particles_ = 0;
     std::fill(reservoir_leaving_curr_step_.begin(), reservoir_leaving_curr_step_.end(), 0);
@@ -1691,8 +1786,14 @@ void MonteCarloSolver::run_timestep() {
     const auto t_remove1_end = Clock::now();
 
     const auto t_inject_begin = t_remove1_end;
-    const auto injected = inject_particles_from_reservoirs(geometry, phonon);
-    step_injected_particles_ = static_cast<long long>(injected.size());
+    const auto injected_reservoir = inject_particles_from_reservoirs(geometry, phonon);
+    step_injected_particles_ = static_cast<long long>(injected_reservoir.size());
+    const auto injected_heat_source = inject_particles_from_local_heat_source(geometry, phonon);
+    step_heat_source_injected_particles_ = static_cast<long long>(injected_heat_source.size());
+    std::vector<std::pair<int, double>> injected;
+    injected.reserve(injected_reservoir.size() + injected_heat_source.size());
+    injected.insert(injected.end(), injected_reservoir.begin(), injected_reservoir.end());
+    injected.insert(injected.end(), injected_heat_source.begin(), injected_heat_source.end());
     const auto t_inject_end = Clock::now();
     if (!injected.empty()) {
         const auto t_cache_begin = Clock::now();
@@ -1738,6 +1839,8 @@ void MonteCarloSolver::run_timestep() {
     step_net_particles_ = step_injected_particles_ - step_absorbed_particles_;
     total_absorbed_particles_ += step_absorbed_particles_;
     total_injected_particles_ += step_injected_particles_;
+    total_heat_source_injected_particles_ += step_heat_source_injected_particles_;
+    total_heat_source_injected_energy_ev_ += step_heat_source_injected_energy_ev_;
     total_recovered_particles_ += step_recovered_particles_;
     total_net_particles_ += step_net_particles_;
     if (!reservoir_leaving_curr_step_.empty() &&
@@ -1805,6 +1908,10 @@ void MonteCarloSolver::run_timestep() {
                   << ", injected=" << step_injected_particles_
                   << ", recovered=" << step_recovered_particles_
                   << ", net=" << step_net_particles_ << std::endl;
+        if (local_heat_source_enabled_) {
+            std::cout << "Local Heat Source (step): injected_particles=" << step_heat_source_injected_particles_
+                      << ", injected_energy_ev=" << step_heat_source_injected_energy_ev_ << std::endl;
+        }
         std::cout << "-------------------------" << std::endl;
     }
     report_timestep_timers_if_needed();
