@@ -731,11 +731,20 @@ void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geom
         for (size_t i = 0; i < centers.size(); ++i) {
             const Vec3 c = centers[i];
             double r2 = 0.0;
+            bool outside_cutoff = false;
             for (int k = 0; k < 3; ++k) {
                 if (gaussian_axis_enabled[k]) {
-                    const double dx = (c[k] - hs_center[k]) / hs_sigma[k];
-                    r2 += dx * dx;
+                    const double u = std::abs(c[k] - hs_center[k]) / hs_sigma[k];
+                    if (u > 2.0) {
+                        outside_cutoff = true;
+                        break;
+                    }
+                    r2 += u * u;
                 }
+            }
+            if (outside_cutoff) {
+                local_heat_source_grid_weights_[i] = 0.0;
+                continue;
             }
             local_heat_source_grid_weights_[i] = std::exp(-0.5 * r2);
             ++selected;
