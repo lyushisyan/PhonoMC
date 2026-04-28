@@ -464,6 +464,7 @@ void SimulationDomain::build_surface_mesh(const SimulationConfig& args) {
         }
     }
 
+    mesh_.set_merge_coplanar_facets(args.merge_coplanar_facets);
     mesh_.set_surface_mesh_data(std::move(vertices), std::move(faces));
     mesh_.shift_to_origin();
 }
@@ -651,48 +652,90 @@ void SimulationDomain::build_periodic_connections(const SimulationConfig& args) 
         if (matched_a.empty() || matched_b.empty()) {
             throw std::runtime_error("Connected facet mapping failed for periodic_pair regions.");
         }
-        if (matched_a.size() != 1 || matched_b.size() != 1) {
-            throw std::runtime_error("Each periodic_pair region must match exactly one facet.");
+        if (matched_a.size() != matched_b.size()) {
+            throw std::runtime_error("periodic_pair region pair must match the same number of facets.");
         }
-        const int a = matched_a.front();
-        const int b = matched_b.front();
-        connected_facets_.push_back({a, b});
-        if (facet_boundary_conditions_[a] != 'P' || facet_boundary_conditions_[b] != 'P') {
-            throw std::runtime_error("Connected facets must both be periodic ('P').");
-        }
-        if ((periodic_pair_[a] >= 0 && periodic_pair_[a] != b) ||
-            (periodic_pair_[b] >= 0 && periodic_pair_[b] != a)) {
-            throw std::runtime_error("Facet already paired with a different periodic connection.");
-        }
-        const double ndot = dot(mesh_.facet_normals()[a], mesh_.facet_normals()[b]);
-        if (ndot > -0.98) {
-            throw std::runtime_error("Connected facets normals do not match opposite direction.");
-        }
-        const double aa = mesh_.facet_areas()[a];
-        const double ab = mesh_.facet_areas()[b];
-        const double area_rel = std::abs(aa - ab) / std::max({1.0, aa, ab});
-        if (area_rel > 1e-3) {
-            throw std::runtime_error("Connected facets area mismatch.");
-        }
-        const auto la = facet_boundary_edge_lengths(mesh_, a);
-        const auto lb = facet_boundary_edge_lengths(mesh_, b);
-        if (la.size() != lb.size()) {
-            throw std::runtime_error("Connected facets boundary edge count mismatch.");
-        }
-        for (size_t k = 0; k < la.size(); ++k) {
-            const double rel = std::abs(la[k] - lb[k]) / std::max({1.0, la[k], lb[k]});
-            if (rel > 1e-3) {
-                throw std::runtime_error("Connected facets boundary edge-length spectrum mismatch.");
+
+        std::vector<std::pair<int, int>> pairs;
+        pairs.reserve(matched_a.size());
+        if (matched_a.size() == 1) {
+            pairs.push_back({matched_a.front(), matched_b.front()});
+        } else {
+            Vec3 mean_a {0.0, 0.0, 0.0};
+            Vec3 mean_b {0.0, 0.0, 0.0};
+            for (const int fa : matched_a) {
+                mean_a = add(mean_a, centroids[static_cast<size_t>(fa)]);
+            }
+            for (const int fb : matched_b) {
+                mean_b = add(mean_b, centroids[static_cast<size_t>(fb)]);
+            }
+            mean_a = mul(mean_a, 1.0 / static_cast<double>(matched_a.size()));
+            mean_b = mul(mean_b, 1.0 / static_cast<double>(matched_b.size()));
+            const Vec3 shift_guess = sub(mean_b, mean_a);
+
+            std::vector<int> unmatched_b = matched_b;
+            for (const int fa : matched_a) {
+                const Vec3 target = add(centroids[static_cast<size_t>(fa)], shift_guess);
+                double best_d2 = std::numeric_limits<double>::infinity();
+                int best_j = -1;
+                for (int j = 0; j < static_cast<int>(unmatched_b.size()); ++j) {
+                    const int fb = unmatched_b[static_cast<size_t>(j)];
+                    const Vec3 diff = sub(centroids[static_cast<size_t>(fb)], target);
+                    const double d2 = dot(diff, diff);
+                    if (d2 < best_d2) {
+                        best_d2 = d2;
+                        best_j = j;
+                    }
+                }
+                if (best_j < 0) {
+                    throw std::runtime_error("Failed to build one-to-one mapping for periodic_pair facets.");
+                }
+                pairs.push_back({fa, unmatched_b[static_cast<size_t>(best_j)]});
+                unmatched_b.erase(unmatched_b.begin() + best_j);
             }
         }
 
-        // Register periodic translation mapping (facet a -> b and b -> a).
-        const Vec3 shift_ab = sub(mesh_.facet_centroids()[b], mesh_.facet_centroids()[a]);
-        const Vec3 shift_ba = sub(mesh_.facet_centroids()[a], mesh_.facet_centroids()[b]);
-        periodic_pair_[a] = b;
-        periodic_pair_[b] = a;
-        periodic_shift_[a] = shift_ab;
-        periodic_shift_[b] = shift_ba;
+        for (const auto& pr : pairs) {
+            const int a = pr.first;
+            const int b = pr.second;
+            connected_facets_.push_back({a, b});
+            if (facet_boundary_conditions_[a] != 'P' || facet_boundary_conditions_[b] != 'P') {
+                throw std::runtime_error("Connected facets must both be periodic ('P').");
+            }
+            if ((periodic_pair_[a] >= 0 && periodic_pair_[a] != b) ||
+                (periodic_pair_[b] >= 0 && periodic_pair_[b] != a)) {
+                throw std::runtime_error("Facet already paired with a different periodic connection.");
+            }
+            const double ndot = dot(mesh_.facet_normals()[a], mesh_.facet_normals()[b]);
+            if (ndot > -0.98) {
+                throw std::runtime_error("Connected facets normals do not match opposite direction.");
+            }
+            const double aa = mesh_.facet_areas()[a];
+            const double ab = mesh_.facet_areas()[b];
+            const double area_rel = std::abs(aa - ab) / std::max({1.0, aa, ab});
+            if (area_rel > 1e-3) {
+                throw std::runtime_error("Connected facets area mismatch.");
+            }
+            const auto la = facet_boundary_edge_lengths(mesh_, a);
+            const auto lb = facet_boundary_edge_lengths(mesh_, b);
+            if (la.size() != lb.size()) {
+                throw std::runtime_error("Connected facets boundary edge count mismatch.");
+            }
+            for (size_t k = 0; k < la.size(); ++k) {
+                const double rel = std::abs(la[k] - lb[k]) / std::max({1.0, la[k], lb[k]});
+                if (rel > 1e-3) {
+                    throw std::runtime_error("Connected facets boundary edge-length spectrum mismatch.");
+                }
+            }
+
+            // Register periodic translation mapping (facet a -> b and b -> a).
+            const Vec3 shift_ab = sub(mesh_.facet_centroids()[b], mesh_.facet_centroids()[a]);
+            const Vec3 shift_ba = sub(mesh_.facet_centroids()[a], mesh_.facet_centroids()[b]);
+            periodic_pair_[a] = b;
+            periodic_pair_[b] = a;
+            periodic_shift_[a] = shift_ab;
+            periodic_shift_[b] = shift_ba;
+        }
     }
 }
 
@@ -866,6 +909,8 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
     out << "profile_timers = " << (args.profile_timers ? "true" : "false") << '\n';
     out << "progress_temperature_summary_only = "
         << (args.progress_temperature_summary_only ? "true" : "false") << '\n';
+    out << "merge_coplanar_facets = "
+        << (args.merge_coplanar_facets ? "true" : "false") << '\n';
     out << "initial_temperature = " << join_strings(args.initial_temperature) << '\n';
     if (args.grid_layout.size() >= 4) {
         out << "grid_xyz = [" << args.grid_layout[1] << ", " << args.grid_layout[2] << ", " << args.grid_layout[3] << "]\n";

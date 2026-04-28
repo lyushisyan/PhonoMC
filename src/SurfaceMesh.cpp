@@ -11,12 +11,14 @@
 #include <limits>
 #include <map>
 #include <numeric>
+#include <queue>
 #include <random>
 #include <sstream>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace {
 using Vec3 = SurfaceMesh::Vec3;
@@ -228,6 +230,17 @@ void SurfaceMesh::set_surface_mesh_data(std::vector<Vec3> vertices, std::vector<
     rebuild_cached_properties();
 }
 
+// 函数说明：设置是否合并共面且连通的三角面为 facet。
+void SurfaceMesh::set_merge_coplanar_facets(bool enabled) {
+    if (merge_coplanar_facets_ == enabled) {
+        return;
+    }
+    merge_coplanar_facets_ = enabled;
+    if (!vertices_.empty() && !faces_.empty()) {
+        rebuild_cached_properties();
+    }
+}
+
 // 函数说明：将网格平移到原点附近，便于统一坐标系处理。
 void SurfaceMesh::shift_to_origin() {
     compute_bounding_box();
@@ -429,46 +442,104 @@ void SurfaceMesh::compute_facet_groups() {
     face_to_facet_.assign(faces_.size(), -1);
     facets_.clear();
 
-    struct FacetAccum {
-        Vec3 normal {};
-        Vec3 centroid_weighted {};
-        double area = 0.0;
-        std::vector<int> face_indices;
-    };
-    std::unordered_map<std::string, FacetAccum> acc;
-
     auto key_of = [](const Vec3& n, double d) {
         auto q = [](double x) { return static_cast<long long>(std::llround(x * 1e6)); };
         return std::to_string(q(n[0])) + ":" + std::to_string(q(n[1])) + ":" + std::to_string(q(n[2])) + ":" + std::to_string(q(d));
     };
 
     const Vec3 center = mul(add(bounds_min_, bounds_max_), 0.5);
+    std::vector<Vec3> outward_normals(faces_.size(), Vec3 {0.0, 0.0, 0.0});
+    std::unordered_map<std::string, int> key_to_bucket;
+    std::vector<std::vector<int>> plane_buckets;
+    plane_buckets.reserve(faces_.size());
+
     for (size_t i = 0; i < faces_.size(); ++i) {
         Vec3 n = face_normals_[i];
         if (dot(n, sub(face_centroids_[i], center)) < 0.0) {
             n = mul(n, -1.0);
         }
+        outward_normals[i] = n;
         const double d = dot(n, vertices_[faces_[i][0]]);
-        auto& a = acc[key_of(n, d)];
-        a.normal = add(a.normal, n);
-        a.centroid_weighted = add(a.centroid_weighted, mul(face_centroids_[i], face_areas_[i]));
-        a.area += face_areas_[i];
-        a.face_indices.push_back(static_cast<int>(i));
+        const std::string key = key_of(n, d);
+        const auto [it, inserted] = key_to_bucket.emplace(key, static_cast<int>(plane_buckets.size()));
+        if (inserted) {
+            plane_buckets.emplace_back();
+        }
+        plane_buckets[static_cast<size_t>(it->second)].push_back(static_cast<int>(i));
     }
 
-    facets_.reserve(acc.size());
-    int idx = 0;
-    for (auto& [_, a] : acc) {
+    auto emit_facet_from_faces = [&](const std::vector<int>& face_indices) {
         Facet f;
-        f.normal = normalize(a.normal);
-        f.area = a.area;
-        f.centroid = (a.area > 0.0) ? mul(a.centroid_weighted, 1.0 / a.area) : a.centroid_weighted;
-        f.faces = std::move(a.face_indices);
+        Vec3 nsum {0.0, 0.0, 0.0};
+        Vec3 csum {0.0, 0.0, 0.0};
+        double area_sum = 0.0;
+        f.faces = face_indices;
+        for (const int fi : face_indices) {
+            nsum = add(nsum, outward_normals[static_cast<size_t>(fi)]);
+            csum = add(csum, mul(face_centroids_[static_cast<size_t>(fi)], face_areas_[static_cast<size_t>(fi)]));
+            area_sum += face_areas_[static_cast<size_t>(fi)];
+        }
+        f.normal = normalize(nsum);
+        f.area = area_sum;
+        f.centroid = (area_sum > 0.0) ? mul(csum, 1.0 / area_sum) : csum;
+        const int facet_idx = static_cast<int>(facets_.size());
         for (const int fi : f.faces) {
-            face_to_facet_[fi] = idx;
+            face_to_facet_[static_cast<size_t>(fi)] = facet_idx;
         }
         facets_.push_back(std::move(f));
-        ++idx;
+    };
+
+    if (!merge_coplanar_facets_) {
+        facets_.reserve(faces_.size());
+        for (int fi = 0; fi < static_cast<int>(faces_.size()); ++fi) {
+            emit_facet_from_faces(std::vector<int> {fi});
+        }
+    } else {
+        std::vector<std::vector<int>> face_neighbors(faces_.size());
+        face_neighbors.assign(faces_.size(), {});
+        for (const auto& adj : face_adjacency_) {
+            const int a = adj[0];
+            const int b = adj[1];
+            if (a < 0 || b < 0 || a >= static_cast<int>(faces_.size()) || b >= static_cast<int>(faces_.size())) {
+                continue;
+            }
+            face_neighbors[static_cast<size_t>(a)].push_back(b);
+            face_neighbors[static_cast<size_t>(b)].push_back(a);
+        }
+        std::vector<char> visited(faces_.size(), 0);
+        for (const auto& bucket : plane_buckets) {
+            std::unordered_set<int> in_bucket(bucket.begin(), bucket.end());
+            for (const int seed : bucket) {
+                if (seed < 0 || seed >= static_cast<int>(visited.size()) || visited[static_cast<size_t>(seed)] != 0) {
+                    continue;
+                }
+                std::vector<int> component;
+                std::queue<int> q;
+                visited[static_cast<size_t>(seed)] = 1;
+                q.push(seed);
+                while (!q.empty()) {
+                    const int cur = q.front();
+                    q.pop();
+                    component.push_back(cur);
+                    for (const int nb : face_neighbors[static_cast<size_t>(cur)]) {
+                        if (nb < 0 || nb >= static_cast<int>(visited.size())) {
+                            continue;
+                        }
+                        if (visited[static_cast<size_t>(nb)] != 0) {
+                            continue;
+                        }
+                        if (in_bucket.find(nb) == in_bucket.end()) {
+                            continue;
+                        }
+                        visited[static_cast<size_t>(nb)] = 1;
+                        q.push(nb);
+                    }
+                }
+                if (!component.empty()) {
+                    emit_facet_from_faces(component);
+                }
+            }
+        }
     }
 
     facets_edges_.clear();

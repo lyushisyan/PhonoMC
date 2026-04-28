@@ -36,6 +36,7 @@ public:
     SurfaceMesh(std::vector<Vec3> vertices, std::vector<Tri> faces);
 
     void set_surface_mesh_data(std::vector<Vec3> vertices, std::vector<Tri> faces);
+    void set_merge_coplanar_facets(bool enabled);
     void shift_to_origin();
 
     const std::vector<Vec3>& vertices() const { return vertices_; }
@@ -145,4 +146,5 @@ private:
     Vec3 bounds_min_ {0.0, 0.0, 0.0};
     Vec3 bounds_max_ {1.0, 1.0, 1.0};
     double volume_ = 0.0;
+    bool merge_coplanar_facets_ = true;
 };

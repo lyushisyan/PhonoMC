@@ -14,6 +14,7 @@ struct SimulationConfig {
     bool compute_kappa = false;
     bool profile_timers = false;
     bool progress_temperature_summary_only = false;
+    bool merge_coplanar_facets = true;  // true: merge coplanar connected triangles into one facet
     double temperature_lookup_dt = 0.1;  // K, lookup-table step for T->E precompute
 
     std::vector<std::string> grid_layout;

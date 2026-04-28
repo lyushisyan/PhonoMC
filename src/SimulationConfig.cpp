@@ -425,6 +425,13 @@ SimulationConfig parse_toml_file(const std::string& path) {
         args.progress_temperature_summary_only = parse_bool_scalar(*v);
     }
     if (auto v = get_first_value(kv, {
+            "io.merge_coplanar_facets",
+            "simulation.merge_coplanar_facets",
+            "geometry.merge_coplanar_facets",
+            "merge_coplanar_facets"}); v.has_value()) {
+        args.merge_coplanar_facets = parse_bool_scalar(*v);
+    }
+    if (auto v = get_first_value(kv, {
             "simulation.temperature_lookup_dt",
             "material.temperature_lookup_dt",
             "temperature_lookup_dt"}); v.has_value()) {
@@ -557,6 +564,9 @@ SimulationConfig parse_legacy_file(const std::string& path) {
     }
     if (auto it = kv.find("--progress_temperature_summary_only"); it != kv.end() && !it->second.empty()) {
         args.progress_temperature_summary_only = parse_bool_scalar(it->second.front());
+    }
+    if (auto it = kv.find("--merge_coplanar_facets"); it != kv.end() && !it->second.empty()) {
+        args.merge_coplanar_facets = parse_bool_scalar(it->second.front());
     }
     if (auto it = kv.find("--temperature_lookup_dt"); it != kv.end() && !it->second.empty()) {
         args.temperature_lookup_dt = std::stod(it->second.front());
