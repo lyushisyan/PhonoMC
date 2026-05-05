@@ -16,6 +16,10 @@ struct SimulationConfig {
     bool progress_temperature_summary_only = false;
     bool merge_coplanar_facets = true;  // true: merge coplanar connected triangles into one facet
     double temperature_lookup_dt = 0.1;  // K, lookup-table step for T->E precompute
+    std::string background_temperature_mode = "local"; // local | fixed
+    double background_temperature = 300.0;             // K, used when background_temperature_mode=fixed
+    std::string lifetime_temperature_mode = "local";   // local | fixed
+    double lifetime_temperature = 300.0;               // K, used when lifetime_temperature_mode=fixed
 
     std::vector<std::string> grid_layout;
     std::vector<std::string> initial_temperature {"t0", "300"};

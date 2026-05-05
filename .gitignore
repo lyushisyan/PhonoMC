@@ -4,6 +4,7 @@
 
 # Project artifacts
 build/
+build-codex/
 build-mac/
 results/
 calculation-cross/

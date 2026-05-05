@@ -57,6 +57,10 @@ OMP_NUM_THREADS=64 ./build/EPMC input_cross_100nm.toml
 - `initial_temperature` supports:
   - `300` (uniform initial temperature, unit: K)
   - `"linear"` (linear profile from cold reservoir to hot reservoir)
+- Temperature reference controls:
+  - default: `background_temperature_mode = "local"` and `lifetime_temperature_mode = "local"` use `E(Tgrid)` and `tau(Tgrid)`.
+  - fixed background with local lifetime: `background_temperature_mode = "fixed"`, `background_temperature = 300`, `lifetime_temperature_mode = "local"`.
+  - fixed background and fixed lifetime: also set `lifetime_temperature_mode = "fixed"`, `lifetime_temperature = 300`.
 - Reservoir refill uses `one_to_one` (inject by previous-step leaving counts).
 - If no valid thermal reservoirs are present, fallback temperature range is `299/301 K`.
 - `sizes` in TOML use **nm**.
@@ -130,6 +134,10 @@ OMP_NUM_THREADS=64 ./build/EPMC input_cross_100nm.toml
 - `initial_temperature` 支持：
   - `300`（全域统一初始温度，单位 K）
   - `"linear"`（按冷热库方向线性初始化）
+- 温度参考控制：
+  - 默认：`background_temperature_mode = "local"` 且 `lifetime_temperature_mode = "local"`，即使用 `E(Tgrid)` 和 `tau(Tgrid)`。
+  - 固定背景、局部寿命：`background_temperature_mode = "fixed"`，`background_temperature = 300`，`lifetime_temperature_mode = "local"`。
+  - 固定背景、固定寿命：再设置 `lifetime_temperature_mode = "fixed"`，`lifetime_temperature = 300`。
 - 热库回填固定为 `one_to_one`（按上一步离开热库的粒子数回填）。
 - 若没有可用热库，默认回退温度范围为 `299/301 K`。
 - TOML 中 `sizes` 单位是 **nm**。
@@ -203,6 +211,10 @@ OMP_NUM_THREADS=64 ./build/EPMC input_cross_100nm.toml
 - `initial_temperature` поддерживает:
   - `300` (равномерная начальная температура, K)
   - `"linear"` (линейный профиль между холодным и горячим резервуарами)
+- Настройки температурной привязки:
+  - по умолчанию: `background_temperature_mode = "local"` и `lifetime_temperature_mode = "local"` используют `E(Tgrid)` и `tau(Tgrid)`.
+  - фиксированный фон и локальное время жизни: `background_temperature_mode = "fixed"`, `background_temperature = 300`, `lifetime_temperature_mode = "local"`.
+  - фиксированный фон и фиксированное время жизни: дополнительно `lifetime_temperature_mode = "fixed"`, `lifetime_temperature = 300`.
 - Пополнение резервуаров фиксировано как `one_to_one` (инжекция по числу частиц, покинувших резервуары на предыдущем шаге).
 - Если валидные терморезервуары отсутствуют, используется диапазон по умолчанию `299/301 K`.
 - `sizes` в TOML задаются в **nm**.

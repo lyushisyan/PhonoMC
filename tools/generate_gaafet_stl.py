@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""Generate a simple GAAFET-like STL from two pads and one middle channel.
+"""Generate a simple double-channel GAAFET-like STL.
 
 Default geometry (nm):
-- Left pad:   10 x 20 x 10 (L x W x H)
-- Channel:    32 x 10 x 5  (L x W x H)
-- Right pad:  10 x 20 x 10 (L x W x H)
+- Left pad:     10 x 20 x 30 (L x W x H)
+- Channels: 2 x 32 x 10 x 6  (L x W x H), uniformly distributed along Z
+- Right pad:    10 x 20 x 30 (L x W x H)
 
 Coordinates:
 - X: length direction
 - Y: width direction (centered at 0)
 - Z: height direction (bottom at 0)
+
+For the default total height 30 nm and two 6 nm channels, the vertical gap is:
+    (30 - 2*6) / (2 + 1) = 6 nm
+so the two channel Z-ranges are [6, 12] nm and [18, 24] nm.
 """
 
 from __future__ import annotations
@@ -224,7 +228,7 @@ def _save_preview_png(vertices: Sequence[Vec3], faces: Sequence[Face], out_png: 
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
     ax.set_zlabel("Z")
-    ax.set_title("GAAFET-like 3-block geometry")
+    ax.set_title("Double-channel GAAFET-like geometry")
     fig.tight_layout()
     out_png.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_png, dpi=250)
@@ -535,14 +539,23 @@ def _build_gaafet(
     channel_length: float,
     channel_width: float,
     channel_height: float,
+    channel_count: int = 2,
     merge_faces: bool = True,
 ) -> Tuple[List[Vec3], List[Face]]:
+    """Build two full-height source/drain pads connected by uniformly spaced channels.
+
+    The channels are centered in Y and distributed uniformly along Z.
+    For channel_count = 2, this gives equal gaps below, between, and above
+    the channels.
+    """
     if min(pad_length, pad_width, pad_height, channel_length, channel_width, channel_height) <= 0.0:
         raise ValueError("All dimensions must be positive.")
+    if channel_count < 1:
+        raise ValueError("channel_count must be >= 1.")
     if channel_width > pad_width:
         raise ValueError("channel_width must be <= pad_width.")
-    if channel_height > pad_height:
-        raise ValueError("channel_height must be <= pad_height.")
+    if channel_count * channel_height >= pad_height:
+        raise ValueError("channel_count * channel_height must be < pad_height so gaps can be formed.")
 
     x0 = 0.0
     x1 = pad_length
@@ -553,30 +566,36 @@ def _build_gaafet(
     cy0, cy1 = -0.5 * channel_width, 0.5 * channel_width
 
     pz0, pz1 = 0.0, pad_height
-    cz0 = 0.5 * (pad_height - channel_height)
-    cz1 = cz0 + channel_height
-
     left_pad: Box = (x0, x1, py0, py1, pz0, pz1)
-    channel: Box = (x1, x2, cy0, cy1, cz0, cz1)
     right_pad: Box = (x2, x3, py0, py1, pz0, pz1)
 
-    return _build_union_surface([left_pad, channel, right_pad], merge_faces=merge_faces)
+    # Uniform Z distribution: bottom gap = middle gap = top gap.
+    # Default: pad_height=30, channel_count=2, channel_height=6 -> gap=6 nm.
+    z_gap = (pad_height - channel_count * channel_height) / (channel_count + 1)
+    channels: List[Box] = []
+    for n in range(channel_count):
+        cz0 = z_gap + n * (channel_height + z_gap)
+        cz1 = cz0 + channel_height
+        channels.append((x1, x2, cy0, cy1, cz0, cz1))
+
+    return _build_union_surface([left_pad, *channels, right_pad], merge_faces=merge_faces)
 
 
 def _make_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Generate GAAFET-like STL using two pads plus one central channel.")
+    p = argparse.ArgumentParser(description="Generate double-channel GAAFET-like STL using two pads plus uniformly distributed channels.")
     p.add_argument("--output", default="model/gaafet.stl", help="Output STL path")
-    p.add_argument("--name", default="gaafet_simple", help="STL header name")
+    p.add_argument("--name", default="gaafet_double_channel", help="STL header name")
     p.add_argument("--unit", choices=["nm", "m", "angstrom"], default="nm", help="Unit of input dimensions")
     p.add_argument("--scale", type=float, default=1.0, help="Uniform scale factor")
 
     p.add_argument("--pad-length", type=float, default=10.0, help="Pad length")
     p.add_argument("--pad-width", type=float, default=20.0, help="Pad width")
-    p.add_argument("--pad-height", type=float, default=20.0, help="Pad height")
+    p.add_argument("--pad-height", type=float, default=30.0, help="Overall height / pad height")
 
     p.add_argument("--channel-length", type=float, default=32.0, help="Channel length")
     p.add_argument("--channel-width", type=float, default=10.0, help="Channel width")
-    p.add_argument("--channel-height", type=float, default=5.0, help="Channel height")
+    p.add_argument("--channel-height", type=float, default=6.0, help="Channel height")
+    p.add_argument("--channel-count", type=int, default=2, help="Number of uniformly distributed channels")
     p.add_argument("--no-merge-faces", action="store_true", help="Disable coplanar face merge")
     p.add_argument("--no-preview", action="store_true", help="Disable preview PNG generation")
     p.add_argument("--preview-output", default="model/gaafet_preview.png", help="Preview PNG path")
@@ -601,6 +620,7 @@ def main() -> int:
         channel_length=args.channel_length * s,
         channel_width=args.channel_width * s,
         channel_height=args.channel_height * s,
+        channel_count=args.channel_count,
         merge_faces=not args.no_merge_faces,
     )
 
@@ -609,7 +629,18 @@ def main() -> int:
     _write_binary_stl(out, vertices, faces, args.name)
 
     print(f"[ok] STL written: {out.resolve()}")
-    print("[ok] Geometry: two 10x20x10 pads + middle 32x10x5 channel (default, in nm)")
+    z_gap = (args.pad_height - args.channel_count * args.channel_height) / (args.channel_count + 1)
+    print(
+        "[ok] Geometry: two pads + "
+        f"{args.channel_count} channels; "
+        f"overall W={args.pad_width:g} nm, H={args.pad_height:g} nm; "
+        f"channel W={args.channel_width:g} nm, H={args.channel_height:g} nm"
+    )
+    print(f"[ok] Uniform vertical gap: {z_gap:g} nm")
+    for n in range(args.channel_count):
+        cz0 = z_gap + n * (args.channel_height + z_gap)
+        cz1 = cz0 + args.channel_height
+        print(f"[ok] Channel {n + 1} Z-range: {cz0:g} to {cz1:g} nm")
     print(f"[ok] Coplanar merge: {'off' if args.no_merge_faces else 'on'}")
     print(f"[ok] Total vertices: {len(vertices)}")
     print(f"[ok] Total faces: {len(faces)}")

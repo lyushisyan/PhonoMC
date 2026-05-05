@@ -78,6 +78,10 @@ MonteCarloSolver::MonteCarloSolver(const SimulationConfig& args, const Simulatio
     convergence_write_interval_ = std::max(1, args_.convergence_write_interval);
     push_eps_ = 1e-10 * std::max(time_step_, 1.0);
     particle_density_ = static_cast<double>(particle_count_) / std::max(geometry.volume(), 1e-12);
+    fixed_background_temperature_ = (args_.background_temperature_mode == "fixed");
+    fixed_lifetime_temperature_ = (args_.lifetime_temperature_mode == "fixed");
+    background_temperature_ = args_.background_temperature;
+    lifetime_temperature_ = args_.lifetime_temperature;
 
     std::cout << "MonteCarloSolver initialized: particle_count=" << particle_count_
               << ", time_step=" << time_step_
@@ -88,6 +92,16 @@ MonteCarloSolver::MonteCarloSolver(const SimulationConfig& args, const Simulatio
     std::cout << "Thermal conductivity estimation: "
               << (args_.compute_kappa ? "enabled" : "disabled")
               << '\n';
+    std::cout << "Temperature reference: background="
+              << (fixed_background_temperature_ ? "fixed" : "local");
+    if (fixed_background_temperature_) {
+        std::cout << " T=" << background_temperature_ << " K";
+    }
+    std::cout << ", lifetime=" << (fixed_lifetime_temperature_ ? "fixed" : "local");
+    if (fixed_lifetime_temperature_) {
+        std::cout << " T=" << lifetime_temperature_ << " K";
+    }
+    std::cout << '\n';
 #ifdef _OPENMP
     openmp_thread_count_ = std::max(1, omp_get_max_threads());
     std::cout << "OpenMP enabled: max_threads=" << openmp_thread_count_ << '\n';
@@ -113,6 +127,34 @@ MonteCarloSolver::MonteCarloSolver(const SimulationConfig& args, const Simulatio
     const double init_sec = std::chrono::duration<double>(t_init_end - t_init_begin).count();
     std::cout << "[init] Initialization complete in " << std::fixed << std::setprecision(2)
               << init_sec << " s\n";
+}
+
+// 函数说明：返回偏离能量统计所用的背景温度，可选局部网格温度或固定温度。
+double MonteCarloSolver::background_temperature_for_grid(int sv) const {
+    if (fixed_background_temperature_) {
+        return background_temperature_;
+    }
+    if (sv >= 0 && sv < static_cast<int>(grid_temperatures_.size())) {
+        const double T = grid_temperatures_[static_cast<size_t>(sv)];
+        if (std::isfinite(T) && T > 0.0) {
+            return T;
+        }
+    }
+    return 300.0;
+}
+
+// 函数说明：返回寿命查询所用温度，可选局部粒子温度或固定温度。
+double MonteCarloSolver::lifetime_temperature_for_particle(int i) const {
+    if (fixed_lifetime_temperature_) {
+        return lifetime_temperature_;
+    }
+    if (i >= 0 && i < static_cast<int>(particle_temperatures_.size())) {
+        const double T = particle_temperatures_[static_cast<size_t>(i)];
+        if (std::isfinite(T) && T > 0.0) {
+            return T;
+        }
+    }
+    return 300.0;
 }
 
 // 函数说明：初始化粒子主状态与碰撞缓存，建立时间推进的初始条件。
@@ -809,6 +851,7 @@ std::vector<std::pair<int, double>> MonteCarloSolver::inject_particles_from_loca
         const double Tlocal = (sv < grid_temperatures_.size() && std::isfinite(grid_temperatures_[sv]) && grid_temperatures_[sv] > 0.0)
             ? grid_temperatures_[sv]
             : 300.0;
+        const double Tbackground = background_temperature_for_grid(static_cast<int>(sv));
 
         const auto ref_mode = phonon.sample_active_mode(rng);
         const double omega_ref = std::max(kMinOmega, phonon.mode_angular_frequency(ref_mode));
@@ -839,7 +882,7 @@ std::vector<std::pair<int, double>> MonteCarloSolver::inject_particles_from_loca
             if (!std::isfinite(dn) || dn <= 0.0) {
                 continue;
             }
-            const double n_eq = phonon.bose_occupation(Tlocal, mode);
+            const double n_eq = phonon.bose_occupation(Tbackground, mode);
             const double n_src = n_eq + dn;  // Positive deviational occupation by construction.
 
             const Vec3 pos = add(centers[sv], mul(gv, push_eps_ / std::max(speed, kMinSpeed)));
@@ -1339,7 +1382,7 @@ void MonteCarloSolver::update_grid_energy_density(const SimulationDomain& geomet
 #pragma omp for
         for (int i = 0; i < particle_count_; ++i) {
             const int sv = std::clamp(particle_grid_id_[i], 0, nsv - 1);
-            const double n_eq = phonon.bose_occupation(grid_temperatures_[static_cast<size_t>(sv)], particle_modes_[i]);
+            const double n_eq = phonon.bose_occupation(background_temperature_for_grid(sv), particle_modes_[i]);
             const double dn = particle_occupation_[i] - n_eq;
             particle_omega_[i] = phonon.mode_angular_frequency(particle_modes_[i]);
             particle_energies_[i] = 6.582119569e-4 * particle_omega_[i] * dn;  // hbar[eV*ps] * mode_angular_frequency[rad/ps] => eV
@@ -1355,7 +1398,7 @@ void MonteCarloSolver::update_grid_energy_density(const SimulationDomain& geomet
 #else
     for (int i = 0; i < particle_count_; ++i) {
         const int sv = std::clamp(particle_grid_id_[i], 0, nsv - 1);
-        const double n_eq = phonon.bose_occupation(grid_temperatures_[static_cast<size_t>(sv)], particle_modes_[i]);
+        const double n_eq = phonon.bose_occupation(background_temperature_for_grid(sv), particle_modes_[i]);
         const double dn = particle_occupation_[i] - n_eq;
         particle_omega_[i] = phonon.mode_angular_frequency(particle_modes_[i]);
         particle_energies_[i] = 6.582119569e-4 * particle_omega_[i] * dn;  // hbar[eV*ps] * mode_angular_frequency[rad/ps] => eV
@@ -1374,7 +1417,7 @@ void MonteCarloSolver::update_grid_energy_density(const SimulationDomain& geomet
         }
         double e = grid_energy_density_[static_cast<size_t>(sv)] * norm_fac;
         e = phonon.normalize_to_energy_density(e);
-        e += phonon.energy_density_from_temperature(grid_temperatures_[static_cast<size_t>(sv)]);
+        e += phonon.energy_density_from_temperature(background_temperature_for_grid(sv));
         grid_energy_density_[static_cast<size_t>(sv)] = e;
     }
 }
@@ -1435,7 +1478,7 @@ void MonteCarloSolver::apply_lifetime_scattering(const PhononMaterial& phonon) {
 #endif
     for (int i = 0; i < particle_count_; ++i) {
         const double n0 = phonon.bose_occupation(particle_temperatures_[i], particle_modes_[i]);
-        const double tau = phonon.mode_lifetime(particle_temperatures_[i], particle_modes_[i]);
+        const double tau = phonon.mode_lifetime(lifetime_temperature_for_particle(i), particle_modes_[i]);
         if (tau > 0.0) {
             const double fac = std::exp(-time_step_ / tau);
             particle_occupation_[i] = n0 + (particle_occupation_[i] - n0) * fac;

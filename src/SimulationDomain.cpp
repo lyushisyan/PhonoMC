@@ -905,6 +905,10 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
     out << "iterations = " << args.iterations << '\n';
     out << "convergence_write_interval = " << args.convergence_write_interval << '\n';
     out << "temperature_lookup_dt = " << args.temperature_lookup_dt << '\n';
+    out << "background_temperature_mode = " << args.background_temperature_mode << '\n';
+    out << "background_temperature = " << args.background_temperature << '\n';
+    out << "lifetime_temperature_mode = " << args.lifetime_temperature_mode << '\n';
+    out << "lifetime_temperature = " << args.lifetime_temperature << '\n';
     out << "compute_kappa = " << (args.compute_kappa ? "true" : "false") << '\n';
     out << "profile_timers = " << (args.profile_timers ? "true" : "false") << '\n';
     out << "progress_temperature_summary_only = "

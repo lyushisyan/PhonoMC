@@ -55,6 +55,8 @@ private:
     void update_particle_temperatures(const SimulationDomain& geometry, const PhononMaterial& phonon);
     void update_grid_energy_density(const SimulationDomain& geometry, const PhononMaterial& phonon);
     void apply_lifetime_scattering(const PhononMaterial& phonon);
+    double background_temperature_for_grid(int sv) const;
+    double lifetime_temperature_for_particle(int i) const;
     void update_heat_flux_and_conductivity(const SimulationDomain& geometry);
     void report_timestep_timers_if_needed() const;
     double compute_roughness_specularity(const SimulationDomain& geometry, const PhononMaterial& phonon, int i, int facet) const;
@@ -85,6 +87,10 @@ private:
     const double wm3_to_evpsa3_ = 6.241509074e-24;
     double particle_density_ = 0.0;
     double push_eps_ = 1e-10;
+    bool fixed_background_temperature_ = false;
+    bool fixed_lifetime_temperature_ = false;
+    double background_temperature_ = 300.0;
+    double lifetime_temperature_ = 300.0;
 
     std::vector<std::array<int, 2>> particle_modes_;
     std::vector<Vec3> particle_positions_;

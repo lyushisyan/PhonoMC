@@ -377,6 +377,31 @@ bool infer_heat_source_enabled(const SimulationConfig& args) {
     return args.heat_source_min.size() == 3 && args.heat_source_max.size() == 3;
 }
 
+// 函数说明：标准化温度模式字符串，约束为 local/fixed 两类可解释模式。
+std::string parse_temperature_mode(const std::string& value, const std::string& field_name) {
+    const std::string mode = to_lower(trim(unquote(value)));
+    if (mode != "local" && mode != "fixed") {
+        throw std::runtime_error(field_name + " must be either 'local' or 'fixed'.");
+    }
+    return mode;
+}
+
+// 函数说明：校验温度参考配置，避免非法固定温度进入热物性查询。
+void validate_temperature_mode_config(const SimulationConfig& args) {
+    if (args.background_temperature_mode != "local" && args.background_temperature_mode != "fixed") {
+        throw std::runtime_error("background_temperature_mode must be either 'local' or 'fixed'.");
+    }
+    if (args.lifetime_temperature_mode != "local" && args.lifetime_temperature_mode != "fixed") {
+        throw std::runtime_error("lifetime_temperature_mode must be either 'local' or 'fixed'.");
+    }
+    if (!std::isfinite(args.background_temperature) || args.background_temperature < 0.0) {
+        throw std::runtime_error("background_temperature must be a finite non-negative value.");
+    }
+    if (!std::isfinite(args.lifetime_temperature) || args.lifetime_temperature < 0.0) {
+        throw std::runtime_error("lifetime_temperature must be a finite non-negative value.");
+    }
+}
+
 // 函数说明：解析 TOML 输入并构造仿真配置对象（含单位与默认规则）。
 SimulationConfig parse_toml_file(const std::string& path) {
     SimulationConfig args;
@@ -436,6 +461,30 @@ SimulationConfig parse_toml_file(const std::string& path) {
             "material.temperature_lookup_dt",
             "temperature_lookup_dt"}); v.has_value()) {
         args.temperature_lookup_dt = parse_double_scalar(*v);
+    }
+    if (auto v = get_first_value(kv, {
+            "simulation.background_temperature_mode",
+            "transport.background_temperature_mode",
+            "background_temperature_mode"}); v.has_value()) {
+        args.background_temperature_mode = parse_temperature_mode(*v, "background_temperature_mode");
+    }
+    if (auto v = get_first_value(kv, {
+            "simulation.background_temperature",
+            "transport.background_temperature",
+            "background_temperature"}); v.has_value()) {
+        args.background_temperature = parse_double_scalar(*v);
+    }
+    if (auto v = get_first_value(kv, {
+            "simulation.lifetime_temperature_mode",
+            "transport.lifetime_temperature_mode",
+            "lifetime_temperature_mode"}); v.has_value()) {
+        args.lifetime_temperature_mode = parse_temperature_mode(*v, "lifetime_temperature_mode");
+    }
+    if (auto v = get_first_value(kv, {
+            "simulation.lifetime_temperature",
+            "transport.lifetime_temperature",
+            "lifetime_temperature"}); v.has_value()) {
+        args.lifetime_temperature = parse_double_scalar(*v);
     }
 
     if (auto v = get_first_value(kv, {"simulation.initial_temperature", "initial_temperature"}); v.has_value()) {
@@ -571,6 +620,18 @@ SimulationConfig parse_legacy_file(const std::string& path) {
     if (auto it = kv.find("--temperature_lookup_dt"); it != kv.end() && !it->second.empty()) {
         args.temperature_lookup_dt = std::stod(it->second.front());
     }
+    if (auto it = kv.find("--background_temperature_mode"); it != kv.end() && !it->second.empty()) {
+        args.background_temperature_mode = parse_temperature_mode(it->second.front(), "background_temperature_mode");
+    }
+    if (auto it = kv.find("--background_temperature"); it != kv.end() && !it->second.empty()) {
+        args.background_temperature = std::stod(it->second.front());
+    }
+    if (auto it = kv.find("--lifetime_temperature_mode"); it != kv.end() && !it->second.empty()) {
+        args.lifetime_temperature_mode = parse_temperature_mode(it->second.front(), "lifetime_temperature_mode");
+    }
+    if (auto it = kv.find("--lifetime_temperature"); it != kv.end() && !it->second.empty()) {
+        args.lifetime_temperature = std::stod(it->second.front());
+    }
     if (auto it = kv.find("--grid_xyz"); it != kv.end() && it->second.size() >= 3) {
         args.grid_layout = {"grid", it->second[0], it->second[1], it->second[2]};
     } else {
@@ -655,6 +716,7 @@ SimulationConfig load_simulation_config(const std::string& path) {
     if (!(args.temperature_lookup_dt > 0.0) || !std::isfinite(args.temperature_lookup_dt)) {
         throw std::runtime_error("temperature_lookup_dt must be a finite positive value.");
     }
+    validate_temperature_mode_config(args);
     if (args.convergence_write_interval <= 0) {
         throw std::runtime_error("convergence_write_interval must be a positive integer.");
     }
