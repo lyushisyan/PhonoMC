@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(EPMC LANGUAGES CXX)
+project(PhonoMC LANGUAGES CXX)
 
 # 基础编译设置
 set(CMAKE_CXX_STANDARD 17)
@@ -10,7 +10,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(HDF5 REQUIRED COMPONENTS CXX)
 
 # 添加可执行文件及其源码
-add_executable(EPMC
+add_executable(PhonoMC
     src/main.cpp
     src/SimulationConfig.cpp
     src/SurfaceMesh.cpp
@@ -20,20 +20,20 @@ add_executable(EPMC
 )
 
 # 设置包含目录
-target_include_directories(EPMC PRIVATE include ${HDF5_INCLUDE_DIRS})
+target_include_directories(PhonoMC PRIVATE include ${HDF5_INCLUDE_DIRS})
 
 # 链接 HDF5 库
 # Linux 下推荐使用 HDF5::HDF5_CPP_LIBRARIES 或 ${HDF5_LIBRARIES}
-target_link_libraries(EPMC PRIVATE ${HDF5_CXX_LIBRARIES})
+target_link_libraries(PhonoMC PRIVATE ${HDF5_CXX_LIBRARIES})
 
 # OpenMP 配置
-option(EPMC_ENABLE_OPENMP "Enable OpenMP parallel loops" ON)
-if(EPMC_ENABLE_OPENMP)
+option(PHONOMC_ENABLE_OPENMP "Enable OpenMP parallel loops" ON)
+if(PHONOMC_ENABLE_OPENMP)
     find_package(OpenMP)
     if(OpenMP_CXX_FOUND)
-        target_link_libraries(EPMC PRIVATE OpenMP::OpenMP_CXX)
-        target_compile_definitions(EPMC PRIVATE EPMC_USE_OPENMP=1)
-        message(STATUS "OpenMP enabled for EPMC")
+        target_link_libraries(PhonoMC PRIVATE OpenMP::OpenMP_CXX)
+        target_compile_definitions(PhonoMC PRIVATE PHONOMC_USE_OPENMP=1)
+        message(STATUS "OpenMP enabled for PhonoMC")
     else()
         message(WARNING "OpenMP was not found. Building without OpenMP.")
     endif()

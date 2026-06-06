@@ -1,10 +1,11 @@
 .DS_Store
 .vscode/
 *.toml
+!input_example/
+!input_example/*.toml
 
 # Project artifacts
 build/
-build-codex/
 build-mac/
 results/
 calculation-cross/

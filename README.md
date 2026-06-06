@@ -1,4 +1,4 @@
-# EPMC
+# PhonoMC
 
 [English](#english-version) | [中文](#中文版) | [Русский](#русский)
 
@@ -9,7 +9,7 @@
 
 ### Overview
 
-EPMC is a C++ phonon Monte Carlo simulator for semiconductor heat transport (e.g., Si/Ge/GaN). It supports box/mesh geometries, HDF5 material data, rough/periodic boundaries, and thermal conductivity estimation.
+PhonoMC is a C++ phonon Monte Carlo simulator for semiconductor heat transport (e.g., Si/Ge/GaN). It supports box/mesh geometries, HDF5 material data, rough/periodic boundaries, and thermal conductivity estimation.
 
 ### Core Features
 
@@ -30,22 +30,22 @@ EPMC is a C++ phonon Monte Carlo simulator for semiconductor heat transport (e.g
 ### Build
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DEPMC_ENABLE_OPENMP=ON
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPHONOMC_ENABLE_OPENMP=ON
 cmake --build build -j
 ```
 
-Executable: `build/EPMC`
+Executable: `build/PhonoMC`
 
 ### Run
 
 ```bash
-./build/EPMC input_cross_100nm.toml
+./build/PhonoMC input_example/input_cross_100nm.toml
 ```
 
 Optional thread setting:
 
 ```bash
-OMP_NUM_THREADS=64 ./build/EPMC input_cross_100nm.toml
+OMP_NUM_THREADS=64 ./build/PhonoMC input_example/input_cross_100nm.toml
 ```
 
 ### Input Rules (Current)
@@ -86,7 +86,7 @@ OMP_NUM_THREADS=64 ./build/EPMC input_cross_100nm.toml
 
 ### 项目简介
 
-EPMC 是一个基于 C++ 的声子蒙特卡洛仿真程序，用于半导体（如 Si/Ge/GaN）热输运计算。支持 box/网格模型、HDF5 材料数据、粗糙/周期边界和热导率评估。
+PhonoMC 是一个基于 C++ 的声子蒙特卡洛仿真程序，用于半导体（如 Si/Ge/GaN）热输运计算。支持 box/网格模型、HDF5 材料数据、粗糙/周期边界和热导率评估。
 
 ### 核心功能
 
@@ -107,22 +107,22 @@ EPMC 是一个基于 C++ 的声子蒙特卡洛仿真程序，用于半导体（�
 ### 编译
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DEPMC_ENABLE_OPENMP=ON
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPHONOMC_ENABLE_OPENMP=ON
 cmake --build build -j
 ```
 
-可执行文件：`build/EPMC`
+可执行文件：`build/PhonoMC`
 
 ### 运行
 
 ```bash
-./build/EPMC input_cross_100nm.toml
+./build/PhonoMC input_example/input_cross_100nm.toml
 ```
 
 可指定线程数：
 
 ```bash
-OMP_NUM_THREADS=64 ./build/EPMC input_cross_100nm.toml
+OMP_NUM_THREADS=64 ./build/PhonoMC input_example/input_cross_100nm.toml
 ```
 
 ### 当前输入规则
@@ -163,7 +163,7 @@ OMP_NUM_THREADS=64 ./build/EPMC input_cross_100nm.toml
 
 ### Обзор
 
-EPMC — C++ симулятор фононного Монте-Карло для теплопереноса в полупроводниках (например, Si/Ge/GaN). Поддерживаются box/mesh геометрии, HDF5-материалы, шероховатые/периодические границы и оценка теплопроводности.
+PhonoMC — C++ симулятор фононного Монте-Карло для теплопереноса в полупроводниках (например, Si/Ge/GaN). Поддерживаются box/mesh геометрии, HDF5-материалы, шероховатые/периодические границы и оценка теплопроводности.
 
 ### Основные возможности
 
@@ -184,22 +184,22 @@ EPMC — C++ симулятор фононного Монте-Карло для 
 ### Сборка
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DEPMC_ENABLE_OPENMP=ON
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPHONOMC_ENABLE_OPENMP=ON
 cmake --build build -j
 ```
 
-Исполняемый файл: `build/EPMC`
+Исполняемый файл: `build/PhonoMC`
 
 ### Запуск
 
 ```bash
-./build/EPMC input_cross_100nm.toml
+./build/PhonoMC input_example/input_cross_100nm.toml
 ```
 
 Ограничение потоков:
 
 ```bash
-OMP_NUM_THREADS=64 ./build/EPMC input_cross_100nm.toml
+OMP_NUM_THREADS=64 ./build/PhonoMC input_example/input_cross_100nm.toml
 ```
 
 ### Правила входных данных (текущие)

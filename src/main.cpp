@@ -25,14 +25,14 @@ static void print_startup_banner() {
     };
 
     print_border();
-    print_line("  ______ _____  __  __   _____");
-    print_line(" |  ____|  __ \\|  \\/  | / ____|");
-    print_line(" | |__  | |__) | \\  / || |");
-    print_line(" |  __| |  ___/| |\\/| || |");
-    print_line(" | |____| |    | |  | || |____");
-    print_line(" |______|_|    |_|  |_| \\_____|");
+    print_line("  _____  _                       __  __  _____");
+    print_line(" |  __ \\| |                     |  \\/  |/ ____|");
+    print_line(" | |__) | |__   ___  _ __   ___ | \\  / | |");
+    print_line(" |  ___/| '_ \\ / _ \\| '_ \\ / _ \\| |\\/| | |");
+    print_line(" | |    | | | | (_) | | | | (_) | |  | | |____");
+    print_line(" |_|    |_| |_|\\___/|_| |_|\\___/|_|  |_|\\_____|");
     print_line("");
-    print_line("                     Ensemble Phono Monte Carlo");
+    print_line("                              PhonoMC");
     print_border();
     std::cout << std::flush;
 }

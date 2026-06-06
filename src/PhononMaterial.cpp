@@ -99,16 +99,16 @@ PhononMaterial::PhononMaterial(const SimulationConfig& args, int mat_index) {
     }
     std::string err;
     if (!load_hdf5_data(args, mat_index, &err)) {
-        const char* allow_fallback = std::getenv("EPMC_ALLOW_SYNTHETIC_MATERIAL");
+        const char* allow_fallback = std::getenv("PHONOMC_ALLOW_SYNTHETIC_MATERIAL");
         const bool use_synthetic = (allow_fallback != nullptr) && (std::string(allow_fallback) == "1");
         if (!use_synthetic) {
             throw std::runtime_error(
                 "Failed to load HDF5 phonon data (" + err + "). "
                 "Simulation is aborted to avoid invalid thermal conductivity results. "
-                "Fix material_folder / HDF5 / POSCAR paths, or set EPMC_ALLOW_SYNTHETIC_MATERIAL=1 for test-only fallback.");
+                "Fix material_folder / HDF5 / POSCAR paths, or set PHONOMC_ALLOW_SYNTHETIC_MATERIAL=1 for test-only fallback.");
         }
         std::cerr << "Warning: failed to load HDF5 phonon data (" << err
-                  << "). EPMC_ALLOW_SYNTHETIC_MATERIAL=1 is set, falling back to synthetic mode bank.\n";
+                  << "). PHONOMC_ALLOW_SYNTHETIC_MATERIAL=1 is set, falling back to synthetic mode bank.\n";
         build_fallback_modes(args);
     }
     initialize_temperature_lookup();
@@ -660,7 +660,7 @@ void PhononMaterial::initialize_temperature_lookup() {
     energy_lookup_table_.assign(static_cast<size_t>(n), 0.0);
     std::vector<double> raw_energy(static_cast<size_t>(n), 0.0);
 
-#ifdef EPMC_USE_OPENMP
+#ifdef PHONOMC_USE_OPENMP
 #pragma omp parallel for schedule(static)
     for (int i = 0; i < n; ++i) {
         const double T = tmin + static_cast<double>(i) * dT;
