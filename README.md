@@ -39,13 +39,13 @@ Executable: `build/PhonoMC`
 ### Run
 
 ```bash
-./build/PhonoMC input_example/input_cross_100nm.toml
+./build/PhonoMC example/input_cross_100nm.toml
 ```
 
 Optional thread setting:
 
 ```bash
-OMP_NUM_THREADS=64 ./build/PhonoMC input_example/input_cross_100nm.toml
+OMP_NUM_THREADS=64 ./build/PhonoMC example/input_cross_100nm.toml
 ```
 
 ### Input Rules (Current)
@@ -76,6 +76,27 @@ OMP_NUM_THREADS=64 ./build/PhonoMC input_example/input_cross_100nm.toml
   - Consolidated input/geometry/grid/boundary/runtime summary.
 - `grid_centers.csv`
   - Grid center coordinates in **nm** (`x_nm,y_nm,z_nm`) and `volume_nm3`.
+
+### Plotting
+
+1D cross-plane/in-plane results:
+
+```bash
+python3 tools/plot_convergence.py example/results/Cross_100nm_0
+python3 tools/plot_convergence.py example/results/Inplane_x10000nm_z100nm_r1nm_0
+```
+
+Each run writes three figures under `plots_1d/`: `temperature_vs_time.png`, `heatflux_vs_time.png`, and `kappa_vs_time.png`.
+
+3D FinFET results:
+
+```bash
+python3 tools/plot_temperature_3d.py \
+  --input example/input_finfet_stl_heat1e20.toml \
+  --results example/results/FinFET_heat1e20_0
+```
+
+This writes `temperature_3d.png`, `temperature_slice_xrel0.500_yz.png`, and `temperature_slice_yrel0.500_xz.png` under `plots_3d/`. Slice locations can be changed with `--x-slice-rel` and `--y-slice-rel`.
 
 ---
 
@@ -116,13 +137,13 @@ cmake --build build -j
 ### 运行
 
 ```bash
-./build/PhonoMC input_example/input_cross_100nm.toml
+./build/PhonoMC example/input_cross_100nm.toml
 ```
 
 可指定线程数：
 
 ```bash
-OMP_NUM_THREADS=64 ./build/PhonoMC input_example/input_cross_100nm.toml
+OMP_NUM_THREADS=64 ./build/PhonoMC example/input_cross_100nm.toml
 ```
 
 ### 当前输入规则
@@ -153,6 +174,27 @@ OMP_NUM_THREADS=64 ./build/PhonoMC input_example/input_cross_100nm.toml
   - 汇总关键输入与几何/网格/边界/运行时间信息。
 - `grid_centers.csv`
   - 网格中心坐标（**nm**）：`x_nm,y_nm,z_nm`，以及 `volume_nm3`。
+
+### 绘图
+
+1D cross-plane / in-plane 结果：
+
+```bash
+python3 tools/plot_convergence.py example/results/Cross_100nm_0
+python3 tools/plot_convergence.py example/results/Inplane_x10000nm_z100nm_r1nm_0
+```
+
+每次会在对应结果目录的 `plots_1d/` 中输出三张图：`temperature_vs_time.png`、`heatflux_vs_time.png`、`kappa_vs_time.png`。
+
+3D FinFET 结果：
+
+```bash
+python3 tools/plot_temperature_3d.py \
+  --input example/input_finfet_stl_heat1e20.toml \
+  --results example/results/FinFET_heat1e20_0
+```
+
+会在 `plots_3d/` 中输出：`temperature_3d.png`、`temperature_slice_xrel0.500_yz.png`、`temperature_slice_yrel0.500_xz.png`。截面位置可用 `--x-slice-rel` 和 `--y-slice-rel` 调整。
 
 ---
 
@@ -193,13 +235,13 @@ cmake --build build -j
 ### Запуск
 
 ```bash
-./build/PhonoMC input_example/input_cross_100nm.toml
+./build/PhonoMC example/input_cross_100nm.toml
 ```
 
 Ограничение потоков:
 
 ```bash
-OMP_NUM_THREADS=64 ./build/PhonoMC input_example/input_cross_100nm.toml
+OMP_NUM_THREADS=64 ./build/PhonoMC example/input_cross_100nm.toml
 ```
 
 ### Правила входных данных (текущие)
@@ -230,3 +272,24 @@ OMP_NUM_THREADS=64 ./build/PhonoMC input_example/input_cross_100nm.toml
   - Сводка ключевых входных параметров и статистики geometry/grid/boundary/runtime.
 - `grid_centers.csv`
   - Координаты центров сетки в **nm** (`x_nm,y_nm,z_nm`) и `volume_nm3`.
+
+### Построение графиков
+
+1D результаты cross-plane/in-plane:
+
+```bash
+python3 tools/plot_convergence.py example/results/Cross_100nm_0
+python3 tools/plot_convergence.py example/results/Inplane_x10000nm_z100nm_r1nm_0
+```
+
+Команда создаёт три файла в `plots_1d/`: `temperature_vs_time.png`, `heatflux_vs_time.png` и `kappa_vs_time.png`.
+
+3D результаты FinFET:
+
+```bash
+python3 tools/plot_temperature_3d.py \
+  --input example/input_finfet_stl_heat1e20.toml \
+  --results example/results/FinFET_heat1e20_0
+```
+
+Команда создаёт `temperature_3d.png`, `temperature_slice_xrel0.500_yz.png` и `temperature_slice_yrel0.500_xz.png` в `plots_3d/`. Положение срезов задаётся параметрами `--x-slice-rel` и `--y-slice-rel`.
