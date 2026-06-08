@@ -1694,7 +1694,7 @@ void MonteCarloSolver::write_convergence_header() {
     for (int i = 0; i < ngrid; ++i) {
         out << " T_" << (i + 1);
     }
-    out << " heatflux kappa_fit kappa_end absorbed injected recovered net hs_injected hs_injected_energy_ev\n";
+    out << " heatflux kappa_int kappa_eff absorbed injected recovered net hs_injected hs_injected_energy_ev\n";
 }
 
 // 函数说明：追加当前时间步温度、热流与导热率统计结果。
@@ -1953,8 +1953,8 @@ void MonteCarloSolver::run_timestep() {
         }
 
         if (args_.compute_kappa) {
-            std::cout << "Current Conductivity (Fit): " << thermal_conductivity_fit_ << " W/mK" << std::endl;
-            std::cout << "Current Conductivity (End): " << thermal_conductivity_endpoints_ << " W/mK" << std::endl;
+            std::cout << "Current Conductivity (Int): " << thermal_conductivity_fit_ << " W/mK" << std::endl;
+            std::cout << "Current Conductivity (Eff): " << thermal_conductivity_endpoints_ << " W/mK" << std::endl;
         }
         std::cout << "Reservoir Balance (step): absorbed=" << step_absorbed_particles_
                   << ", injected=" << step_injected_particles_

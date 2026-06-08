@@ -17,7 +17,7 @@ PhonoMC is a C++ phonon Monte Carlo simulator for semiconductor heat transport (
 - Geometry handling with surface mesh processing and grid partitioning.
 - Real material loading from HDF5 (strict by default; invalid paths abort run).
 - Parallel execution with OpenMP.
-- Outputs for temperature profile, heat flux, and conductivity (`kappa_fit`, `kappa_end`).
+- Outputs for temperature profile, heat flux, and conductivity (`kappa_int`, `kappa_eff`).
 
 ### Requirements (Linux)
 
@@ -71,7 +71,7 @@ OMP_NUM_THREADS=64 ./build/PhonoMC input_example/input_cross_100nm.toml
 ### Outputs
 
 - `convergence.txt`
-  - Columns include: `timestep`, `time_ps`, `T_1 ... T_n`, `heatflux`, `kappa_fit`, `kappa_end`, `absorbed`, `injected`, `recovered`, `net`.
+  - Columns include: `timestep`, `time_ps`, `T_1 ... T_n`, `heatflux`, `kappa_int`, `kappa_eff`, `absorbed`, `injected`, `recovered`, `net`.
 - `summary.txt`
   - Consolidated input/geometry/grid/boundary/runtime summary.
 - `grid_centers.csv`
@@ -94,7 +94,7 @@ PhonoMC 是一个基于 C++ 的声子蒙特卡洛仿真程序，用于半导体�
 - 几何处理与网格划分。
 - 从 HDF5 加载真实材料数据（默认严格模式，路径错误会直接终止）。
 - OpenMP 并行计算。
-- 输出温度、热流和热导率（`kappa_fit`、`kappa_end`）。
+- 输出温度、热流和热导率（`kappa_int`、`kappa_eff`）。
 
 ### 环境依赖（Linux）
 
@@ -148,7 +148,7 @@ OMP_NUM_THREADS=64 ./build/PhonoMC input_example/input_cross_100nm.toml
 ### 输出文件
 
 - `convergence.txt`
-  - 包含：`timestep`、`time_ps`、`T_1 ... T_n`、`heatflux`、`kappa_fit`、`kappa_end`、`absorbed`、`injected`、`recovered`、`net`。
+  - 包含：`timestep`、`time_ps`、`T_1 ... T_n`、`heatflux`、`kappa_int`、`kappa_eff`、`absorbed`、`injected`、`recovered`、`net`。
 - `summary.txt`
   - 汇总关键输入与几何/网格/边界/运行时间信息。
 - `grid_centers.csv`
@@ -171,7 +171,7 @@ PhonoMC — C++ симулятор фононного Монте-Карло дл
 - Обработка геометрии и разбиение на сетку.
 - Загрузка реальных материалов из HDF5 (по умолчанию строгий режим, при ошибке путь/файл — остановка).
 - Параллельный запуск через OpenMP.
-- Вывод профиля температуры, теплового потока и теплопроводности (`kappa_fit`, `kappa_end`).
+- Вывод профиля температуры, теплового потока и теплопроводности (`kappa_int`, `kappa_eff`).
 
 ### Зависимости (Linux)
 
@@ -225,7 +225,7 @@ OMP_NUM_THREADS=64 ./build/PhonoMC input_example/input_cross_100nm.toml
 ### Выходные файлы
 
 - `convergence.txt`
-  - Колонки: `timestep`, `time_ps`, `T_1 ... T_n`, `heatflux`, `kappa_fit`, `kappa_end`, `absorbed`, `injected`, `recovered`, `net`.
+  - Колонки: `timestep`, `time_ps`, `T_1 ... T_n`, `heatflux`, `kappa_int`, `kappa_eff`, `absorbed`, `injected`, `recovered`, `net`.
 - `summary.txt`
   - Сводка ключевых входных параметров и статистики geometry/grid/boundary/runtime.
 - `grid_centers.csv`

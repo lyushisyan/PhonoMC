@@ -96,8 +96,8 @@ def _plot_case(result_dir: Path, tail: int, err_mode: str, dpi: int) -> Dict[str
     if hf_col is None:
         raise ValueError(f"Cannot find heatflux column in {conv}")
 
-    kfit_col = _pick_column(cols, ["kappa_fit"])
-    kend_col = _pick_column(cols, ["kappa_end", "Kappa", "kappa"])
+    kint_col = _pick_column(cols, ["kappa_int"])
+    keff_col = _pick_column(cols, ["kappa_eff"])
     temp_cols = _temp_columns(cols)
     if not temp_cols:
         raise ValueError(f"Cannot find temperature columns (T_*) in {conv}")
@@ -115,20 +115,20 @@ def _plot_case(result_dir: Path, tail: int, err_mode: str, dpi: int) -> Dict[str
 
     # 2) Kappa convergence
     fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
-    if kfit_col is not None:
-        ax.plot(x, cols[kfit_col], lw=1.4, label=kfit_col)
-        # --- 修改 1: y轴最大值设置为 kappa_fit 最终值的 1.5 倍 ---
-        if cols[kfit_col].size > 0:
-            final_kappa = cols[kfit_col][-1]
+    if kint_col is not None:
+        ax.plot(x, cols[kint_col], lw=1.4, label=kint_col)
+        # --- 修改 1: y轴最大值设置为 kappa_int 最终值的 1.5 倍 ---
+        if cols[kint_col].size > 0:
+            final_kappa = cols[kint_col][-1]
             if not np.isnan(final_kappa) and final_kappa > 0:
                 ax.set_ylim(0, final_kappa * 1.5)
                 
-    if kend_col is not None:
-        ax.plot(x, cols[kend_col], lw=1.4, label=kend_col)
+    if keff_col is not None:
+        ax.plot(x, cols[keff_col], lw=1.4, label=keff_col)
     ax.set_xlabel("Timestep")
     ax.set_ylabel("Thermal Conductivity")
     ax.set_title(f"Kappa Convergence: {result_dir.name}")
-    if (kfit_col is not None) or (kend_col is not None):
+    if (kint_col is not None) or (keff_col is not None):
         ax.legend()
     ax.grid(alpha=0.3)
     fig.tight_layout()
@@ -194,8 +194,8 @@ def _plot_case(result_dir: Path, tail: int, err_mode: str, dpi: int) -> Dict[str
         "name": np.array([result_dir.name]),
         "x": x,
         "heatflux": cols[hf_col],
-        "kappa_fit": cols[kfit_col] if kfit_col is not None else np.array([]),
-        "kappa_end": cols[kend_col] if kend_col is not None else np.array([]),
+        "kappa_int": cols[kint_col] if kint_col is not None else np.array([]),
+        "kappa_eff": cols[keff_col] if keff_col is not None else np.array([]),
         "steady_mean": mean,
         "steady_err": err,
     }
@@ -220,31 +220,31 @@ def _plot_summary(cases: List[Dict[str, np.ndarray]], summary_dir: Path, dpi: in
     # kappa comparison
     fig, ax = plt.subplots(figsize=(8, 4.5), dpi=dpi)
     for c in cases:
-        if c["kappa_end"].size:
-            ax.plot(c["x"], c["kappa_end"], lw=1.3, label=f"{c['name'][0]}: kappa_end")
+        if c["kappa_eff"].size:
+            ax.plot(c["x"], c["kappa_eff"], lw=1.3, label=f"{c['name'][0]}: kappa_eff")
     ax.set_xlabel("Timestep")
     ax.set_ylabel("Kappa")
-    ax.set_title("Kappa_end Convergence Comparison")
+    ax.set_title("Kappa_eff Convergence Comparison")
     ax.grid(alpha=0.3)
     ax.legend(fontsize=8)
     fig.tight_layout()
-    fig.savefig(summary_dir / "compare_kappa_end.png")
+    fig.savefig(summary_dir / "compare_kappa_eff.png")
     plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(8, 4.5), dpi=dpi)
-    any_fit = False
+    any_int = False
     for c in cases:
-        if c["kappa_fit"].size:
-            any_fit = True
-            ax.plot(c["x"], c["kappa_fit"], lw=1.3, label=f"{c['name'][0]}: kappa_fit")
-    if any_fit:
+        if c["kappa_int"].size:
+            any_int = True
+            ax.plot(c["x"], c["kappa_int"], lw=1.3, label=f"{c['name'][0]}: kappa_int")
+    if any_int:
         ax.set_xlabel("Timestep")
         ax.set_ylabel("Kappa")
-        ax.set_title("Kappa_fit Convergence Comparison")
+        ax.set_title("Kappa_int Convergence Comparison")
         ax.grid(alpha=0.3)
         ax.legend(fontsize=8)
         fig.tight_layout()
-        fig.savefig(summary_dir / "compare_kappa_fit.png")
+        fig.savefig(summary_dir / "compare_kappa_int.png")
     plt.close(fig)
 
     # steady temperature profile comparison
