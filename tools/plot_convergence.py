@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
-"""Plot convergence diagnostics from PhonoMC convergence.txt files.
+"""Plot 1D PhonoMC results for cross-plane and in-plane cases.
 
-Per-case outputs:
-- heatflux_convergence.png
-- kappa_convergence.png
-- temperature_convergence.png
-- temperature_steady_tailN.png
-- temperature_steady_tailN.csv
-
-If multiple result dirs are passed, summary comparison figures are also produced.
+Outputs three PNG files:
+- temperature_vs_time.png
+- heatflux_vs_time.png
+- kappa_vs_time.png
 """
 
 from __future__ import annotations
 
 import argparse
-import math
+import os
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 import numpy as np
+
+import matplotlib
+
+if not os.environ.get("DISPLAY") and not os.environ.get("MPLBACKEND"):
+    matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
 
 
@@ -43,249 +45,183 @@ def _read_convergence(path: Path) -> Tuple[List[str], np.ndarray]:
     data = np.loadtxt(path, comments="#")
     if data.ndim == 1:
         data = data.reshape(1, -1)
+    if data.size == 0:
+        raise ValueError(f"No numeric rows in: {path}")
 
     if data.shape[1] != len(headers):
         n = min(data.shape[1], len(headers))
         headers = headers[:n]
         data = data[:, :n]
 
-    if data.shape[0] == 0:
-        raise ValueError(f"No numeric rows in: {path}")
-
     return headers, data
 
 
-def _to_dict(headers: List[str], data: np.ndarray) -> Dict[str, np.ndarray]:
+def _columns(headers: List[str], data: np.ndarray) -> Dict[str, np.ndarray]:
     return {h: data[:, i] for i, h in enumerate(headers)}
 
 
-def _pick_column(cols: Dict[str, np.ndarray], candidates: List[str]) -> str | None:
-    for c in candidates:
-        if c in cols:
-            return c
-    return None
+def _temperature_columns(cols: Dict[str, np.ndarray]) -> List[str]:
+    names = [c for c in cols if c.startswith("T_")]
 
-
-def _temp_columns(cols: Dict[str, np.ndarray]) -> List[str]:
-    tcols = [c for c in cols if c.startswith("T_")]
-
-    def _key(name: str) -> int:
+    def key(name: str) -> int:
         try:
             return int(name[2:])
         except ValueError:
             return 10**9
 
-    tcols.sort(key=_key)
-    return tcols
+    return sorted(names, key=key)
 
 
-def _plot_case(result_dir: Path, tail: int, err_mode: str, dpi: int) -> Dict[str, np.ndarray]:
-    conv = result_dir / "convergence.txt"
-    headers, data = _read_convergence(conv)
-    cols = _to_dict(headers, data)
+def _time_axis(cols: Dict[str, np.ndarray]) -> Tuple[np.ndarray, str]:
+    if "time_ps" in cols:
+        return cols["time_ps"], "Time (ps)"
+    if "timestep" in cols:
+        return cols["timestep"], "Timestep"
+    first = next(iter(cols.values()))
+    return np.arange(first.size, dtype=float), "Record"
 
-    out_dir = result_dir / "plots"
-    out_dir.mkdir(parents=True, exist_ok=True)
 
-    tcol = _pick_column(cols, ["timestep", "Timestep"])
-    if tcol is None:
-        raise ValueError(f"Cannot find timestep column in {conv}")
-    x = cols[tcol]
+def _pick_evenly(names: List[str], count: int) -> List[str]:
+    if count <= 0 or len(names) <= count:
+        return names
+    idx = np.unique(np.round(np.linspace(0, len(names) - 1, count)).astype(int))
+    return [names[int(i)] for i in idx]
 
-    hf_col = _pick_column(cols, ["heatflux", "Hflux"])
-    if hf_col is None:
-        raise ValueError(f"Cannot find heatflux column in {conv}")
 
-    kint_col = _pick_column(cols, ["kappa_int"])
-    keff_col = _pick_column(cols, ["kappa_eff"])
-    temp_cols = _temp_columns(cols)
+def _plot_temperatures(
+    x: np.ndarray,
+    xlabel: str,
+    cols: Dict[str, np.ndarray],
+    temp_cols: List[str],
+    out_path: Path,
+    max_lines: int,
+    show_legend: bool,
+    dpi: int,
+) -> None:
+    selected = _pick_evenly(temp_cols, max_lines)
+    fig, ax = plt.subplots(figsize=(8.2, 5.2), dpi=dpi)
+    cmap = plt.get_cmap("viridis")
+    denom = max(1, len(selected) - 1)
+    for i, name in enumerate(selected):
+        ax.plot(x, cols[name], lw=1.2, color=cmap(i / denom), label=name)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("Temperature (K)")
+    ax.set_title("Temperature vs Time")
+    ax.grid(alpha=0.28, linewidth=0.6)
+    if show_legend:
+        ax.legend(ncol=2, fontsize=8, frameon=False)
+    fig.tight_layout()
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_single_series(
+    x: np.ndarray,
+    y: np.ndarray,
+    xlabel: str,
+    ylabel: str,
+    title: str,
+    out_path: Path,
+    dpi: int,
+) -> None:
+    fig, ax = plt.subplots(figsize=(8.2, 5.2), dpi=dpi)
+    ax.plot(x, y, lw=1.5)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.grid(alpha=0.28, linewidth=0.6)
+    fig.tight_layout()
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_kappa(
+    x: np.ndarray,
+    xlabel: str,
+    cols: Dict[str, np.ndarray],
+    out_path: Path,
+    dpi: int,
+) -> None:
+    missing = [name for name in ("kappa_int", "kappa_eff") if name not in cols]
+    if missing:
+        raise ValueError(f"Missing thermal conductivity column(s): {', '.join(missing)}")
+
+    fig, ax = plt.subplots(figsize=(8.2, 5.2), dpi=dpi)
+    ax.plot(x, cols["kappa_int"], lw=1.5, label="kappa_int")
+    ax.plot(x, cols["kappa_eff"], lw=1.5, label="kappa_eff")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("Thermal Conductivity (W/mK)")
+    ax.set_title("Thermal Conductivity vs Time")
+    ax.grid(alpha=0.28, linewidth=0.6)
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_1d(result_dir: Path, out_dir: Path, max_temp_lines: int, show_legend: bool, dpi: int) -> None:
+    headers, data = _read_convergence(result_dir / "convergence.txt")
+    cols = _columns(headers, data)
+    x, xlabel = _time_axis(cols)
+
+    temp_cols = _temperature_columns(cols)
     if not temp_cols:
-        raise ValueError(f"Cannot find temperature columns (T_*) in {conv}")
+        raise ValueError("No temperature columns (T_*) found in convergence.txt.")
+    if "heatflux" not in cols:
+        raise ValueError("Missing heatflux column in convergence.txt.")
 
-    # 1) Heatflux convergence
-    fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
-    ax.plot(x, cols[hf_col], lw=1.4)
-    ax.set_xlabel("Timestep")
-    ax.set_ylabel("Heat Flux (W/m^2)")
-    ax.set_title(f"Heat Flux Convergence: {result_dir.name}")
-    ax.grid(alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_dir / "heatflux_convergence.png")
-    plt.close(fig)
-
-    # 2) Kappa convergence
-    fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
-    if kint_col is not None:
-        ax.plot(x, cols[kint_col], lw=1.4, label=kint_col)
-        # --- 修改 1: y轴最大值设置为 kappa_int 最终值的 1.5 倍 ---
-        if cols[kint_col].size > 0:
-            final_kappa = cols[kint_col][-1]
-            if not np.isnan(final_kappa) and final_kappa > 0:
-                ax.set_ylim(0, final_kappa * 1.5)
-                
-    if keff_col is not None:
-        ax.plot(x, cols[keff_col], lw=1.4, label=keff_col)
-    ax.set_xlabel("Timestep")
-    ax.set_ylabel("Thermal Conductivity")
-    ax.set_title(f"Kappa Convergence: {result_dir.name}")
-    if (kint_col is not None) or (keff_col is not None):
-        ax.legend()
-    ax.grid(alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_dir / "kappa_convergence.png")
-    plt.close(fig)
-
-    # 3) Temperature convergence
-    fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
-    # --- 修改 2: 使用渐变色 (如 viridis) 代替 tab10 ---
-    cmap = plt.get_cmap("viridis") 
-    n_lines = len(temp_cols)
-    for i, c in enumerate(temp_cols):
-        # 根据网格索引分配渐变色
-        color = cmap(i / (n_lines - 1)) if n_lines > 1 else cmap(0.5)
-        ax.plot(x, cols[c], lw=1.0, color=color, label=c)
-    
-    ax.set_xlabel("Timestep")
-    ax.set_ylabel("Temperature (K)")
-    ax.set_title(f"Grid Temperature Convergence: {result_dir.name}")
-    ax.grid(alpha=0.3)
-    ax.legend(ncol=2, fontsize=8)
-    fig.tight_layout()
-    fig.savefig(out_dir / "temperature_convergence.png")
-    plt.close(fig)
-
-    # 4) Steady temperature distribution from last N records
-    n_tail = max(1, min(tail, data.shape[0]))
-    temp_matrix = np.column_stack([cols[c][-n_tail:] for c in temp_cols])
-    mean = temp_matrix.mean(axis=0)
-    if temp_matrix.shape[0] > 1:
-        std = temp_matrix.std(axis=0, ddof=1)
-    else:
-        std = np.zeros_like(mean)
-    if err_mode == "sem":
-        err = std / math.sqrt(temp_matrix.shape[0])
-    else:
-        err = std
-
-    # --- 修改 3: 横坐标索引加 1 (从 1 开始) ---
-    idx = np.arange(1, len(temp_cols) + 1)
-    
-    fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
-    ax.errorbar(idx, mean, yerr=err, fmt="o-", capsize=4, lw=1.2, mfc='none', mec='C0', mew=1.2)
-    ax.set_xlabel("Grid Index")
-    ax.set_ylabel("Temperature (K)")
-    
-    # --- 修改 4: 纵坐标设置默认 299 到 301 ---
-    ax.set_ylim(299, 301)
-    
-    ax.set_title(f"Steady Temperature (last {n_tail} steps): {result_dir.name}")
-    ax.grid(alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_dir / f"temperature_steady_tail{n_tail}.png")
-    plt.close(fig)
-
-    csv_path = out_dir / f"temperature_steady_tail{n_tail}.csv"
-    with csv_path.open("w", encoding="utf-8") as f:
-        f.write("grid,mean_T,error,std\n")
-        for i in range(len(temp_cols)):
-            f.write(f"{i+1},{mean[i]:.10g},{err[i]:.10g},{std[i]:.10g}\n")
-
-    return {
-        "name": np.array([result_dir.name]),
-        "x": x,
-        "heatflux": cols[hf_col],
-        "kappa_int": cols[kint_col] if kint_col is not None else np.array([]),
-        "kappa_eff": cols[keff_col] if keff_col is not None else np.array([]),
-        "steady_mean": mean,
-        "steady_err": err,
-    }
-
-
-def _plot_summary(cases: List[Dict[str, np.ndarray]], summary_dir: Path, dpi: int) -> None:
-    summary_dir.mkdir(parents=True, exist_ok=True)
-
-    # heatflux comparison
-    fig, ax = plt.subplots(figsize=(8, 4.5), dpi=dpi)
-    for c in cases:
-        ax.plot(c["x"], c["heatflux"], lw=1.3, label=c["name"][0])
-    ax.set_xlabel("Timestep")
-    ax.set_ylabel("Heat Flux (W/m^2)")
-    ax.set_title("Heat Flux Convergence Comparison")
-    ax.grid(alpha=0.3)
-    ax.legend(fontsize=8)
-    fig.tight_layout()
-    fig.savefig(summary_dir / "compare_heatflux.png")
-    plt.close(fig)
-
-    # kappa comparison
-    fig, ax = plt.subplots(figsize=(8, 4.5), dpi=dpi)
-    for c in cases:
-        if c["kappa_eff"].size:
-            ax.plot(c["x"], c["kappa_eff"], lw=1.3, label=f"{c['name'][0]}: kappa_eff")
-    ax.set_xlabel("Timestep")
-    ax.set_ylabel("Kappa")
-    ax.set_title("Kappa_eff Convergence Comparison")
-    ax.grid(alpha=0.3)
-    ax.legend(fontsize=8)
-    fig.tight_layout()
-    fig.savefig(summary_dir / "compare_kappa_eff.png")
-    plt.close(fig)
-
-    fig, ax = plt.subplots(figsize=(8, 4.5), dpi=dpi)
-    any_int = False
-    for c in cases:
-        if c["kappa_int"].size:
-            any_int = True
-            ax.plot(c["x"], c["kappa_int"], lw=1.3, label=f"{c['name'][0]}: kappa_int")
-    if any_int:
-        ax.set_xlabel("Timestep")
-        ax.set_ylabel("Kappa")
-        ax.set_title("Kappa_int Convergence Comparison")
-        ax.grid(alpha=0.3)
-        ax.legend(fontsize=8)
-        fig.tight_layout()
-        fig.savefig(summary_dir / "compare_kappa_int.png")
-    plt.close(fig)
-
-    # steady temperature profile comparison
-    fig, ax = plt.subplots(figsize=(8, 4.5), dpi=dpi)
-    for c in cases:
-        idx = np.arange(1, c["steady_mean"].size + 1)
-        ax.errorbar(idx, c["steady_mean"], yerr=c["steady_err"], fmt="o-", capsize=3, lw=1.1, label=c["name"][0])
-    ax.set_xlabel("Grid Index")
-    ax.set_ylabel("Temperature (K)")
-    ax.set_title("Steady Temperature Profile Comparison")
-    ax.grid(alpha=0.3)
-    ax.legend(fontsize=8)
-    fig.tight_layout()
-    fig.savefig(summary_dir / "compare_steady_temperature.png")
-    plt.close(fig)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _plot_temperatures(
+        x=x,
+        xlabel=xlabel,
+        cols=cols,
+        temp_cols=temp_cols,
+        out_path=out_dir / "temperature_vs_time.png",
+        max_lines=max_temp_lines,
+        show_legend=show_legend,
+        dpi=dpi,
+    )
+    _plot_single_series(
+        x=x,
+        y=cols["heatflux"],
+        xlabel=xlabel,
+        ylabel="Heat Flux (W/m^2)",
+        title="Heat Flux vs Time",
+        out_path=out_dir / "heatflux_vs_time.png",
+        dpi=dpi,
+    )
+    _plot_kappa(
+        x=x,
+        xlabel=xlabel,
+        cols=cols,
+        out_path=out_dir / "kappa_vs_time.png",
+        dpi=dpi,
+    )
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Plot convergence and steady-state temperature from PhonoMC results.")
-    parser.add_argument("result_dirs", nargs="+", help="Result directories containing convergence.txt")
-    parser.add_argument("--tail", type=int, default=50, help="Number of last records for steady-state averaging")
-    parser.add_argument("--error", choices=["sem", "std"], default="sem", help="Error bar type for steady temperature")
+    parser = argparse.ArgumentParser(
+        description="Plot 1D cross-plane/in-plane PhonoMC results from convergence.txt."
+    )
+    parser.add_argument("result_dir", help="Result directory containing convergence.txt")
+    parser.add_argument("--out-dir", default="", help="Output directory (default: <result_dir>/plots_1d)")
+    parser.add_argument("--max-temp-lines", type=int, default=80, help="Maximum temperature traces to draw")
+    parser.add_argument("--show-legend", action="store_true", help="Show temperature trace legend")
     parser.add_argument("--dpi", type=int, default=220, help="Figure DPI")
-    parser.add_argument("--summary-dir", default="", help="Directory for cross-case comparison figures")
     args = parser.parse_args()
 
-    case_data: List[Dict[str, np.ndarray]] = []
-    for rd in args.result_dirs:
-        result_dir = Path(rd).expanduser().resolve()
-        d = _plot_case(result_dir, tail=args.tail, err_mode=args.error, dpi=args.dpi)
-        case_data.append(d)
-        print(f"[ok] plotted case: {result_dir}")
-
-    if len(case_data) > 1:
-        if args.summary_dir:
-            summary_dir = Path(args.summary_dir).expanduser().resolve()
-        else:
-            summary_dir = (Path(args.result_dirs[0]).expanduser().resolve().parent / "plots_summary")
-        _plot_summary(case_data, summary_dir=summary_dir, dpi=args.dpi)
-        print(f"[ok] summary plots: {summary_dir}")
-
+    result_dir = Path(args.result_dir).expanduser().resolve()
+    out_dir = Path(args.out_dir).expanduser().resolve() if args.out_dir else result_dir / "plots_1d"
+    plot_1d(
+        result_dir=result_dir,
+        out_dir=out_dir,
+        max_temp_lines=args.max_temp_lines,
+        show_legend=args.show_legend,
+        dpi=args.dpi,
+    )
+    print(f"[ok] temperature: {out_dir / 'temperature_vs_time.png'}")
+    print(f"[ok] heatflux: {out_dir / 'heatflux_vs_time.png'}")
+    print(f"[ok] kappa: {out_dir / 'kappa_vs_time.png'}")
     return 0
 
 

@@ -1,0 +1,101 @@
+[input]
+model = box
+sizes_nm = [100, 100, 100]
+sizes_angstrom = [1000, 1000, 1000]
+particle_count = 100000
+time_step = 0.1
+iterations = 10000
+convergence_write_interval = 10
+temperature_lookup_dt = 0.1
+background_temperature_mode = local
+background_temperature = 300
+lifetime_temperature_mode = local
+lifetime_temperature = 300
+compute_kappa = true
+profile_timers = false
+progress_temperature_summary_only = false
+merge_coplanar_facets = true
+initial_temperature = [linear]
+grid_xyz = [10, 1, 1]
+boundary_conditions = [T, T, P, P, P, P]
+boundary_values = [301, 299]
+boundary_position_selector_mode = region
+boundary_position_selector_count = 6
+boundary_position_tokens = [relative_box, -0.01, 0, 0, 0.01, 1, 1, 0.98999999999999999, 0, 0, 1.01, 1, 1, 0, -0.01, 0, 1, 0.01, 1, 0, 0.98999999999999999, 0, 1, 1.01, 1, 0, 0, -0.01, 1, 1, 0.01, 0, 0, 0.98999999999999999, 1, 1, 1.01]
+periodic_pair_region_count = 4
+periodic_pair_tokens = [relative_box, 0, -0.01, 0, 1, 0.01, 1, 0, 0.98999999999999999, 0, 1, 1.01, 1, 0, 0, -0.01, 1, 1, 0.01, 0, 0, 0.98999999999999999, 1, 1, 1.01]
+material_folder = ../material/Si/
+output_folder = /mnt/DATA/home/sxliu98/PhonoMC/example/results/Cross_100nm_0
+heat_source_enabled = false
+heat_source_profile = uniform
+heat_source_min = []
+heat_source_max = []
+heat_source_center = []
+heat_source_sigma = []
+heat_source_power_density = 0
+
+[geometry]
+volume = 1e+09
+bounds_min = [0, 0, 0]
+bounds_max = [1000, 1000, 1000]
+n_faces = 12
+n_facets = 6
+n_simplices = 5248
+
+[grid]
+count = 10
+connections = 9
+
+[boundary]
+reservoir_facets = 2
+rough_facets = 0
+periodic_pairs = 2
+
+[files]
+grid_centers_csv = /mnt/DATA/home/sxliu98/PhonoMC/example/results/Cross_100nm_0/grid_centers.csv
+
+[runtime]
+total_seconds = 45
+total_days = 0
+total_hours = 0
+total_minutes = 0
+total_seconds_remainder = 45
+total_human_readable = 0 days 0 h 0 min 45 s
+
+[performance]
+openmp_enabled = true
+openmp_thread_count = 64
+profile_timers_enabled = false
+
+[rough_boundary_diagnostics]
+events_total = 0
+specular_selected = 0
+diffuse_selected = 0
+specular_ratio = 0
+diffuse_ratio = 0
+fallback_missing_rough_data = 0
+fallback_missing_spec_match = 0
+fallback_outgoing_pool = 0
+fallback_global_random = 0
+fallback_total = 0
+mode_map_csv = disabled
+
+[escaped_particle_recovery]
+check_interval = 100
+recovery_events = 0
+recovered_particles_total = 0
+
+[reservoir_balance_diagnostics]
+reservoir_gen = one_to_one
+absorbed_particles_total = 556583
+injected_particles_total = 568481
+recovered_particles_total = 0
+net_particles_total = 11898
+
+[local_heat_source_particle_injection]
+enabled = false
+power_density_wm3 = 0
+injected_particles_total = 0
+injected_energy_total_ev = 0
+injected_particles_last_step = 0
+injected_energy_last_step_ev = 0

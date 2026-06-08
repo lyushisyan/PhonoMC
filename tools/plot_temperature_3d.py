@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Plot 3D temperature distribution from PhonoMC convergence output."""
+"""Plot FinFET/3D PhonoMC temperature distributions.
+
+Outputs three PNG files:
+- temperature_3d.png
+- temperature_slice_xrel*.png
+- temperature_slice_yrel*.png
+"""
 
 from __future__ import annotations
 
@@ -33,7 +39,7 @@ def _resolve_results_dir(input_path: Path, cfg: dict, explicit: str | None) -> P
     if explicit:
         p = Path(explicit)
         if not p.is_absolute():
-            p = (input_path.parent / p).resolve()
+            p = p.resolve()
         return p
 
     io_cfg = cfg.get("io", {})
@@ -507,9 +513,9 @@ def _render_3d_scalar_field(
 
     cbar = fig.colorbar(cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax, shrink=0.78, pad=0.08)
     cbar.set_label(cbar_label)
-    ax.set_xlabel("X")
-    ax.set_ylabel("Y")
-    ax.set_zlabel("Z")
+    ax.set_xlabel("x (nm)")
+    ax.set_ylabel("y (nm)")
+    ax.set_zlabel("z (nm)")
     ax.set_title(title_template.format(mode=render_mode_3d))
     fig.tight_layout()
     fig.savefig(out_png, bbox_inches="tight")
@@ -693,7 +699,7 @@ def _plot_slice_distribution(
     points2d: np.ndarray,
     temps: np.ndarray,
     out_png: Path,
-    out_csv: Path,
+    out_csv: Path | None,
     title: str,
     xlabel: str,
     ylabel: str,
@@ -703,9 +709,10 @@ def _plot_slice_distribution(
     smooth_grid_scale: float,
 ) -> None:
     out_png.parent.mkdir(parents=True, exist_ok=True)
-    out_csv.parent.mkdir(parents=True, exist_ok=True)
-    csv_data = np.column_stack([points2d, temps])
-    np.savetxt(out_csv, csv_data, delimiter=",", header=f"{xlabel},{ylabel},temp_mean", comments="", fmt="%.10g")
+    if out_csv is not None:
+        out_csv.parent.mkdir(parents=True, exist_ok=True)
+        csv_data = np.column_stack([points2d, temps])
+        np.savetxt(out_csv, csv_data, delimiter=",", header=f"{xlabel},{ylabel},temp_mean", comments="", fmt="%.10g")
 
     # Build a regular 2D grid for block mode (no visual gaps between neighboring cells).
     x_centers = np.unique(np.round(points2d[:, 0].astype(float), 12))
@@ -887,24 +894,14 @@ def _plot_xavg_profile_vs_z(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Plot 3D grid temperature from PhonoMC convergence output.")
+    parser = argparse.ArgumentParser(description="Plot FinFET/3D PhonoMC temperature results.")
     parser.add_argument("--input", required=True, help="Input TOML path")
     parser.add_argument("--results", default="", help="Results folder path (optional, auto-detect latest if omitted)")
     parser.add_argument("--tail", type=int, default=50, help="Average over last N rows")
-    parser.add_argument("--out", default="", help="Output PNG path")
-    parser.add_argument("--csv-out", default="", help="Output CSV path")
+    parser.add_argument("--out-dir", default="", help="Output directory (default: <results>/plots_3d)")
     parser.add_argument("--cmap", default="turbo", help="Matplotlib colormap")
-    parser.add_argument(
-        "--view3d-render",
-        choices=["surface", "block"],
-        default="block",
-        help="3D render mode (currently forced to block voxels)",
-    )
-    parser.add_argument("--surface-knn", type=int, default=12, help="KNN count for surface temperature interpolation")
-    parser.add_argument("--surface-idw-power", type=float, default=2.0, help="IDW power for surface interpolation")
-    parser.add_argument("--surface-alpha", type=float, default=1.0, help="Surface opacity in [0,1]")
-    parser.add_argument("--block-scale", type=float, default=0.88, help="Block size scale relative to center spacing")
-    parser.add_argument("--block-alpha", type=float, default=1.0, help="Block opacity in [0,1]")
+    parser.add_argument("--block-scale", type=float, default=0.88, help="3D block size scale relative to center spacing")
+    parser.add_argument("--block-alpha", type=float, default=1.0, help="3D block opacity in [0,1]")
     parser.add_argument(
         "--slice-render",
         choices=["smooth", "block"],
@@ -919,11 +916,8 @@ def main() -> int:
         help="Smooth contour density scale (multiplies contour levels)",
     )
     parser.add_argument("--x-slice-rel", type=float, default=0.5, help="Relative x location for YZ slice (0~1)")
-    parser.add_argument("--y-slice-rel", type=float, default=0.6, help="Relative y location for XZ slice (0~1)")
-    parser.add_argument("--topk", type=int, default=5, help="Number of highest-temperature convergence lines")
+    parser.add_argument("--y-slice-rel", type=float, default=0.5, help="Relative y location for XZ slice (0~1)")
     args = parser.parse_args()
-    if args.view3d_render != "block":
-        print("[info] --view3d-render=surface is ignored; using block voxel rendering.")
 
     input_path = Path(args.input).resolve()
     cfg = _load_toml(input_path)
@@ -935,9 +929,7 @@ def main() -> int:
         raise ValueError("No grid temperature columns found in convergence.txt.")
 
     tail_n = max(1, min(args.tail, temps.shape[0]))
-    temps_tail = temps[-tail_n:, :]
-    t_mean = temps_tail.mean(axis=0)
-    t_std = temps_tail.std(axis=0, ddof=1 if tail_n > 1 else 0)
+    t_mean = temps[-tail_n:, :].mean(axis=0)
 
     centers_csv = results_dir / "grid_centers.csv"
     if centers_csv.exists():
@@ -950,25 +942,15 @@ def main() -> int:
             f"Expected centers file: {centers_csv}"
         )
 
-    out_png = Path(args.out).resolve() if args.out else (results_dir / "temperature_3d_tail_mean.png")
-    out_csv = Path(args.csv_out).resolve() if args.csv_out else (results_dir / "temperature_3d_tail_mean.csv")
-    out_png.parent.mkdir(parents=True, exist_ok=True)
-    out_csv.parent.mkdir(parents=True, exist_ok=True)
-
-    csv_data = np.column_stack([centers, t_mean, t_std])
-    np.savetxt(
-        out_csv,
-        csv_data,
-        delimiter=",",
-        header="x,y,z,temp_mean,temp_std",
-        comments="",
-        fmt="%.10g",
-    )
+    centers_nm = centers / 10.0
+    out_dir = Path(args.out_dir).expanduser().resolve() if args.out_dir else results_dir / "plots_3d"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_png = out_dir / "temperature_3d.png"
 
     render_mode_3d = _render_3d_scalar_field(
         cfg=cfg,
         input_path=input_path,
-        centers=centers,
+        centers=centers_nm,
         values=t_mean,
         out_png=out_png,
         cmap_name=args.cmap,
@@ -977,57 +959,14 @@ def main() -> int:
             f"3D Temperature ({{mode}}, tail mean, N={tail_n})\n"
             f"timestep: {int(ts[-tail_n])} ~ {int(ts[-1])}"
         ),
-        view3d_render=args.view3d_render,
+        view3d_render="block",
         block_scale=args.block_scale,
         block_alpha=args.block_alpha,
-        surface_knn=args.surface_knn,
-        surface_idw_power=args.surface_idw_power,
-        surface_alpha=args.surface_alpha,
+        surface_knn=0,
+        surface_idw_power=2.0,
+        surface_alpha=1.0,
     )
 
-    source_wm3, source_info = _compute_heat_source_grid_power_density(cfg, input_path, centers)
-    out_source_csv = results_dir / "heat_source_distribution.csv"
-    out_source_png = results_dir / "heat_source_distribution_3d.png"
-    source_render_mode = "disabled"
-    if source_info.get("enabled", False):
-        source_csv = np.column_stack([centers, source_wm3])
-        np.savetxt(
-            out_source_csv,
-            source_csv,
-            delimiter=",",
-            header="x,y,z,source_wm3",
-            comments="",
-            fmt="%.10g",
-        )
-        profile = str(source_info.get("profile", "uniform"))
-        selected = int(source_info.get("selected_grids", 0))
-        power0 = float(source_info.get("power_density", 0.0))
-        power_role = str(source_info.get("power_density_role", "value"))
-        source_render_mode = _render_3d_scalar_field(
-            cfg=cfg,
-            input_path=input_path,
-            centers=centers,
-            values=source_wm3,
-            out_png=out_source_png,
-            cmap_name=args.cmap,
-            cbar_label="Heat source (W/m^3)",
-            title_template=(
-                f"Heat Source Distribution ({{mode}})\n"
-                f"profile={profile}, power_density({power_role})={power0:.6g} W/m^3, selected_grids={selected}"
-            ),
-            view3d_render=args.view3d_render,
-            block_scale=args.block_scale,
-            block_alpha=args.block_alpha,
-            surface_knn=args.surface_knn,
-            surface_idw_power=args.surface_idw_power,
-            surface_alpha=args.surface_alpha,
-            block_positive_only=True,
-        )
-    else:
-        reason = source_info.get("reason", "unknown")
-        print(f"[info] heat source plot skipped: {reason}")
-
-    centers_nm = centers / 10.0
     xmin, ymin, _zmin = centers_nm.min(axis=0)
     xmax, ymax, _zmax = centers_nm.max(axis=0)
 
@@ -1039,13 +978,12 @@ def main() -> int:
     x_mask, x_plane = _nearest_slice_mask(centers_nm[:, 0], x_target)
     x_slice_points = centers_nm[x_mask][:, [1, 2]]  # y,z
     x_slice_t = t_mean[x_mask]
-    out_xslice_png = results_dir / f"temperature_slice_xrel{x_rel:.3f}_yz.png"
-    out_xslice_csv = results_dir / f"temperature_slice_xrel{x_rel:.3f}_yz.csv"
+    out_xslice_png = out_dir / f"temperature_slice_xrel{x_rel:.3f}_yz.png"
     _plot_slice_distribution(
         points2d=x_slice_points,
         temps=x_slice_t,
         out_png=out_xslice_png,
-        out_csv=out_xslice_csv,
+        out_csv=None,
         title=f"YZ Slice @ x={x_plane:.3f} nm (x_rel={x_rel:.3f})",
         xlabel="y_nm",
         ylabel="z_nm",
@@ -1058,13 +996,12 @@ def main() -> int:
     y_mask, y_plane = _nearest_slice_mask(centers_nm[:, 1], y_target)
     y_slice_points = centers_nm[y_mask][:, [0, 2]]  # x,z
     y_slice_t = t_mean[y_mask]
-    out_yslice_png = results_dir / f"temperature_slice_yrel{y_rel:.3f}_xz.png"
-    out_yslice_csv = results_dir / f"temperature_slice_yrel{y_rel:.3f}_xz.csv"
+    out_yslice_png = out_dir / f"temperature_slice_yrel{y_rel:.3f}_xz.png"
     _plot_slice_distribution(
         points2d=y_slice_points,
         temps=y_slice_t,
         out_png=out_yslice_png,
-        out_csv=out_yslice_csv,
+        out_csv=None,
         title=f"XZ Slice @ y={y_plane:.3f} nm (y_rel={y_rel:.3f})",
         xlabel="x_nm",
         ylabel="z_nm",
@@ -1073,48 +1010,16 @@ def main() -> int:
         smooth_levels=args.slice_smooth_levels,
         smooth_grid_scale=args.slice_smooth_grid_scale,
     )
-    out_yzprof_png = results_dir / f"temperature_profile_yrel{y_rel:.3f}_xavg_vs_z.png"
-    out_yzprof_csv = results_dir / f"temperature_profile_yrel{y_rel:.3f}_xavg_vs_z.csv"
-    _plot_xavg_profile_vs_z(
-        xz_points=y_slice_points,
-        temps=y_slice_t,
-        out_png=out_yzprof_png,
-        out_csv=out_yzprof_csv,
-        title=f"X-averaged Temperature vs z @ y={y_plane:.3f} nm (y_rel={y_rel:.3f})",
-    )
-
-    out_topk_png = results_dir / "temperature_topk_convergence.png"
-    out_topk_csv = results_dir / "temperature_topk_convergence.csv"
-    k_used = _plot_topk_convergence(
-        timesteps=ts,
-        time_ps=tps,
-        temps=temps,
-        topk=args.topk,
-        out_png=out_topk_png,
-        out_csv=out_topk_csv,
-    )
-
     print(f"[ok] results_dir: {results_dir}")
     print(f"[ok] convergence: {conv_path}")
     print(f"[ok] tail rows: {tail_n}")
     print(f"[ok] grids: {len(temp_cols)}")
     print(f"[ok] 3d_render: {render_mode_3d}")
-    print(f"[ok] csv: {out_csv}")
-    print(f"[ok] png: {out_png}")
-    if source_info.get("enabled", False):
-        print(f"[ok] heat_source_3d_render: {source_render_mode}")
-        print(f"[ok] heat_source csv: {out_source_csv}")
-        print(f"[ok] heat_source png: {out_source_png}")
+    print(f"[ok] 3d png: {out_png}")
     print(f"[ok] x-slice png: {out_xslice_png}")
-    print(f"[ok] x-slice csv: {out_xslice_csv}")
     print(f"[ok] y-slice png: {out_yslice_png}")
-    print(f"[ok] y-slice csv: {out_yslice_csv}")
-    print(f"[ok] y-slice xavg-vs-z png: {out_yzprof_png}")
-    print(f"[ok] y-slice xavg-vs-z csv: {out_yzprof_csv}")
     print(f"[ok] x-slice plane: x={x_plane:.6g} nm, points={int(np.count_nonzero(x_mask))}")
     print(f"[ok] y-slice plane: y={y_plane:.6g} nm, points={int(np.count_nonzero(y_mask))}")
-    print(f"[ok] top{k_used} png: {out_topk_png}")
-    print(f"[ok] top{k_used} csv: {out_topk_csv}")
     return 0
 
 

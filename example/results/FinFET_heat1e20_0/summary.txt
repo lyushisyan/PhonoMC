@@ -1,0 +1,101 @@
+[input]
+model = ../model/finfet.stl
+sizes_nm = [20, 20, 20]
+sizes_angstrom = [200, 200, 200]
+particle_count = 1e+07
+time_step = 0.1
+iterations = 1000
+convergence_write_interval = 10
+temperature_lookup_dt = 0.1
+background_temperature_mode = local
+background_temperature = 300
+lifetime_temperature_mode = local
+lifetime_temperature = 300
+compute_kappa = false
+profile_timers = false
+progress_temperature_summary_only = true
+merge_coplanar_facets = true
+initial_temperature = [300]
+grid_xyz = [22, 36, 30]
+boundary_conditions = [R, R, P, P, P, P, T]
+boundary_values = [1, 1, 0, 0, 0, 0, 300]
+boundary_position_selector_mode = region
+boundary_position_selector_count = 7
+boundary_position_tokens = [relative_box, 0.10000000000000001, 0, 0, 0.45000000000000001, 1, 1, 0.55000000000000004, 0, 0, 0.90000000000000002, 1, 1, -0.01, 0, 0, 0.01, 1, 1, 0.98999999999999999, 0, 0, 1.01, 1, 1, 0, -0.01, 0, 1, 0.01, 1, 0, 0.98999999999999999, 0, 1, 1.01, 1, 0, 0, -0.01, 1, 1, 0.01]
+periodic_pair_region_count = 4
+periodic_pair_tokens = [relative_box, -0.01, 0, 0, 0.01, 1, 1, 0.98999999999999999, 0, 0, 1.01, 1, 1, 0, -0.01, 0, 1, 0.01, 1, 0, 0.98999999999999999, 0, 1, 1.01, 1]
+material_folder = ../material/Si/
+output_folder = /mnt/DATA/home/sxliu98/PhonoMC/example/results/FinFET_heat1e20_0
+heat_source_enabled = true
+heat_source_profile = gaussian
+heat_source_min = [0.3, 0.6, 0.7]
+heat_source_max = [0.7, 0.8, 1]
+heat_source_center = [0.5, 0.7, 1]
+heat_source_sigma = [0, 0.04, 0.1]
+heat_source_power_density = 1e+20
+
+[geometry]
+volume = 1.536e+07
+bounds_min = [0, 0, 0]
+bounds_max = [220, 360, 300]
+n_faces = 24
+n_facets = 12
+n_simplices = 398
+
+[grid]
+count = 13680
+connections = 38788
+
+[boundary]
+reservoir_facets = 1
+rough_facets = 5
+periodic_pairs = 3
+
+[files]
+grid_centers_csv = /mnt/DATA/home/sxliu98/PhonoMC/example/results/FinFET_heat1e20_0/grid_centers.csv
+
+[runtime]
+total_seconds = 7894
+total_days = 0
+total_hours = 2
+total_minutes = 11
+total_seconds_remainder = 34
+total_human_readable = 0 days 2 h 11 min 34 s
+
+[performance]
+openmp_enabled = true
+openmp_thread_count = 64
+profile_timers_enabled = false
+
+[rough_boundary_diagnostics]
+events_total = 123542918
+specular_selected = 16363747
+diffuse_selected = 107179171
+specular_ratio = 0.132454
+diffuse_ratio = 0.867546
+fallback_missing_rough_data = 0
+fallback_missing_spec_match = 0
+fallback_outgoing_pool = 0
+fallback_global_random = 0
+fallback_total = 0
+mode_map_csv = disabled
+
+[escaped_particle_recovery]
+check_interval = 100
+recovery_events = 9
+recovered_particles_total = 1436
+
+[reservoir_balance_diagnostics]
+reservoir_gen = one_to_one
+absorbed_particles_total = 29791924
+injected_particles_total = 29790896
+recovered_particles_total = 1436
+net_particles_total = -1028
+
+[local_heat_source_particle_injection]
+enabled = true
+power_density_wm3 = 1e+20
+injected_particles_total = 617409
+injected_energy_total_ev = 7013.82
+injected_particles_last_step = 643
+injected_energy_last_step_ev = 7.01382

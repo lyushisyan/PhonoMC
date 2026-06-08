@@ -1,24 +1,15 @@
 .DS_Store
 .vscode/
-*.toml
-!input_example/
-!input_example/*.toml
 
-# Project artifacts
+# Build artifacts
 build/
-build-mac/
-results/
-calculation-cross/
-calculation-inplane/
-calculation-finfet/
-calculation-gaafet/
-test-conv-cross/
-test-conv-inplane/
-test-conv-finfet/
-test-conv-gaafet/
-test-roughness/
+
+# Input examples are tracked; other TOML files are local runs.
+*.toml
+!example/
+!example/*.toml
 
 # Python caches
 **/__pycache__/
 .pytest_cache/
-*.sh
+*.pyc
