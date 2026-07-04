@@ -6,8 +6,8 @@ sizes = [100, 100, 100]
 particle_count = 100000
 time_step = 0.1
 iterations = 10000
+random_seed = 12345
 compute_kappa = true
-callaway = false
 initial_temperature = "linear"
 grid_xyz = [10, 1, 1]
 
@@ -21,7 +21,7 @@ boundary_position = [
   [0.0, 0.0, 0.99, 1.0, 1.0, 1.01]
 ]
 boundary_conditions = ["T", "T", "P", "P", "P", "P"]
-boundary_values = [301, 299]
+boundary_values = [301, 299, 0, 0, 0, 0]
 periodic_pair = [
   [0.0, -0.01, 0.0, 1.0, 0.01, 1.0], [0.0, 0.99, 0.0, 1.0, 1.01, 1.0],
   [0.0, 0.0, -0.01, 1.0, 1.0, 0.01], [0.0, 0.0, 0.99, 1.0, 1.0, 1.01]

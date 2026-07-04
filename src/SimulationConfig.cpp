@@ -7,10 +7,37 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
+
+const char* to_string(TemperatureReferenceMode mode) {
+    return mode == TemperatureReferenceMode::Fixed ? "fixed" : "local";
+}
+
+const char* to_string(InitialTemperatureMode mode) {
+    return mode == InitialTemperatureMode::Linear ? "linear" : "uniform";
+}
+
+const char* to_string(BoundaryCondition condition) {
+    switch (condition) {
+    case BoundaryCondition::ThermalReservoir: return "T";
+    case BoundaryCondition::Periodic: return "P";
+    case BoundaryCondition::Rough: return "R";
+    }
+    return "R";
+}
+
+const char* to_string(HeatSourceProfile profile) {
+    return profile == HeatSourceProfile::Gaussian ? "gaussian" : "uniform";
+}
+
+char boundary_condition_code(BoundaryCondition condition) {
+    return to_string(condition)[0];
+}
 
 namespace {
 // 函数说明：清理输入文本两端空白，保证配置与数据解析的稳健性。
@@ -61,40 +88,6 @@ std::string strip_inline_comment(const std::string& line) {
     return line;
 }
 
-// 函数说明：将旧版参数文件拆分为 token 序列，兼容历史输入格式。
-std::vector<std::string> tokenize_legacy(const std::string& path) {
-    std::ifstream in(path);
-    if (!in) {
-        throw std::runtime_error("Failed to open input file: " + path);
-    }
-
-    std::vector<std::string> tokens;
-    std::string line;
-    while (std::getline(in, line)) {
-        const auto clean = trim(line);
-        if (clean.empty() || clean[0] == '#') {
-            continue;
-        }
-        std::istringstream iss(clean);
-        std::string tk;
-        while (iss >> tk) {
-            tokens.push_back(tk);
-        }
-    }
-    return tokens;
-}
-
-// 函数说明：识别旧版命令行风格选项前缀（--）。
-bool is_option(const std::string& tk) {
-    return tk.rfind("--", 0) == 0;
-}
-
-// 函数说明：根据扩展名判断输入文件是否按 TOML 语法解析。
-bool looks_like_toml(const std::string& path) {
-    const std::string ext = to_lower(std::filesystem::path(path).extension().string());
-    return ext == ".toml";
-}
-
 // 函数说明：判断字符串是否被引号包裹，用于安全去引号。
 bool is_quoted(const std::string& s) {
     if (s.size() < 2) {
@@ -125,27 +118,54 @@ double parse_double_scalar(const std::string& s) {
     if (t.empty()) {
         throw std::runtime_error("Expected numeric value, got empty token.");
     }
-    return std::stod(t);
+    size_t consumed = 0;
+    const double value = std::stod(t, &consumed);
+    if (consumed != t.size() || !std::isfinite(value)) {
+        throw std::runtime_error("Expected a finite numeric value, got: " + s);
+    }
+    return value;
 }
 
-// 函数说明：解析整数参数并进行四舍五入兼容。
+// 函数说明：解析严格整数参数，拒绝小数和越界值。
 int parse_int_scalar(const std::string& s) {
-    return static_cast<int>(std::llround(parse_double_scalar(s)));
+    const double value = parse_double_scalar(s);
+    const double rounded = std::round(value);
+    if (std::abs(value - rounded) > 1e-12 ||
+        rounded < static_cast<double>(std::numeric_limits<int>::min()) ||
+        rounded > static_cast<double>(std::numeric_limits<int>::max())) {
+        throw std::runtime_error("Expected an integer value, got: " + s);
+    }
+    return static_cast<int>(rounded);
 }
 
-// 函数说明：解析布尔开关，支持 true/false 与数值兼容写法。
+// 函数说明：解析可重现随机流使用的 64 位无符号种子。
+std::uint64_t parse_uint64_scalar(const std::string& s) {
+    const std::string t = normalise_number_token(s);
+    if (t.empty() || t.front() == '-') {
+        throw std::runtime_error("random_seed must be an unsigned 64-bit integer.");
+    }
+    size_t consumed = 0;
+    try {
+        const unsigned long long value = std::stoull(t, &consumed, 10);
+        if (consumed != t.size()) {
+            throw std::runtime_error("random_seed must be an unsigned 64-bit integer.");
+        }
+        return static_cast<std::uint64_t>(value);
+    } catch (const std::exception&) {
+        throw std::runtime_error("random_seed must be an unsigned 64-bit integer.");
+    }
+}
+
+// 函数说明：解析标准 TOML 布尔值。
 bool parse_bool_scalar(const std::string& s) {
-    std::string t = to_lower(trim(unquote(s)));
-    if (t == "true" || t == "yes" || t == "on") {
+    const std::string t = to_lower(trim(s));
+    if (t == "true") {
         return true;
     }
-    if (t == "false" || t == "no" || t == "off") {
+    if (t == "false") {
         return false;
     }
-    if (t.empty()) {
-        return false;
-    }
-    return std::abs(parse_double_scalar(t)) > 0.0;
+    throw std::runtime_error("Expected TOML boolean true or false, got: " + s);
 }
 
 // 函数说明：按顶层分隔符切分数组文本，正确处理嵌套括号与引号。
@@ -286,7 +306,7 @@ int bracket_balance(const std::string& s) {
     return bal;
 }
 
-// 函数说明：读取 TOML 键值对并展开段名为扁平键，统一后续取值逻辑。
+// 函数说明：读取分节 TOML 键值对，不接受顶层键或静默忽略的旧格式。
 void parse_toml_assignments(const std::string& path, std::unordered_map<std::string, std::string>& kv) {
     std::ifstream in(path);
     if (!in) {
@@ -301,17 +321,26 @@ void parse_toml_assignments(const std::string& path, std::unordered_map<std::str
         }
         if (clean.front() == '[' && clean.back() == ']') {
             section = to_lower(trim(clean.substr(1, clean.size() - 2)));
+            static const std::unordered_set<std::string> allowed_sections {
+                "geometry", "simulation", "boundary", "heat_source", "io"
+            };
+            if (allowed_sections.find(section) == allowed_sections.end()) {
+                throw std::runtime_error("Unknown TOML section: [" + section + "]");
+            }
             continue;
         }
 
         const auto eq = clean.find('=');
         if (eq == std::string::npos) {
-            continue;
+            throw std::runtime_error("Invalid TOML assignment: " + clean);
         }
         const std::string key = to_lower(trim(clean.substr(0, eq)));
         std::string value = trim(clean.substr(eq + 1));
         if (value.empty()) {
-            continue;
+            throw std::runtime_error("Empty TOML value for key: " + key);
+        }
+        if (section.empty()) {
+            throw std::runtime_error("Top-level TOML keys are not supported; place '" + key + "' in its documented section.");
         }
 
         if (value.front() == '[') {
@@ -326,30 +355,50 @@ void parse_toml_assignments(const std::string& path, std::unordered_map<std::str
                 }
                 value += " " + next_line;
             }
+            if (bracket_balance(value) != 0) {
+                throw std::runtime_error("Unclosed TOML array for key: " + section + "." + key);
+            }
         }
 
-        if (!section.empty()) {
-            kv[section + "." + key] = value;
-            if (kv.find(key) == kv.end()) {
-                kv[key] = value;
-            }
-        } else {
-            kv[key] = value;
+        const std::string full_key = section + "." + key;
+        if (!kv.emplace(full_key, value).second) {
+            throw std::runtime_error("Duplicate TOML key: " + full_key);
         }
     }
 }
 
-// 函数说明：按候选键顺序从键值表中查找第一个有效值。
-std::optional<std::string> get_first_value(
+std::optional<std::string> get_value(
     const std::unordered_map<std::string, std::string>& kv,
-    std::initializer_list<const char*> keys) {
-    for (const char* k : keys) {
-        const auto it = kv.find(to_lower(k));
-        if (it != kv.end()) {
-            return it->second;
-        }
+    const char* key) {
+    const auto it = kv.find(key);
+    if (it != kv.end()) {
+        return it->second;
     }
     return std::nullopt;
+}
+
+void reject_unknown_keys(const std::unordered_map<std::string, std::string>& kv) {
+    static const std::unordered_set<std::string> allowed {
+        "geometry.model", "geometry.sizes", "geometry.merge_coplanar_facets",
+        "simulation.particle_count", "simulation.time_step", "simulation.iterations",
+        "simulation.convergence_write_interval", "simulation.random_seed", "simulation.compute_kappa",
+        "simulation.profile_timers", "simulation.progress_temperature_summary_only",
+        "simulation.temperature_lookup_dt", "simulation.background_temperature_mode",
+        "simulation.background_temperature", "simulation.lifetime_temperature_mode",
+        "simulation.lifetime_temperature", "simulation.initial_temperature",
+        "simulation.grid_xyz",
+        "boundary.boundary_conditions", "boundary.boundary_values",
+        "boundary.boundary_position", "boundary.periodic_pair",
+        "heat_source.enabled", "heat_source.min", "heat_source.max",
+        "heat_source.power_density", "heat_source.profile", "heat_source.center",
+        "heat_source.sigma",
+        "io.material_folder", "io.output_folder"
+    };
+    for (const auto& [key, _] : kv) {
+        if (allowed.find(key) == allowed.end()) {
+            throw std::runtime_error("Unknown TOML key: " + key);
+        }
+    }
 }
 
 // 函数说明：将区域集合扁平化为 token，供边界赋值阶段按区域匹配 facet。
@@ -370,35 +419,140 @@ bool infer_heat_source_enabled(const SimulationConfig& args) {
     if (std::abs(args.heat_source_power_density) <= 0.0) {
         return false;
     }
-    const std::string profile = to_lower(trim(args.heat_source_profile));
-    if (profile == "gaussian") {
+    if (args.heat_source_profile == HeatSourceProfile::Gaussian) {
         return args.heat_source_center.size() == 3 && args.heat_source_sigma.size() == 3;
     }
     return args.heat_source_min.size() == 3 && args.heat_source_max.size() == 3;
 }
 
 // 函数说明：标准化温度模式字符串，约束为 local/fixed 两类可解释模式。
-std::string parse_temperature_mode(const std::string& value, const std::string& field_name) {
+TemperatureReferenceMode parse_temperature_mode(const std::string& value, const std::string& field_name) {
     const std::string mode = to_lower(trim(unquote(value)));
-    if (mode != "local" && mode != "fixed") {
-        throw std::runtime_error(field_name + " must be either 'local' or 'fixed'.");
+    if (mode == "local") {
+        return TemperatureReferenceMode::Local;
     }
-    return mode;
+    if (mode == "fixed") {
+        return TemperatureReferenceMode::Fixed;
+    }
+    throw std::runtime_error(field_name + " must be either 'local' or 'fixed'.");
+}
+
+BoundaryCondition parse_boundary_condition(const std::string& value, size_t index) {
+    const std::string token = to_lower(trim(unquote(value)));
+    if (token == "t") {
+        return BoundaryCondition::ThermalReservoir;
+    }
+    if (token == "p") {
+        return BoundaryCondition::Periodic;
+    }
+    if (token == "r") {
+        return BoundaryCondition::Rough;
+    }
+    throw std::runtime_error(
+        "Unsupported boundary condition at index " + std::to_string(index) +
+        ": '" + value + "'. Only 'T', 'P', 'R' are supported.");
+}
+
+std::vector<BoundaryCondition> parse_boundary_conditions(const std::vector<std::string>& values) {
+    std::vector<BoundaryCondition> result;
+    result.reserve(values.size());
+    for (size_t i = 0; i < values.size(); ++i) {
+        result.push_back(parse_boundary_condition(values[i], i));
+    }
+    return result;
+}
+
+HeatSourceProfile parse_heat_source_profile(const std::string& value) {
+    const std::string profile = to_lower(trim(unquote(value)));
+    if (profile == "uniform") {
+        return HeatSourceProfile::Uniform;
+    }
+    if (profile == "gaussian") {
+        return HeatSourceProfile::Gaussian;
+    }
+    throw std::runtime_error("heat_source.profile must be either 'uniform' or 'gaussian'.");
+}
+
+InitialTemperatureConfig parse_initial_temperature(const std::string& value) {
+    const std::string raw = trim(value);
+    const std::string token = to_lower(unquote(raw));
+    if (token == "linear") {
+        return {InitialTemperatureMode::Linear, 300.0};
+    }
+    if (is_quoted(raw)) {
+        throw std::runtime_error("Numeric initial_temperature values must not be quoted.");
+    }
+    try {
+        size_t consumed = 0;
+        const std::string number = normalise_number_token(token);
+        const double temperature = std::stod(number, &consumed);
+        if (consumed == number.size() && std::isfinite(temperature)) {
+            return {InitialTemperatureMode::Uniform, temperature};
+        }
+    } catch (...) {
+    }
+    throw std::runtime_error("initial_temperature must be a finite numeric value or 'linear'.");
 }
 
 // 函数说明：校验温度参考配置，避免非法固定温度进入热物性查询。
 void validate_temperature_mode_config(const SimulationConfig& args) {
-    if (args.background_temperature_mode != "local" && args.background_temperature_mode != "fixed") {
-        throw std::runtime_error("background_temperature_mode must be either 'local' or 'fixed'.");
-    }
-    if (args.lifetime_temperature_mode != "local" && args.lifetime_temperature_mode != "fixed") {
-        throw std::runtime_error("lifetime_temperature_mode must be either 'local' or 'fixed'.");
-    }
     if (!std::isfinite(args.background_temperature) || args.background_temperature < 0.0) {
         throw std::runtime_error("background_temperature must be a finite non-negative value.");
     }
     if (!std::isfinite(args.lifetime_temperature) || args.lifetime_temperature < 0.0) {
         throw std::runtime_error("lifetime_temperature must be a finite non-negative value.");
+    }
+}
+
+size_t flattened_region_count(const std::vector<std::string>& values, const std::string& field_name) {
+    if (values.empty()) {
+        return 0;
+    }
+    if (values.front() != "relative_box" || (values.size() - 1) % 6 != 0) {
+        throw std::runtime_error(field_name + " has an invalid internal region representation.");
+    }
+    return (values.size() - 1) / 6;
+}
+
+void validate_boundary_config(const SimulationConfig& args) {
+    const size_t selector_count = flattened_region_count(args.boundary_position, "boundary.boundary_position");
+    const size_t periodic_region_count = flattened_region_count(args.periodic_pair, "boundary.periodic_pair");
+    if (selector_count == 0) {
+        if (!args.boundary_conditions.empty() || !args.boundary_values.empty() || periodic_region_count != 0) {
+            throw std::runtime_error(
+                "boundary.boundary_position is required when boundary conditions, values, or periodic pairs are provided.");
+        }
+        return;
+    }
+    if (args.boundary_conditions.size() != selector_count) {
+        throw std::runtime_error(
+            "boundary.boundary_conditions must contain exactly one entry per boundary_position region.");
+    }
+    if (args.boundary_values.size() != selector_count) {
+        throw std::runtime_error(
+            "boundary.boundary_values must contain exactly one entry per boundary_position region; use 0 for periodic boundaries.");
+    }
+
+    size_t periodic_condition_count = 0;
+    for (size_t i = 0; i < selector_count; ++i) {
+        const BoundaryCondition condition = args.boundary_conditions[i];
+        const double value = args.boundary_values[i];
+        if (condition == BoundaryCondition::ThermalReservoir && value < 0.0) {
+            throw std::runtime_error("Thermal reservoir boundary values must be non-negative temperatures.");
+        }
+        if (condition == BoundaryCondition::Rough && value < 0.0) {
+            throw std::runtime_error("Rough boundary values must be non-negative roughness values.");
+        }
+        if (condition == BoundaryCondition::Periodic) {
+            ++periodic_condition_count;
+            if (value != 0.0) {
+                throw std::runtime_error("Periodic boundary values must be 0.");
+            }
+        }
+    }
+    if (periodic_region_count != periodic_condition_count || periodic_region_count % 2 != 0) {
+        throw std::runtime_error(
+            "boundary.periodic_pair must contain every periodic boundary region exactly once, in pairs.");
     }
 }
 
@@ -409,154 +563,134 @@ SimulationConfig parse_toml_file(const std::string& path) {
 
     std::unordered_map<std::string, std::string> kv;
     parse_toml_assignments(path, kv);
+    reject_unknown_keys(kv);
 
-    if (auto v = get_first_value(kv, {"geometry.model", "model"}); v.has_value()) {
+    if (auto v = get_value(kv, "geometry.model"); v.has_value()) {
         args.model = unquote(*v);
+        if (to_lower(args.model) == "cylinder") {
+            throw std::runtime_error("geometry.model='cylinder' is no longer supported; use 'box' or a mesh file.");
+        }
     }
-    if (auto v = get_first_value(kv, {"geometry.sizes", "sizes"}); v.has_value()) {
+    if (auto v = get_value(kv, "geometry.sizes"); v.has_value()) {
         args.sizes = parse_number_array(*v);
         // Input geometry sizes are in nm; convert to internal Angstrom.
         for (double& x : args.sizes) {
             x *= 10.0;
         }
     }
-    if (auto v = get_first_value(kv, {"simulation.particle_count", "particle_count"}); v.has_value()) {
+    if (auto v = get_value(kv, "simulation.particle_count"); v.has_value()) {
         args.particle_count = parse_double_scalar(*v);
     }
-    if (auto v = get_first_value(kv, {"simulation.time_step", "time_step"}); v.has_value()) {
+    if (auto v = get_value(kv, "simulation.time_step"); v.has_value()) {
         args.time_step = parse_double_scalar(*v);
     }
-    if (auto v = get_first_value(kv, {"simulation.iterations", "iterations"}); v.has_value()) {
+    if (auto v = get_value(kv, "simulation.iterations"); v.has_value()) {
         args.iterations = parse_int_scalar(*v);
     }
-    if (auto v = get_first_value(kv, {
-            "simulation.convergence_write_interval",
-            "convergence_write_interval"}); v.has_value()) {
+    if (auto v = get_value(kv, "simulation.convergence_write_interval"); v.has_value()) {
         args.convergence_write_interval = parse_int_scalar(*v);
     }
-    if (auto v = get_first_value(kv, {
-            "simulation.compute_kappa",
-            "compute_kappa"}); v.has_value()) {
+    if (auto v = get_value(kv, "simulation.random_seed"); v.has_value()) {
+        args.random_seed = parse_uint64_scalar(*v);
+    }
+    if (auto v = get_value(kv, "simulation.compute_kappa"); v.has_value()) {
         args.compute_kappa = parse_bool_scalar(*v);
     }
-    if (auto v = get_first_value(kv, {
-            "simulation.profile_timers",
-            "profile_timers"}); v.has_value()) {
+    if (auto v = get_value(kv, "simulation.profile_timers"); v.has_value()) {
         args.profile_timers = parse_bool_scalar(*v);
     }
-    if (auto v = get_first_value(kv, {
-            "simulation.progress_temperature_summary_only",
-            "progress_temperature_summary_only"}); v.has_value()) {
+    if (auto v = get_value(kv, "simulation.progress_temperature_summary_only"); v.has_value()) {
         args.progress_temperature_summary_only = parse_bool_scalar(*v);
     }
-    if (auto v = get_first_value(kv, {
-            "io.merge_coplanar_facets",
-            "simulation.merge_coplanar_facets",
-            "geometry.merge_coplanar_facets",
-            "merge_coplanar_facets"}); v.has_value()) {
+    if (auto v = get_value(kv, "geometry.merge_coplanar_facets"); v.has_value()) {
         args.merge_coplanar_facets = parse_bool_scalar(*v);
     }
-    if (auto v = get_first_value(kv, {
-            "simulation.temperature_lookup_dt",
-            "material.temperature_lookup_dt",
-            "temperature_lookup_dt"}); v.has_value()) {
+    if (auto v = get_value(kv, "simulation.temperature_lookup_dt"); v.has_value()) {
         args.temperature_lookup_dt = parse_double_scalar(*v);
     }
-    if (auto v = get_first_value(kv, {
-            "simulation.background_temperature_mode",
-            "transport.background_temperature_mode",
-            "background_temperature_mode"}); v.has_value()) {
+    if (auto v = get_value(kv, "simulation.background_temperature_mode"); v.has_value()) {
         args.background_temperature_mode = parse_temperature_mode(*v, "background_temperature_mode");
     }
-    if (auto v = get_first_value(kv, {
-            "simulation.background_temperature",
-            "transport.background_temperature",
-            "background_temperature"}); v.has_value()) {
+    if (auto v = get_value(kv, "simulation.background_temperature"); v.has_value()) {
         args.background_temperature = parse_double_scalar(*v);
     }
-    if (auto v = get_first_value(kv, {
-            "simulation.lifetime_temperature_mode",
-            "transport.lifetime_temperature_mode",
-            "lifetime_temperature_mode"}); v.has_value()) {
+    if (auto v = get_value(kv, "simulation.lifetime_temperature_mode"); v.has_value()) {
         args.lifetime_temperature_mode = parse_temperature_mode(*v, "lifetime_temperature_mode");
     }
-    if (auto v = get_first_value(kv, {
-            "simulation.lifetime_temperature",
-            "transport.lifetime_temperature",
-            "lifetime_temperature"}); v.has_value()) {
+    if (auto v = get_value(kv, "simulation.lifetime_temperature"); v.has_value()) {
         args.lifetime_temperature = parse_double_scalar(*v);
     }
 
-    if (auto v = get_first_value(kv, {"simulation.initial_temperature", "initial_temperature"}); v.has_value()) {
+    if (auto v = get_value(kv, "simulation.initial_temperature"); v.has_value()) {
         const std::string t = trim(*v);
         if (!t.empty() && t.front() == '[') {
-            args.initial_temperature = parse_string_array(t);
-        } else {
-            args.initial_temperature = {unquote(t)};
+            throw std::runtime_error("simulation.initial_temperature must be a numeric scalar or 'linear', not an array.");
         }
+        args.initial_temperature = parse_initial_temperature(t);
     }
 
-    if (const auto gv = get_first_value(kv, {"simulation.grid_xyz", "grid_xyz"}); gv.has_value()) {
+    if (const auto gv = get_value(kv, "simulation.grid_xyz"); gv.has_value()) {
         const auto gd = parse_number_array(*gv);
         if (gd.size() != 3) {
             throw std::runtime_error("grid_xyz must contain 3 values [nx, ny, nz].");
         }
-        args.grid_layout = {
-            "grid",
-            std::to_string(static_cast<int>(std::llround(gd[0]))),
-            std::to_string(static_cast<int>(std::llround(gd[1]))),
-            std::to_string(static_cast<int>(std::llround(gd[2])))
+        for (double value : gd) {
+            if (std::abs(value - std::round(value)) > 1e-12) {
+                throw std::runtime_error("grid_xyz values must be integers.");
+            }
+        }
+        args.grid = {
+            static_cast<int>(std::llround(gd[0])),
+            static_cast<int>(std::llround(gd[1])),
+            static_cast<int>(std::llround(gd[2]))
         };
     } else {
-        throw std::runtime_error("Missing required key: simulation.grid_xyz (or grid_xyz).");
+        throw std::runtime_error("Missing required key: simulation.grid_xyz.");
     }
 
-    if (auto v = get_first_value(kv, {"boundary.boundary_conditions", "boundary_conditions"}); v.has_value()) {
-        args.boundary_conditions = parse_string_array(*v);
+    if (auto v = get_value(kv, "boundary.boundary_conditions"); v.has_value()) {
+        args.boundary_conditions = parse_boundary_conditions(parse_string_array(*v));
     }
-    if (auto v = get_first_value(kv, {"boundary.boundary_values", "boundary_values"}); v.has_value()) {
+    if (auto v = get_value(kv, "boundary.boundary_values"); v.has_value()) {
         args.boundary_values = parse_number_array(*v);
     }
 
-    if (auto pts = get_first_value(kv, {
-            "boundary.boundary_position", "boundary_position"}); pts.has_value()) {
+    if (auto pts = get_value(kv, "boundary.boundary_position"); pts.has_value()) {
         args.boundary_position = flatten_boxes("relative_box", parse_region_array(*pts, "boundary_position"));
     }
 
-    if (auto pts = get_first_value(kv, {
-            "boundary.periodic_pair", "periodic_pair"}); pts.has_value()) {
+    if (auto pts = get_value(kv, "boundary.periodic_pair"); pts.has_value()) {
         args.periodic_pair = flatten_boxes("relative_box", parse_region_array(*pts, "periodic_pair"));
     }
 
-    if (auto v = get_first_value(kv, {"io.material_folder", "material_folder"}); v.has_value()) {
+    if (auto v = get_value(kv, "io.material_folder"); v.has_value()) {
         args.material_folder = unquote(*v);
     }
-    if (auto v = get_first_value(kv, {
-            "io.output_folder", "output_folder"}); v.has_value()) {
+    if (auto v = get_value(kv, "io.output_folder"); v.has_value()) {
         args.output_folder = unquote(*v);
     }
 
     bool heat_source_enabled_set = false;
-    if (auto v = get_first_value(kv, {"heat_source.enabled"}); v.has_value()) {
+    if (auto v = get_value(kv, "heat_source.enabled"); v.has_value()) {
         args.heat_source_enabled = parse_bool_scalar(*v);
         heat_source_enabled_set = true;
     }
-    if (auto v = get_first_value(kv, {"heat_source.min"}); v.has_value()) {
+    if (auto v = get_value(kv, "heat_source.min"); v.has_value()) {
         args.heat_source_min = parse_number_array(*v);
     }
-    if (auto v = get_first_value(kv, {"heat_source.max"}); v.has_value()) {
+    if (auto v = get_value(kv, "heat_source.max"); v.has_value()) {
         args.heat_source_max = parse_number_array(*v);
     }
-    if (auto v = get_first_value(kv, {"heat_source.power_density"}); v.has_value()) {
+    if (auto v = get_value(kv, "heat_source.power_density"); v.has_value()) {
         args.heat_source_power_density = parse_double_scalar(*v);
     }
-    if (auto v = get_first_value(kv, {"heat_source.profile"}); v.has_value()) {
-        args.heat_source_profile = to_lower(unquote(*v));
+    if (auto v = get_value(kv, "heat_source.profile"); v.has_value()) {
+        args.heat_source_profile = parse_heat_source_profile(*v);
     }
-    if (auto v = get_first_value(kv, {"heat_source.center"}); v.has_value()) {
+    if (auto v = get_value(kv, "heat_source.center"); v.has_value()) {
         args.heat_source_center = parse_number_array(*v);
     }
-    if (auto v = get_first_value(kv, {"heat_source.sigma"}); v.has_value()) {
+    if (auto v = get_value(kv, "heat_source.sigma"); v.has_value()) {
         args.heat_source_sigma = parse_number_array(*v);
     }
     if (!heat_source_enabled_set && infer_heat_source_enabled(args)) {
@@ -566,159 +700,39 @@ SimulationConfig parse_toml_file(const std::string& path) {
     return args;
 }
 
-// 函数说明：解析旧版参数文件并映射到统一配置对象。
-SimulationConfig parse_legacy_file(const std::string& path) {
-    SimulationConfig args;
-    args.input_directory = std::filesystem::absolute(std::filesystem::path(path)).parent_path().string();
-    const auto tokens = tokenize_legacy(path);
-
-    std::unordered_map<std::string, std::vector<std::string>> kv;
-    std::string current_key;
-
-    for (const auto& tk : tokens) {
-        if (is_option(tk)) {
-            current_key = tk;
-            kv[current_key] = {};
-        } else if (!current_key.empty()) {
-            kv[current_key].push_back(tk);
-        }
-    }
-
-    if (auto it = kv.find("--model"); it != kv.end() && !it->second.empty()) {
-        args.model = it->second.front();
-    }
-    if (auto it = kv.find("--sizes"); it != kv.end() && !it->second.empty()) {
-        args.sizes.clear();
-        for (const auto& v : it->second) {
-            args.sizes.push_back(std::stod(v) * 10.0);
-        }
-    }
-    if (auto it = kv.find("--particle_count"); it != kv.end() && !it->second.empty()) {
-        args.particle_count = std::stod(it->second.front());
-    }
-    if (auto it = kv.find("--time_step"); it != kv.end() && !it->second.empty()) {
-        args.time_step = std::stod(it->second.front());
-    }
-    if (auto it = kv.find("--iterations"); it != kv.end() && !it->second.empty()) {
-        args.iterations = std::stoi(it->second.front());
-    }
-    if (auto it = kv.find("--convergence_write_interval"); it != kv.end() && !it->second.empty()) {
-        args.convergence_write_interval = std::stoi(it->second.front());
-    }
-    if (auto it = kv.find("--compute_kappa"); it != kv.end() && !it->second.empty()) {
-        args.compute_kappa = parse_bool_scalar(it->second.front());
-    }
-    if (auto it = kv.find("--profile_timers"); it != kv.end() && !it->second.empty()) {
-        args.profile_timers = parse_bool_scalar(it->second.front());
-    }
-    if (auto it = kv.find("--progress_temperature_summary_only"); it != kv.end() && !it->second.empty()) {
-        args.progress_temperature_summary_only = parse_bool_scalar(it->second.front());
-    }
-    if (auto it = kv.find("--merge_coplanar_facets"); it != kv.end() && !it->second.empty()) {
-        args.merge_coplanar_facets = parse_bool_scalar(it->second.front());
-    }
-    if (auto it = kv.find("--temperature_lookup_dt"); it != kv.end() && !it->second.empty()) {
-        args.temperature_lookup_dt = std::stod(it->second.front());
-    }
-    if (auto it = kv.find("--background_temperature_mode"); it != kv.end() && !it->second.empty()) {
-        args.background_temperature_mode = parse_temperature_mode(it->second.front(), "background_temperature_mode");
-    }
-    if (auto it = kv.find("--background_temperature"); it != kv.end() && !it->second.empty()) {
-        args.background_temperature = std::stod(it->second.front());
-    }
-    if (auto it = kv.find("--lifetime_temperature_mode"); it != kv.end() && !it->second.empty()) {
-        args.lifetime_temperature_mode = parse_temperature_mode(it->second.front(), "lifetime_temperature_mode");
-    }
-    if (auto it = kv.find("--lifetime_temperature"); it != kv.end() && !it->second.empty()) {
-        args.lifetime_temperature = std::stod(it->second.front());
-    }
-    if (auto it = kv.find("--grid_xyz"); it != kv.end() && it->second.size() >= 3) {
-        args.grid_layout = {"grid", it->second[0], it->second[1], it->second[2]};
-    } else {
-        throw std::runtime_error("Missing required option: --grid_xyz nx ny nz");
-    }
-    if (auto it = kv.find("--initial_temperature"); it != kv.end()) {
-        args.initial_temperature = it->second;
-    }
-    if (auto it = kv.find("--boundary_conditions"); it != kv.end()) {
-        args.boundary_conditions = it->second;
-    }
-    if (auto it = kv.find("--boundary_position"); it != kv.end()) {
-        args.boundary_position = it->second;
-    }
-    if (auto it = kv.find("--boundary_values"); it != kv.end()) {
-        args.boundary_values.clear();
-        for (const auto& v : it->second) {
-            args.boundary_values.push_back(std::stod(v));
-        }
-    }
-    if (auto it = kv.find("--periodic_pair"); it != kv.end()) {
-        args.periodic_pair = it->second;
-    }
-    if (auto it = kv.find("--material_folder"); it != kv.end() && !it->second.empty()) {
-        args.material_folder = it->second.front();
-    }
-    if (auto it = kv.find("--output_folder"); it != kv.end() && !it->second.empty()) {
-        args.output_folder = it->second.front();
-    }
-
-    bool heat_source_enabled_set = false;
-    if (auto it = kv.find("--heat_source_enabled"); it != kv.end() && !it->second.empty()) {
-        args.heat_source_enabled = parse_bool_scalar(it->second.front());
-        heat_source_enabled_set = true;
-    }
-    if (auto it = kv.find("--heat_source_min"); it != kv.end()) {
-        args.heat_source_min.clear();
-        for (const auto& v : it->second) {
-            args.heat_source_min.push_back(std::stod(v));
-        }
-    }
-    if (auto it = kv.find("--heat_source_max"); it != kv.end()) {
-        args.heat_source_max.clear();
-        for (const auto& v : it->second) {
-            args.heat_source_max.push_back(std::stod(v));
-        }
-    }
-    if (auto it = kv.find("--heat_source_power_density"); it != kv.end() && !it->second.empty()) {
-        args.heat_source_power_density = std::stod(it->second.front());
-    }
-    if (auto it = kv.find("--heat_source_profile"); it != kv.end() && !it->second.empty()) {
-        args.heat_source_profile = to_lower(it->second.front());
-    }
-    if (auto it = kv.find("--heat_source_center"); it != kv.end()) {
-        args.heat_source_center.clear();
-        for (const auto& v : it->second) {
-            args.heat_source_center.push_back(std::stod(v));
-        }
-    }
-    if (auto it = kv.find("--heat_source_sigma"); it != kv.end()) {
-        args.heat_source_sigma.clear();
-        for (const auto& v : it->second) {
-            args.heat_source_sigma.push_back(std::stod(v));
-        }
-    }
-    if (!heat_source_enabled_set && infer_heat_source_enabled(args)) {
-        args.heat_source_enabled = true;
-    }
-
-    return args;
-}
 }  // namespace
 
-// 函数说明：根据文件类型选择 TOML 或旧格式解析路径。
+// 函数说明：加载规范的分节 TOML 输入并完成统一校验。
 SimulationConfig load_simulation_config(const std::string& path) {
-    SimulationConfig args;
-    if (looks_like_toml(path)) {
-        args = parse_toml_file(path);
-    } else {
-        args = parse_legacy_file(path);
+    if (to_lower(std::filesystem::path(path).extension().string()) != ".toml") {
+        throw std::runtime_error("Only sectioned TOML input files (*.toml) are supported.");
     }
+    SimulationConfig args = parse_toml_file(path);
     if (!(args.temperature_lookup_dt > 0.0) || !std::isfinite(args.temperature_lookup_dt)) {
         throw std::runtime_error("temperature_lookup_dt must be a finite positive value.");
     }
     validate_temperature_mode_config(args);
+    validate_boundary_config(args);
     if (args.convergence_write_interval <= 0) {
         throw std::runtime_error("convergence_write_interval must be a positive integer.");
+    }
+    if (!(args.particle_count > 0.0) || !std::isfinite(args.particle_count)) {
+        throw std::runtime_error("particle_count must be a finite positive value.");
+    }
+    if (!(args.time_step > 0.0) || !std::isfinite(args.time_step)) {
+        throw std::runtime_error("time_step must be a finite positive value.");
+    }
+    if (args.iterations <= 0) {
+        throw std::runtime_error("iterations must be a positive integer.");
+    }
+    if (args.grid.nx <= 0 || args.grid.ny <= 0 || args.grid.nz <= 0) {
+        throw std::runtime_error("grid_xyz values must be positive integers.");
+    }
+    if (args.model == "box") {
+        if (args.sizes.size() != 3 ||
+            std::any_of(args.sizes.begin(), args.sizes.end(), [](double value) { return !(value > 0.0); })) {
+            throw std::runtime_error("geometry.sizes for box must contain three positive values.");
+        }
     }
     return args;
 }

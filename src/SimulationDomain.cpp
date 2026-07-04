@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -335,8 +336,13 @@ SimulationDomain::SimulationDomain(const SimulationConfig& args) {
     sync_surface_mesh_properties();
     assign_boundary_conditions(args);
     build_periodic_connections(args);
+    for (int facet = 0; facet < facet_count_; ++facet) {
+        if (facet_boundary_conditions_[static_cast<size_t>(facet)] == 'P' && !has_periodic_pair(facet)) {
+            throw std::runtime_error(
+                "Periodic boundary facet " + std::to_string(facet) + " is not assigned to a periodic pair.");
+        }
+    }
     initialize_grids(args);
-    build_grid_connections();
     write_domain_summary(args);
 
     std::cout << "SimulationDomain initialized: volume=" << volume_
@@ -373,15 +379,20 @@ int SimulationDomain::fast_grid_index(const std::array<double, 3>& p) const {
     const int ix = axis_index(0, nx);
     const int iy = axis_index(1, ny);
     const int iz = axis_index(2, nz);
-    return (ix * ny + iy) * nz + iz;
+    const int cell = (ix * ny + iy) * nz + iz;
+    if (cell < 0 || cell >= static_cast<int>(cell_to_grid_index_.size())) {
+        return -1;
+    }
+    return cell_to_grid_index_[static_cast<size_t>(cell)];
 }
 
-// 函数说明：根据 box/cylinder/文件模型构建并单位化表面网格。
+// 函数说明：根据 box 或文件模型构建并单位化表面网格。
 void SimulationDomain::build_surface_mesh(const SimulationConfig& args) {
     std::vector<Vec3> vertices;
     std::vector<Tri> faces;
 
-    if (args.model == "box") {
+    is_box_geometry_ = (args.model == "box");
+    if (is_box_geometry_) {
         if (args.sizes.size() != 3) {
             throw std::runtime_error("Box requires 3 sizes.");
         }
@@ -400,42 +411,6 @@ void SimulationDomain::build_surface_mesh(const SimulationConfig& args) {
             Tri{0, 4, 5}, Tri{0, 5, 1}, Tri{3, 7, 6}, Tri{3, 6, 2},
             Tri{0, 4, 7}, Tri{0, 7, 3}, Tri{1, 5, 6}, Tri{1, 6, 2}
         };
-    } else if (args.model == "cylinder") {
-        if (args.sizes.size() < 3) {
-            throw std::runtime_error("Cylinder requires [L R N].");
-        }
-        const double L = args.sizes[0];
-        const double R = args.sizes[1];
-        const int N = static_cast<int>(args.sizes[2]);
-        if (N < 3) {
-            throw std::runtime_error("Cylinder segment count N must be >= 3.");
-        }
-        vertices.push_back({0.0, 0.0, 0.0});
-        for (int i = 0; i < N; ++i) {
-            const double a = (2.0 * M_PI * i) / static_cast<double>(N);
-            vertices.push_back({R * std::cos(a), R * std::sin(a), 0.0});
-        }
-        vertices.push_back({0.0, 0.0, L});
-        for (int i = 0; i < N; ++i) {
-            const double a = (2.0 * M_PI * i) / static_cast<double>(N);
-            vertices.push_back({R * std::cos(a), R * std::sin(a), L});
-        }
-        for (int i = 1; i <= N; ++i) {
-            const int j = (i == N) ? 1 : (i + 1);
-            faces.push_back({0, i, j});
-        }
-        for (int i = 1; i <= N; ++i) {
-            const int j = (i == N) ? 1 : (i + 1);
-            const int io = i + (N + 1);
-            const int jo = j + (N + 1);
-            faces.push_back({i, io, jo});
-            faces.push_back({i, j, jo});
-        }
-        const int top_center = N + 1;
-        for (int i = 1; i <= N; ++i) {
-            const int j = (i == N) ? 1 : (i + 1);
-            faces.push_back({top_center, j + (N + 1), i + (N + 1)});
-        }
     } else {
         std::filesystem::path mesh_path(args.model);
         if (!mesh_path.is_absolute()) {
@@ -486,18 +461,6 @@ void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) 
     }
     // Unspecified boundaries always default to rough-surface scattering (R), with eta fallback = 0.
     const char default_bc = 'R';
-    auto parse_bc = [&](const std::string& token, size_t index) -> char {
-        if (token.empty()) {
-            return default_bc;
-        }
-        const char bc = static_cast<char>(std::toupper(static_cast<unsigned char>(token[0])));
-        if (token.size() != 1 || (bc != 'T' && bc != 'P' && bc != 'R')) {
-            throw std::runtime_error(
-                "Unsupported boundary condition at index " + std::to_string(index) +
-                ": '" + token + "'. Only 'T', 'P', 'R' are supported.");
-        }
-        return bc;
-    };
     facet_boundary_conditions_.assign(facet_count_, default_bc);
     boundary_facets_.clear();
     std::vector<std::vector<int>> selector_facets;
@@ -505,6 +468,11 @@ void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) 
 
     if (!args.boundary_position.empty()) {
         const auto selectors = parse_boundary_selectors(args.boundary_position, "boundary_position");
+        if (args.boundary_conditions.size() != selectors.boxes.size() ||
+            args.boundary_values.size() != selectors.boxes.size()) {
+            throw std::runtime_error(
+                "boundary_position, boundary_conditions, and boundary_values must have identical lengths.");
+        }
         const Vec3 ext = sub(bounds_max_, bounds_min_);
         std::unordered_set<int> unique_boundary_facets;
         selector_facets.reserve(selectors.boxes.size());
@@ -533,7 +501,7 @@ void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) 
             };
 
             const char bc = (i < args.boundary_conditions.size())
-                ? parse_bc(args.boundary_conditions[i], i)
+                ? boundary_condition_code(args.boundary_conditions[i])
                 : default_bc;
             selector_conditions.push_back(bc);
 
@@ -551,6 +519,10 @@ void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) 
                 if (unique_boundary_facets.insert(f).second) {
                     boundary_facets_.push_back(f);
                 }
+            }
+            if (matched.empty()) {
+                throw std::runtime_error(
+                    "boundary_position region " + std::to_string(i) + " did not match any mesh facet.");
             }
             selector_facets.push_back(std::move(matched));
         }
@@ -593,11 +565,22 @@ void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) 
         if (const auto it = reservoir_values_by_facet.find(f); it != reservoir_values_by_facet.end()) {
             reservoir_values_[j] = it->second;
         }
+        if (!std::isfinite(reservoir_values_[j])) {
+            throw std::runtime_error(
+                "Thermal reservoir facet " + std::to_string(f) + " has no finite temperature value.");
+        }
     }
     for (size_t j = 0; j < rough_facets_.size(); ++j) {
         const int f = rough_facets_[j];
         if (const auto it = roughness_values_by_facet.find(f); it != roughness_values_by_facet.end()) {
             roughness_values_[j] = it->second;
+        } else {
+            // Facets not selected by any region keep the documented smooth-rough default eta=0.
+            roughness_values_[j] = 0.0;
+        }
+        if (!std::isfinite(roughness_values_[j]) || roughness_values_[j] < 0.0) {
+            throw std::runtime_error(
+                "Rough boundary facet " + std::to_string(f) + " has no valid roughness value.");
         }
     }
 }
@@ -741,21 +724,14 @@ void SimulationDomain::build_periodic_connections(const SimulationConfig& args) 
 
 // 函数说明：初始化控制体网格布局入口（当前为规则网格模式）。
 void SimulationDomain::initialize_grids(const SimulationConfig& args) {
-    if (args.grid_layout.front() == "grid") {
-        initialize_grid_cells(args);
-    } else {
-        throw std::runtime_error("Unsupported grid layout mode. Use grid.");
-    }
+    initialize_grid_cells(args);
 }
 
 // 函数说明：在几何域内生成有效网格中心与体积权重。
 void SimulationDomain::initialize_grid_cells(const SimulationConfig& args) {
-    if (args.grid_layout.size() < 4) {
-        throw std::runtime_error("grid layout requires: grid nx ny nz");
-    }
-    const int nx = std::stoi(args.grid_layout[1]);
-    const int ny = std::stoi(args.grid_layout[2]);
-    const int nz = std::stoi(args.grid_layout[3]);
+    const int nx = args.grid.nx;
+    const int ny = args.grid.ny;
+    const int nz = args.grid.nz;
     if (nx <= 0 || ny <= 0 || nz <= 0) {
         throw std::runtime_error("Grid sizes must be positive.");
     }
@@ -768,8 +744,10 @@ void SimulationDomain::initialize_grid_cells(const SimulationConfig& args) {
         (ext[2] > 0.0) ? (static_cast<double>(nz) / ext[2]) : 0.0
     };
     grid_centers_.clear();
-    grid_centers_.reserve(static_cast<size_t>(nx * ny * nz));
-    const bool is_box = (args.model == "box");
+    const size_t total_cells = static_cast<size_t>(nx) * static_cast<size_t>(ny) * static_cast<size_t>(nz);
+    grid_centers_.reserve(total_cells);
+    cell_to_grid_index_.assign(total_cells, -1);
+    const bool is_box = is_box_geometry_;
     for (int ix = 0; ix < nx; ++ix) {
         for (int iy = 0; iy < ny; ++iy) {
             for (int iz = 0; iz < nz; ++iz) {
@@ -779,6 +757,8 @@ void SimulationDomain::initialize_grid_cells(const SimulationConfig& args) {
                     bounds_min_[2] + (static_cast<double>(iz) + 0.5) * ext[2] / static_cast<double>(nz)
                 };
                 if (is_box || mesh_.contains_point(p)) {
+                    const int cell = (ix * ny + iy) * nz + iz;
+                    cell_to_grid_index_[static_cast<size_t>(cell)] = static_cast<int>(grid_centers_.size());
                     grid_centers_.push_back(p);
                 }
             }
@@ -788,49 +768,43 @@ void SimulationDomain::initialize_grid_cells(const SimulationConfig& args) {
     if (grid_count_ == 0) {
         throw std::runtime_error("No valid grid centers found inside mesh.");
     }
-    if (is_box && grid_count_ == nx * ny * nz) {
-        fast_grid_index_enabled_ = true;
+    // Fill invalid cells with the nearest valid grid index using a multi-source
+    // six-neighbor breadth-first traversal. Particle lookup is then O(1) for
+    // both box and arbitrary mesh geometries.
+    std::deque<int> queue;
+    for (int cell = 0; cell < static_cast<int>(cell_to_grid_index_.size()); ++cell) {
+        if (cell_to_grid_index_[static_cast<size_t>(cell)] >= 0) {
+            queue.push_back(cell);
+        }
     }
-    grid_volumes_.assign(static_cast<size_t>(grid_count_), volume_ / static_cast<double>(grid_count_));
-}
-
-// 函数说明：基于邻近关系与几何可达性构建网格连接图。
-void SimulationDomain::build_grid_connections() {
-    grid_connections_.clear();
-    if (grid_count_ <= 1) {
-        return;
-    }
-    for (int i = 0; i < grid_count_; ++i) {
-        double min_d = std::numeric_limits<double>::max();
-        std::vector<std::pair<double, int>> dists;
-        dists.reserve(static_cast<size_t>(grid_count_ - 1));
-        for (int j = 0; j < grid_count_; ++j) {
-            if (i == j) {
+    const int yz = ny * nz;
+    while (!queue.empty()) {
+        const int cell = queue.front();
+        queue.pop_front();
+        const int ix = cell / yz;
+        const int rem = cell % yz;
+        const int iy = rem / nz;
+        const int iz = rem % nz;
+        const int source_grid = cell_to_grid_index_[static_cast<size_t>(cell)];
+        const std::array<std::array<int, 3>, 6> neighbors {{
+            {{ix - 1, iy, iz}}, {{ix + 1, iy, iz}},
+            {{ix, iy - 1, iz}}, {{ix, iy + 1, iz}},
+            {{ix, iy, iz - 1}}, {{ix, iy, iz + 1}}
+        }};
+        for (const auto& n : neighbors) {
+            if (n[0] < 0 || n[0] >= nx || n[1] < 0 || n[1] >= ny || n[2] < 0 || n[2] >= nz) {
                 continue;
             }
-            const double d = norm(sub(grid_centers_[i], grid_centers_[j]));
-            dists.push_back({d, j});
-            min_d = std::min(min_d, d);
-        }
-        for (const auto& [d, j] : dists) {
-            if (d <= min_d * 1.01) {
-                const int a = std::min(i, j);
-                const int b = std::max(i, j);
-                if (std::find(grid_connections_.begin(), grid_connections_.end(), std::array<int, 2>{a, b}) == grid_connections_.end()) {
-                    const Vec3 mid = mul(add(grid_centers_[a], grid_centers_[b]), 0.5);
-                    if (mesh_.contains_point(mid)) {
-                        grid_connections_.push_back({a, b});
-                    } else {
-                        const Vec3 dir = sub(grid_centers_[b], grid_centers_[a]);
-                        const auto [_, t, __] = mesh_.trace_boundary_intersection(grid_centers_[a], dir);
-                        if (std::isinf(t) || t > 1.0) {
-                            grid_connections_.push_back({a, b});
-                        }
-                    }
-                }
+            const int next = (n[0] * ny + n[1]) * nz + n[2];
+            if (cell_to_grid_index_[static_cast<size_t>(next)] >= 0) {
+                continue;
             }
+            cell_to_grid_index_[static_cast<size_t>(next)] = source_grid;
+            queue.push_back(next);
         }
     }
+    fast_grid_index_enabled_ = true;
+    grid_volumes_.assign(static_cast<size_t>(grid_count_), volume_ / static_cast<double>(grid_count_));
 }
 
 // 函数说明：输出几何、边界、网格与输入信息摘要文件。
@@ -904,10 +878,11 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
     out << "time_step = " << args.time_step << '\n';
     out << "iterations = " << args.iterations << '\n';
     out << "convergence_write_interval = " << args.convergence_write_interval << '\n';
+    out << "random_seed = " << args.random_seed << '\n';
     out << "temperature_lookup_dt = " << args.temperature_lookup_dt << '\n';
-    out << "background_temperature_mode = " << args.background_temperature_mode << '\n';
+    out << "background_temperature_mode = " << to_string(args.background_temperature_mode) << '\n';
     out << "background_temperature = " << args.background_temperature << '\n';
-    out << "lifetime_temperature_mode = " << args.lifetime_temperature_mode << '\n';
+    out << "lifetime_temperature_mode = " << to_string(args.lifetime_temperature_mode) << '\n';
     out << "lifetime_temperature = " << args.lifetime_temperature << '\n';
     out << "compute_kappa = " << (args.compute_kappa ? "true" : "false") << '\n';
     out << "profile_timers = " << (args.profile_timers ? "true" : "false") << '\n';
@@ -915,13 +890,22 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
         << (args.progress_temperature_summary_only ? "true" : "false") << '\n';
     out << "merge_coplanar_facets = "
         << (args.merge_coplanar_facets ? "true" : "false") << '\n';
-    out << "initial_temperature = " << join_strings(args.initial_temperature) << '\n';
-    if (args.grid_layout.size() >= 4) {
-        out << "grid_xyz = [" << args.grid_layout[1] << ", " << args.grid_layout[2] << ", " << args.grid_layout[3] << "]\n";
+    out << "initial_temperature = ";
+    if (args.initial_temperature.mode == InitialTemperatureMode::Uniform) {
+        out << args.initial_temperature.uniform_temperature;
     } else {
-        out << "grid_xyz = []\n";
+        out << to_string(args.initial_temperature.mode);
     }
-    out << "boundary_conditions = " << join_strings(args.boundary_conditions) << '\n';
+    out << '\n';
+    out << "grid_xyz = [" << args.grid.nx << ", " << args.grid.ny << ", " << args.grid.nz << "]\n";
+    out << "boundary_conditions = ";
+    for (size_t i = 0; i < args.boundary_conditions.size(); ++i) {
+        if (i > 0) {
+            out << " ";
+        }
+        out << to_string(args.boundary_conditions[i]);
+    }
+    out << '\n';
     out << "boundary_values = " << join_numbers(args.boundary_values) << '\n';
     const auto [boundary_selector_mode, boundary_selector_count] = boundary_selector_info(args.boundary_position);
     out << "boundary_position_selector_mode = " << boundary_selector_mode << '\n';
@@ -932,7 +916,7 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
     out << "material_folder = " << args.material_folder << '\n';
     out << "output_folder = " << args.output_folder << '\n';
     out << "heat_source_enabled = " << (args.heat_source_enabled ? "true" : "false") << '\n';
-    out << "heat_source_profile = " << args.heat_source_profile << '\n';
+    out << "heat_source_profile = " << to_string(args.heat_source_profile) << '\n';
     out << "heat_source_min = " << join_numbers(args.heat_source_min) << '\n';
     out << "heat_source_max = " << join_numbers(args.heat_source_max) << '\n';
     out << "heat_source_center = " << join_numbers(args.heat_source_center) << '\n';
@@ -951,7 +935,7 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
 
     out << "[grid]\n";
     out << "count = " << grid_count_ << '\n';
-    out << "connections = " << grid_connections_.size() << '\n';
+    out << "lookup = voxel_to_active_grid_o1\n";
     out << '\n';
 
     out << "[boundary]\n";

@@ -5,6 +5,7 @@ model = "../model/finfet.stl"
 particle_count = 10000000
 time_step = 0.1
 iterations = 1000
+random_seed = 12345
 compute_kappa = false
 initial_temperature = 300
 grid_xyz = [22, 36, 30]

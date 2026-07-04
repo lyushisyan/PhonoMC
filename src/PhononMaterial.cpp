@@ -278,7 +278,7 @@ bool PhononMaterial::load_hdf5_data(const SimulationConfig& args, int mat_index,
         }
         std::string poscar_err;
         if (!load_poscar_lattice_volume(material_folder_path_, &poscar_err)) {
-            std::cerr << "Warning: " << poscar_err << ". Using unit_cell_volume=1.0 A^3.\n";
+            throw std::runtime_error("Strict POSCAR loading failed: " + poscar_err);
         }
 
         fs::path hdf_path = folder / "kappa-fbz.hdf5";

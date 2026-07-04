@@ -36,6 +36,22 @@ cmake --build build -j
 
 Executable: `build/PhonoMC`
 
+Run the basic configuration tests:
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+### Documentation
+
+```bash
+python3 -m pip install -r docs/requirements.txt
+make -C docs html
+```
+
+Open `docs/build/html/index.html`. Read the Docs is configured through
+`.readthedocs.yaml`.
+
 ### Run
 
 ```bash
@@ -50,9 +66,14 @@ OMP_NUM_THREADS=64 ./build/PhonoMC example/input_cross_100nm.toml
 
 ### Input Rules (Current)
 
-- Strict key set is expected.
+- Only sectioned `.toml` input is supported; legacy `.txt` / `--option` input and top-level key aliases are not accepted.
+- Keys must be placed under `[geometry]`, `[simulation]`, `[boundary]`, `[heat_source]`, or `[io]`; unknown keys abort parsing.
+- Geometry supports `model = "box"` or a mesh file path; the cylinder generator is not supported.
 - Required simulation grid key: `grid_xyz = [nx, ny, nz]`.
+- `boundary_position`, `boundary_conditions`, and `boundary_values` must have identical lengths. Use value `0` for `P`, and list every periodic region exactly once in `periodic_pair`.
+- Every declared boundary region must match at least one mesh facet, and every periodic facet must be paired.
 - Temperature export stride: `convergence_write_interval = 10` (write `convergence.txt` every N steps).
+- Reproducible runs: set `random_seed = 12345` under `[simulation]`; exact OpenMP replay also requires the same thread configuration.
 - Progress print mode: `progress_temperature_summary_only = true` prints only `Tmin/Tavg/Tmax`.
 - `initial_temperature` supports:
   - `300` (uniform initial temperature, unit: K)
@@ -66,7 +87,7 @@ OMP_NUM_THREADS=64 ./build/PhonoMC example/input_cross_100nm.toml
 - `sizes` in TOML use **nm**.
 - STL coordinates use **nm**.
 - Rough boundary value (`R` in `boundary_conditions`) in `boundary_values` uses **nm**.
-- If HDF5 material loading fails, run aborts by default.
+- Both POSCAR and HDF5 material data are required; either loading failure aborts the run.
 
 ### Outputs
 
@@ -134,6 +155,21 @@ cmake --build build -j
 
 可执行文件：`build/PhonoMC`
 
+运行基础配置测试：
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+### 文档
+
+```bash
+python3 -m pip install -r docs/requirements.txt
+make -C docs html
+```
+
+打开 `docs/build/html/index.html`。Read the Docs 通过 `.readthedocs.yaml` 配置。
+
 ### 运行
 
 ```bash
@@ -148,9 +184,14 @@ OMP_NUM_THREADS=64 ./build/PhonoMC example/input_cross_100nm.toml
 
 ### 当前输入规则
 
-- 采用严格关键词集合。
+- 仅支持分节 `.toml` 输入；不再支持旧 `.txt` / `--option` 格式和顶层键别名。
+- 配置键必须位于 `[geometry]`、`[simulation]`、`[boundary]`、`[heat_source]` 或 `[io]` 中；未知键会直接报错。
+- 几何仅支持 `model = "box"` 或网格文件路径，不再支持圆柱生成器。
 - 网格参数必填：`grid_xyz = [nx, ny, nz]`。
+- `boundary_position`、`boundary_conditions` 和 `boundary_values` 长度必须一致；`P` 边界的值填 `0`，并在 `periodic_pair` 中恰好列出一次。
+- 每个边界区域必须至少命中一个 facet，每个周期 facet 必须成对。
 - 温度导出步长：`convergence_write_interval = 10`（每 N 步写一次 `convergence.txt`）。
+- 可重现运行：在 `[simulation]` 中设置 `random_seed = 12345`；OpenMP 精确重现还需保持相同线程配置。
 - 进度打印模式：`progress_temperature_summary_only = true` 时只打印 `Tmin/Tavg/Tmax`。
 - `initial_temperature` 支持：
   - `300`（全域统一初始温度，单位 K）
@@ -164,7 +205,7 @@ OMP_NUM_THREADS=64 ./build/PhonoMC example/input_cross_100nm.toml
 - TOML 中 `sizes` 单位是 **nm**。
 - STL 坐标单位是 **nm**。
 - 粗糙边界（`boundary_conditions` 中的 `R`）在 `boundary_values` 里单位是 **nm**。
-- HDF5 材料加载失败时默认直接报错终止。
+- POSCAR 和 HDF5 材料数据都必须存在且有效，任一加载失败都会终止运行。
 
 ### 输出文件
 
@@ -232,6 +273,22 @@ cmake --build build -j
 
 Исполняемый файл: `build/PhonoMC`
 
+Запуск базовых тестов конфигурации:
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+### Документация
+
+```bash
+python3 -m pip install -r docs/requirements.txt
+make -C docs html
+```
+
+Откройте `docs/build/html/index.html`. Read the Docs настраивается через
+`.readthedocs.yaml`.
+
 ### Запуск
 
 ```bash
@@ -246,9 +303,14 @@ OMP_NUM_THREADS=64 ./build/PhonoMC example/input_cross_100nm.toml
 
 ### Правила входных данных (текущие)
 
-- Используется строгий набор ключей.
+- Поддерживаются только секционные файлы `.toml`; старые `.txt` / `--option` и псевдонимы ключей верхнего уровня удалены.
+- Ключи должны находиться в `[geometry]`, `[simulation]`, `[boundary]`, `[heat_source]` или `[io]`; неизвестные ключи вызывают ошибку.
+- Геометрия поддерживает `model = "box"` или путь к сетке; генератор цилиндра удалён.
 - Обязательный ключ сетки: `grid_xyz = [nx, ny, nz]`.
+- `boundary_position`, `boundary_conditions` и `boundary_values` должны иметь одинаковую длину; для `P` используется значение `0`, а все периодические области ровно один раз указываются в `periodic_pair`.
+- Каждая область границы должна совпасть хотя бы с одним facet, а каждая периодическая грань должна иметь пару.
 - Шаг вывода температуры: `convergence_write_interval = 10` (запись `convergence.txt` каждые N шагов).
+- Воспроизводимость: задайте `random_seed = 12345` в `[simulation]`; для точного повтора OpenMP также нужна та же конфигурация потоков.
 - Режим вывода прогресса: `progress_temperature_summary_only = true` печатает только `Tmin/Tavg/Tmax`.
 - `initial_temperature` поддерживает:
   - `300` (равномерная начальная температура, K)
@@ -262,7 +324,7 @@ OMP_NUM_THREADS=64 ./build/PhonoMC example/input_cross_100nm.toml
 - `sizes` в TOML задаются в **nm**.
 - STL-координаты задаются в **nm**.
 - Для шероховатой границы (`R` в `boundary_conditions`) значение в `boundary_values` задается в **nm**.
-- При ошибке загрузки HDF5 расчёт по умолчанию прерывается.
+- POSCAR и HDF5 обязательны; ошибка загрузки любого из них прерывает расчёт.
 
 ### Выходные файлы
 

@@ -18,11 +18,11 @@ public:
     const std::array<double, 3>& bounds_max() const { return bounds_max_; }
     const std::vector<std::array<double, 3>>& grid_centers() const { return grid_centers_; }
     const std::vector<double>& grid_volumes() const { return grid_volumes_; }
-    const std::vector<std::array<int, 2>>& grid_connections() const { return grid_connections_; }
     const std::vector<char>& boundary_conditions() const { return facet_boundary_conditions_; }
     const std::vector<int>& reservoir_facets() const { return reservoir_facets_; }
     const std::vector<double>& reservoir_values() const { return reservoir_values_; }
     bool fast_grid_index_enabled() const { return fast_grid_index_enabled_; }
+    bool is_box_geometry() const { return is_box_geometry_; }
     int fast_grid_index(const std::array<double, 3>& p) const;
     char facet_boundary_condition(int facet) const;
     double reservoir_value_for_facet(int facet, double fallback = 300.0) const;
@@ -39,7 +39,6 @@ private:
     void build_periodic_connections(const SimulationConfig& args);
     void initialize_grids(const SimulationConfig& args);
     void initialize_grid_cells(const SimulationConfig& args);
-    void build_grid_connections();
     void write_domain_summary(const SimulationConfig& args) const;
 
     SurfaceMesh mesh_;
@@ -59,11 +58,12 @@ private:
     std::vector<std::array<int, 2>> connected_facets_;
     std::vector<std::array<double, 3>> grid_centers_;
     std::vector<double> grid_volumes_;
-    std::vector<std::array<int, 2>> grid_connections_;
     std::vector<int> periodic_pair_;
     std::vector<std::array<double, 3>> periodic_shift_;
 
     bool fast_grid_index_enabled_ = false;
     std::array<int, 3> fast_grid_shape_ {1, 1, 1};
     std::array<double, 3> fast_grid_inv_cell_ {0.0, 0.0, 0.0};
+    std::vector<int> cell_to_grid_index_;
+    bool is_box_geometry_ = true;
 };

@@ -45,6 +45,8 @@ private:
         double in_occupation) const;
     void update_collision_cache(const SimulationDomain& geometry, const std::vector<int>& indices);
     void update_collision_cache_single(const SimulationDomain& geometry, int i);
+    void throw_if_collision_cache_failed(const char* context) const;
+    void throw_if_excessive_collisions() const;
     int nearest_grid_index(const SimulationDomain& geometry, const Vec3& p) const;
     void process_boundary_collision(const SimulationDomain& geometry, int i);
     int remove_absorbed_particles();
@@ -64,6 +66,9 @@ private:
     void append_convergence_row() const;
     void write_rough_boundary_mode_map(const SimulationDomain& geometry, const PhononMaterial& phonon) const;
     void ensure_tls_buffers(int thread_count, int nsv);
+    void ensure_boundary_tls_buffers(int thread_count, int reservoir_count);
+    void reset_boundary_tls_counters();
+    void merge_boundary_tls_counters();
 
     static Vec3 add(const Vec3& a, const Vec3& b);
     static Vec3 sub(const Vec3& a, const Vec3& b);
@@ -75,8 +80,9 @@ private:
     SimulationConfig args_;
     const SimulationDomain* geometry_ = nullptr;
     const PhononMaterial* phonon_ = nullptr;
-    mutable std::mt19937_64 rng_ {std::random_device{}()};
+    mutable std::mt19937_64 rng_;
     std::uint64_t rng_seed_base_ = 0;
+    mutable std::vector<std::mt19937_64> thread_rngs_;
     int particle_count_ = 0;
     double time_step_ = 1.0;
     double elapsed_time_ = 0.0;
@@ -113,6 +119,7 @@ private:
     std::vector<int> cached_collision_facets_;
     std::vector<char> cached_collision_conditions_;
     std::vector<std::uint8_t> particle_alive_flags_;
+    std::vector<std::uint8_t> collision_failure_flags_;
 
     int reservoir_count_ = 0;
     std::vector<int> reservoir_facets_;
@@ -143,7 +150,7 @@ private:
     std::vector<RoughFacetData> rough_boundary_data_;
 
     bool local_heat_source_enabled_ = false;
-    std::string local_heat_source_profile_ {"uniform"};
+    HeatSourceProfile local_heat_source_profile_ = HeatSourceProfile::Uniform;
     double local_heat_source_power_density_wm3_ = 0.0;
     std::vector<double> local_heat_source_grid_weights_;
 
@@ -153,6 +160,13 @@ private:
     std::vector<Vec3> flux_tls_buffer_;
     int tls_thread_count_ = 0;
     int tls_nsv_ = 0;
+
+    // Per-thread boundary counters. Boundary collisions run inside OpenMP loops,
+    // so shared step/reservoir counters are merged only after particle advance.
+    std::vector<long long> absorbed_tls_buffer_;
+    std::vector<int> reservoir_leaving_tls_buffer_;
+    int boundary_tls_thread_count_ = 0;
+    int boundary_tls_reservoir_count_ = 0;
 
     bool profile_timers_enabled_ = false;
     int openmp_thread_count_ = 1;
@@ -175,6 +189,12 @@ private:
     mutable std::atomic<long long> rough_fallback_missing_spec_match_ {0};
     mutable std::atomic<long long> rough_fallback_outgoing_pool_ {0};
     mutable std::atomic<long long> rough_fallback_global_random_ {0};
+
+    // Collision tracing diagnostics. A failed trace is never hidden by
+    // changing the physical velocity direction.
+    mutable std::atomic<long long> collision_cache_corrections_total_ {0};
+    mutable std::atomic<long long> collision_cache_failures_total_ {0};
+    mutable std::atomic<int> excessive_collision_particle_ {-1};
 
     // Escaped-particle recovery diagnostics.
     long long escaped_recovery_events_ = 0;

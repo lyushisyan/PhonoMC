@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <random>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -74,8 +75,11 @@ public:
         const std::vector<Vec3>& x,
         const std::vector<Vec3>& v) const;
     std::vector<Vec3> sample_surface_points(int n, const std::vector<int>& facets = {}) const;
+    std::vector<Vec3> sample_surface_points(int n, const std::vector<int>& facets, std::mt19937_64& rng) const;
     std::vector<Vec3> sample_volume_points_naive(int n) const;
+    std::vector<Vec3> sample_volume_points_naive(int n, std::mt19937_64& rng) const;
     std::vector<Vec3> sample_volume_points(int n) const;
+    std::vector<Vec3> sample_volume_points(int n, std::mt19937_64& rng) const;
     int facet_index_for_face(int face_index) const;
     std::vector<int> facet_indices_for_faces(const std::vector<int>& face_indices) const;
     void build_volume_tetrahedra();
@@ -89,6 +93,7 @@ private:
     void rebuild_cached_properties();
     void compute_bounding_box();
     void compute_edge_list();
+    void orient_closed_surface();
     void compute_face_metrics();
     void build_face_bvh();
     void compute_face_neighbors();
@@ -147,4 +152,5 @@ private:
     Vec3 bounds_max_ {1.0, 1.0, 1.0};
     double volume_ = 0.0;
     bool merge_coplanar_facets_ = true;
+    bool face_orientation_reliable_ = false;
 };

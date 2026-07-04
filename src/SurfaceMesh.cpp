@@ -255,6 +255,7 @@ void SurfaceMesh::rebuild_cached_properties() {
     clear_tetrahedra_cache();
     compute_bounding_box();
     compute_edge_list();
+    orient_closed_surface();
     compute_face_metrics();
     build_face_bvh();
     compute_face_neighbors();
@@ -262,6 +263,112 @@ void SurfaceMesh::rebuild_cached_properties() {
     compute_facet_neighbors();
     compute_interface_faces();
     compute_enclosed_volume();
+}
+
+// 函数说明：对拓扑封闭的表面以线性复杂度统一三角面绕向。
+void SurfaceMesh::orient_closed_surface() {
+    face_orientation_reliable_ = false;
+    if (faces_.empty()) {
+        throw std::runtime_error("Surface mesh has no faces.");
+    }
+
+    auto edge_direction = [&](int face_index, int u, int v) -> int {
+        const Tri& f = faces_[static_cast<size_t>(face_index)];
+        for (int k = 0; k < 3; ++k) {
+            const int a = f[static_cast<size_t>(k)];
+            const int b = f[static_cast<size_t>((k + 1) % 3)];
+            if (a == u && b == v) {
+                return 1;
+            }
+            if (a == v && b == u) {
+                return -1;
+            }
+        }
+        return 0;
+    };
+
+    struct NeighborConstraint {
+        int face = -1;
+        int relation = 1;
+    };
+    // Some valid CAD exports contain T-junctions: they are geometrically
+    // closed but not a strict indexed two-manifold. Keep their original STL
+    // winding rather than rejecting an existing supported model.
+    for (const auto& attached : edges_faces_) {
+        if (attached.size() != 2) {
+            return;
+        }
+    }
+
+    std::vector<std::vector<NeighborConstraint>> adjacency(faces_.size());
+    for (size_t edge_index = 0; edge_index < edges_faces_.size(); ++edge_index) {
+        const auto& attached = edges_faces_[edge_index];
+        const int a = attached[0];
+        const int b = attached[1];
+        const int u = edges_[edge_index][0];
+        const int v = edges_[edge_index][1];
+        const int da = edge_direction(a, u, v);
+        const int db = edge_direction(b, u, v);
+        if (da == 0 || db == 0) {
+            throw std::runtime_error("Surface mesh edge-to-face topology is inconsistent.");
+        }
+        const int relation = -da * db;
+        adjacency[static_cast<size_t>(a)].push_back({b, relation});
+        adjacency[static_cast<size_t>(b)].push_back({a, relation});
+    }
+
+    std::vector<int> orientation(faces_.size(), 0);
+    std::vector<std::vector<int>> components;
+    for (int root = 0; root < static_cast<int>(faces_.size()); ++root) {
+        if (orientation[static_cast<size_t>(root)] != 0) {
+            continue;
+        }
+        components.emplace_back();
+        std::queue<int> queue;
+        orientation[static_cast<size_t>(root)] = 1;
+        queue.push(root);
+        while (!queue.empty()) {
+            const int current = queue.front();
+            queue.pop();
+            components.back().push_back(current);
+            for (const NeighborConstraint& constraint : adjacency[static_cast<size_t>(current)]) {
+                const int required = orientation[static_cast<size_t>(current)] * constraint.relation;
+                int& assigned = orientation[static_cast<size_t>(constraint.face)];
+                if (assigned == 0) {
+                    assigned = required;
+                    queue.push(constraint.face);
+                } else if (assigned != required) {
+                    throw std::runtime_error("Surface mesh is non-orientable or has inconsistent face winding.");
+                }
+            }
+        }
+    }
+
+    // Give each disconnected outer shell a positive signed volume. This also
+    // fixes STL files whose triangles are consistently wound inward.
+    for (const auto& component : components) {
+        long double signed_volume6 = 0.0L;
+        for (const int face_index : component) {
+            const Tri& f = faces_[static_cast<size_t>(face_index)];
+            const Vec3& a = vertices_[static_cast<size_t>(f[0])];
+            const Vec3& b = vertices_[static_cast<size_t>(f[1])];
+            const Vec3& c = vertices_[static_cast<size_t>(f[2])];
+            signed_volume6 += static_cast<long double>(orientation[static_cast<size_t>(face_index)]) *
+                static_cast<long double>(dot(a, cross(b, c)));
+        }
+        if (signed_volume6 < 0.0L) {
+            for (const int face_index : component) {
+                orientation[static_cast<size_t>(face_index)] *= -1;
+            }
+        }
+    }
+
+    for (size_t i = 0; i < faces_.size(); ++i) {
+        if (orientation[i] < 0) {
+            std::swap(faces_[i][1], faces_[i][2]);
+        }
+    }
+    face_orientation_reliable_ = true;
 }
 
 // 函数说明：清理体积分解缓存，避免陈旧几何数据。
@@ -455,7 +562,7 @@ void SurfaceMesh::compute_facet_groups() {
 
     for (size_t i = 0; i < faces_.size(); ++i) {
         Vec3 n = face_normals_[i];
-        if (dot(n, sub(face_centroids_[i], center)) < 0.0) {
+        if (!face_orientation_reliable_ && dot(n, sub(face_centroids_[i], center)) < 0.0) {
             n = mul(n, -1.0);
         }
         outward_normals[i] = n;
@@ -638,15 +745,17 @@ void SurfaceMesh::compute_interface_faces() {
 
 // 函数说明：通过封闭表面计算几何体积。
 void SurfaceMesh::compute_enclosed_volume() {
-    const Vec3 center = mul(add(bounds_min_, bounds_max_), 0.5);
-    double v = 0.0;
+    long double signed_volume6 = 0.0L;
     for (const auto& f : faces_) {
-        const Vec3 a = sub(vertices_[f[0]], center);
-        const Vec3 b = sub(vertices_[f[1]], center);
-        const Vec3 c = sub(vertices_[f[2]], center);
-        v += std::abs(dot(a, cross(b, c))) / 6.0;
+        const Vec3& a = vertices_[static_cast<size_t>(f[0])];
+        const Vec3& b = vertices_[static_cast<size_t>(f[1])];
+        const Vec3& c = vertices_[static_cast<size_t>(f[2])];
+        signed_volume6 += static_cast<long double>(dot(a, cross(b, c)));
     }
-    volume_ = v;
+    volume_ = std::abs(static_cast<double>(signed_volume6 / 6.0L));
+    if (!std::isfinite(volume_) || volume_ <= 1e-16) {
+        throw std::runtime_error("Surface mesh encloses no finite positive volume.");
+    }
 }
 
 // 函数说明：按需构建体积分解缓存以支持体内判定与采样。
@@ -660,6 +769,15 @@ void SurfaceMesh::ensure_volume_tetrahedra() const {
 // 函数说明：将体域分解为四面体集合，用于快速体采样。
 void SurfaceMesh::build_volume_tetrahedra() {
     simplices_.clear();
+    auto discard_inconsistent_decomposition = [this]() {
+        const double simplex_volume = std::accumulate(
+            simplices_.begin(), simplices_.end(), 0.0,
+            [](double sum, const Simplex& simplex) { return sum + simplex.volume; });
+        const double relative_error = std::abs(simplex_volume - volume_) / std::max(volume_, 1e-18);
+        if (!std::isfinite(relative_error) || relative_error > 1e-3) {
+            simplices_.clear();
+        }
+    };
     auto build_star_fallback = [this]() {
         Vec3 center {0.0, 0.0, 0.0};
         for (const auto& v : vertices_) {
@@ -773,6 +891,7 @@ void SurfaceMesh::build_volume_tetrahedra() {
     }
     if (uniq_points.size() < 4) {
         build_star_fallback();
+        discard_inconsistent_decomposition();
         simplices_ready_ = true;
         return;
     }
@@ -805,6 +924,7 @@ void SurfaceMesh::build_volume_tetrahedra() {
 
     if (status != 0 || output.empty()) {
         build_star_fallback();
+        discard_inconsistent_decomposition();
         simplices_ready_ = true;
         return;
     }
@@ -814,6 +934,7 @@ void SurfaceMesh::build_volume_tetrahedra() {
     iss >> ns;
     if (!iss || ns <= 0) {
         build_star_fallback();
+        discard_inconsistent_decomposition();
         simplices_ready_ = true;
         return;
     }
@@ -864,6 +985,7 @@ void SurfaceMesh::build_volume_tetrahedra() {
     if (simplices_.empty()) {
         build_star_fallback();
     }
+    discard_inconsistent_decomposition();
     simplices_ready_ = true;
 }
 
@@ -1182,6 +1304,14 @@ std::tuple<std::vector<Vec3>, std::vector<double>, std::vector<int>, std::vector
 
 // 函数说明：按面面积加权在边界表面采样粒子注入点。
 std::vector<Vec3> SurfaceMesh::sample_surface_points(int n, const std::vector<int>& facets) const {
+    std::mt19937_64 rng(std::random_device{}());
+    return sample_surface_points(n, facets, rng);
+}
+
+std::vector<Vec3> SurfaceMesh::sample_surface_points(
+    int n,
+    const std::vector<int>& facets,
+    std::mt19937_64& rng) const {
     if (n <= 0) {
         return {};
     }
@@ -1211,7 +1341,6 @@ std::vector<Vec3> SurfaceMesh::sample_surface_points(int n, const std::vector<in
         w.push_back(std::max(face_areas_[fi], 0.0));
     }
     std::discrete_distribution<int> face_pick(w.begin(), w.end());
-    std::mt19937_64 rng(std::random_device{}());
     std::uniform_real_distribution<double> uni(0.0, 1.0);
 
     std::vector<Vec3> out;
@@ -1239,10 +1368,14 @@ std::vector<Vec3> SurfaceMesh::sample_surface_points(int n, const std::vector<in
 
 // 函数说明：用拒绝采样在体域内生成粒子初始位置。
 std::vector<Vec3> SurfaceMesh::sample_volume_points_naive(int n) const {
+    std::mt19937_64 rng(std::random_device{}());
+    return sample_volume_points_naive(n, rng);
+}
+
+std::vector<Vec3> SurfaceMesh::sample_volume_points_naive(int n, std::mt19937_64& rng) const {
     if (n <= 0) {
         return {};
     }
-    std::mt19937_64 rng(std::random_device{}());
     std::uniform_real_distribution<double> ux(bounds_min_[0], bounds_max_[0]);
     std::uniform_real_distribution<double> uy(bounds_min_[1], bounds_max_[1]);
     std::uniform_real_distribution<double> uz(bounds_min_[2], bounds_max_[2]);
@@ -1266,12 +1399,17 @@ std::vector<Vec3> SurfaceMesh::sample_volume_points_naive(int n) const {
 
 // 函数说明：优先基于四面体体积分布进行体内高效采样。
 std::vector<Vec3> SurfaceMesh::sample_volume_points(int n) const {
+    std::mt19937_64 rng(std::random_device{}());
+    return sample_volume_points(n, rng);
+}
+
+std::vector<Vec3> SurfaceMesh::sample_volume_points(int n, std::mt19937_64& rng) const {
     if (n <= 0) {
         return {};
     }
     ensure_volume_tetrahedra();
     if (simplices_.empty()) {
-        return sample_volume_points_naive(n);
+        return sample_volume_points_naive(n, rng);
     }
 
     std::vector<double> w;
@@ -1281,11 +1419,10 @@ std::vector<Vec3> SurfaceMesh::sample_volume_points(int n) const {
     }
     const double wsum = std::accumulate(w.begin(), w.end(), 0.0);
     if (wsum <= 0.0) {
-        return sample_volume_points_naive(n);
+        return sample_volume_points_naive(n, rng);
     }
 
     std::discrete_distribution<int> simplex_pick(w.begin(), w.end());
-    std::mt19937_64 rng(std::random_device{}());
     std::uniform_real_distribution<double> uni(0.0, 1.0);
 
     std::vector<Vec3> out;

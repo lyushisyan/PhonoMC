@@ -48,8 +48,7 @@ int main(int argc, char** argv) {
             input_file = argv[1];
         } else {
             const std::vector<fs::path> cwd_candidates {
-                fs::path("input.toml"),
-                fs::path("input.txt")
+                fs::path("input.toml")
             };
             bool found = false;
             for (const auto& c : cwd_candidates) {
@@ -64,11 +63,8 @@ int main(int argc, char** argv) {
                 fs::path exe_dir = exe.has_parent_path() ? exe.parent_path() : fs::current_path();
                 const std::vector<fs::path> candidates {
                     exe_dir / "input.toml",
-                    exe_dir / "input.txt",
                     exe_dir / "../input.toml",
-                    exe_dir / "../input.txt",
-                    exe_dir / "../../input.toml",
-                    exe_dir / "../../input.txt"
+                    exe_dir / "../../input.toml"
                 };
                 for (const auto& c : candidates) {
                     if (fs::exists(c)) {

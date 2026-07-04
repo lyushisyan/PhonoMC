@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(PhonoMC LANGUAGES CXX)
 
+include(CTest)
+
 # 基础编译设置
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -37,4 +39,37 @@ if(PHONOMC_ENABLE_OPENMP)
     else()
         message(WARNING "OpenMP was not found. Building without OpenMP.")
     endif()
+endif()
+
+if(BUILD_TESTING)
+    add_executable(PhonoMCConfigTests
+        tests/SimulationConfigTests.cpp
+        src/SimulationConfig.cpp
+    )
+    target_include_directories(PhonoMCConfigTests PRIVATE include)
+    target_compile_definitions(PhonoMCConfigTests PRIVATE
+        PHONOMC_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    add_test(NAME simulation_config COMMAND PhonoMCConfigTests)
+
+    add_executable(PhonoMCDomainTests
+        tests/SimulationDomainTests.cpp
+        src/SimulationConfig.cpp
+        src/SurfaceMesh.cpp
+        src/SimulationDomain.cpp
+    )
+    target_include_directories(PhonoMCDomainTests PRIVATE include)
+    target_compile_definitions(PhonoMCDomainTests PRIVATE
+        PHONOMC_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    add_test(NAME simulation_domain COMMAND PhonoMCDomainTests)
+
+    add_executable(PhonoMCMaterialTests
+        tests/PhononMaterialTests.cpp
+        src/SimulationConfig.cpp
+        src/PhononMaterial.cpp
+    )
+    target_include_directories(PhonoMCMaterialTests PRIVATE include ${HDF5_INCLUDE_DIRS})
+    target_link_libraries(PhonoMCMaterialTests PRIVATE ${HDF5_CXX_LIBRARIES})
+    add_test(NAME phonon_material COMMAND PhonoMCMaterialTests)
 endif()

@@ -46,22 +46,49 @@ void MonteCarloSolver::ensure_tls_buffers(int thread_count, int nsv) {
     flux_tls_buffer_.assign(total, Vec3 {0.0, 0.0, 0.0});
 }
 
+// 函数说明：为边界吸收和各热库离开数分配线程局部缓冲。
+void MonteCarloSolver::ensure_boundary_tls_buffers(int thread_count, int reservoir_count) {
+    thread_count = std::max(1, thread_count);
+    reservoir_count = std::max(0, reservoir_count);
+    if (thread_count == boundary_tls_thread_count_ &&
+        reservoir_count == boundary_tls_reservoir_count_) {
+        return;
+    }
+    boundary_tls_thread_count_ = thread_count;
+    boundary_tls_reservoir_count_ = reservoir_count;
+    absorbed_tls_buffer_.assign(static_cast<size_t>(thread_count), 0);
+    reservoir_leaving_tls_buffer_.assign(
+        static_cast<size_t>(thread_count) * static_cast<size_t>(reservoir_count), 0);
+}
+
+// 函数说明：在每个时间步开始前清空线程局部边界计数。
+void MonteCarloSolver::reset_boundary_tls_counters() {
+    std::fill(absorbed_tls_buffer_.begin(), absorbed_tls_buffer_.end(), 0);
+    std::fill(reservoir_leaving_tls_buffer_.begin(), reservoir_leaving_tls_buffer_.end(), 0);
+}
+
+// 函数说明：并行粒子推进结束后，将各线程边界计数归并到时间步统计。
+void MonteCarloSolver::merge_boundary_tls_counters() {
+    step_absorbed_particles_ = std::accumulate(
+        absorbed_tls_buffer_.begin(), absorbed_tls_buffer_.end(), 0LL);
+    std::fill(reservoir_leaving_curr_step_.begin(), reservoir_leaving_curr_step_.end(), 0);
+    for (int tid = 0; tid < boundary_tls_thread_count_; ++tid) {
+        const size_t base = static_cast<size_t>(tid) * static_cast<size_t>(boundary_tls_reservoir_count_);
+        for (int rid = 0; rid < boundary_tls_reservoir_count_; ++rid) {
+            reservoir_leaving_curr_step_[static_cast<size_t>(rid)] +=
+                reservoir_leaving_tls_buffer_[base + static_cast<size_t>(rid)];
+        }
+    }
+}
+
 // 函数说明：提供线程独立随机数发生器，保证并行采样过程的线程安全。
 std::mt19937_64& MonteCarloSolver::thread_rng() const {
 #ifdef _OPENMP
-    static thread_local std::mt19937_64 tl_rng;
-    static thread_local bool tl_seeded = false;
-    if (!tl_seeded) {
-        const unsigned tid = static_cast<unsigned>(omp_get_thread_num());
-        std::seed_seq seq {
-            static_cast<unsigned>(rng_seed_base_ & 0xffffffffu),
-            static_cast<unsigned>((rng_seed_base_ >> 32) & 0xffffffffu),
-            tid
-        };
-        tl_rng.seed(seq);
-        tl_seeded = true;
+    const int tid = omp_get_thread_num();
+    if (tid >= 0 && tid < static_cast<int>(thread_rngs_.size())) {
+        return thread_rngs_[static_cast<size_t>(tid)];
     }
-    return tl_rng;
+    return rng_;
 #else
     return rng_;
 #endif
@@ -72,14 +99,17 @@ MonteCarloSolver::MonteCarloSolver(const SimulationConfig& args, const Simulatio
     : args_(args), geometry_(&geometry), phonon_(&phonon) {
     using Clock = std::chrono::steady_clock;
     const auto t_init_begin = Clock::now();
-    rng_seed_base_ = rng_();
+    rng_seed_base_ = args_.random_seed;
+    rng_.seed(rng_seed_base_);
     particle_count_ = std::max(1, static_cast<int>(std::llround(args_.particle_count)));
     time_step_ = std::max(1e-12, args_.time_step);
     convergence_write_interval_ = std::max(1, args_.convergence_write_interval);
     push_eps_ = 1e-10 * std::max(time_step_, 1.0);
     particle_density_ = static_cast<double>(particle_count_) / std::max(geometry.volume(), 1e-12);
-    fixed_background_temperature_ = (args_.background_temperature_mode == "fixed");
-    fixed_lifetime_temperature_ = (args_.lifetime_temperature_mode == "fixed");
+    fixed_background_temperature_ =
+        (args_.background_temperature_mode == TemperatureReferenceMode::Fixed);
+    fixed_lifetime_temperature_ =
+        (args_.lifetime_temperature_mode == TemperatureReferenceMode::Fixed);
     background_temperature_ = args_.background_temperature;
     lifetime_temperature_ = args_.lifetime_temperature;
 
@@ -104,6 +134,16 @@ MonteCarloSolver::MonteCarloSolver(const SimulationConfig& args, const Simulatio
     std::cout << '\n';
 #ifdef _OPENMP
     openmp_thread_count_ = std::max(1, omp_get_max_threads());
+    thread_rngs_.resize(static_cast<size_t>(openmp_thread_count_));
+    for (int tid = 0; tid < openmp_thread_count_; ++tid) {
+        std::seed_seq sequence {
+            static_cast<unsigned>(rng_seed_base_ & 0xffffffffu),
+            static_cast<unsigned>((rng_seed_base_ >> 32) & 0xffffffffu),
+            static_cast<unsigned>(tid),
+            0x504d4301u
+        };
+        thread_rngs_[static_cast<size_t>(tid)].seed(sequence);
+    }
     std::cout << "OpenMP enabled: max_threads=" << openmp_thread_count_ << '\n';
 #else
     openmp_thread_count_ = 1;
@@ -174,7 +214,7 @@ void MonteCarloSolver::initialize_particles(const SimulationDomain& geometry, co
 
     const auto& mesh = geometry.mesh();
     begin_step(1, total_steps, "Sampling particle positions and assigning initial grid IDs");
-    particle_positions_ = mesh.sample_volume_points(particle_count_);
+    particle_positions_ = mesh.sample_volume_points(particle_count_, rng_);
     particle_grid_id_.assign(static_cast<size_t>(particle_count_), 0);
 #ifdef _OPENMP
 #pragma omp parallel for
@@ -204,6 +244,7 @@ void MonteCarloSolver::initialize_particles(const SimulationDomain& geometry, co
     particle_occupation_.resize(static_cast<size_t>(particle_count_));
     particle_energies_.resize(static_cast<size_t>(particle_count_));
     particle_alive_flags_.assign(static_cast<size_t>(particle_count_), static_cast<std::uint8_t>(1));
+    collision_failure_flags_.assign(static_cast<size_t>(particle_count_), static_cast<std::uint8_t>(0));
     const double tmin = particle_temperatures_.empty() ? 300.0 : *std::min_element(particle_temperatures_.begin(), particle_temperatures_.end());
     const int nsv = std::max(1, geometry.grid_count());
     grid_temperatures_.assign(static_cast<size_t>(nsv), tmin);
@@ -262,45 +303,11 @@ void MonteCarloSolver::initialize_particle_temperatures(const SimulationDomain& 
         std::swap(tmin, tmax);
     }
     const double tmean = 0.5 * (tmin + tmax);
-    std::string key = "t0";
-    if (!args_.initial_temperature.empty()) {
-        key = args_.initial_temperature.front();
-    }
-    std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-
-    auto try_parse_double = [](const std::string& token, double& out) -> bool {
-        if (token.empty()) {
-            return false;
-        }
-        try {
-            size_t pos = 0;
-            const double v = std::stod(token, &pos);
-            if (pos != token.size() || !std::isfinite(v)) {
-                return false;
-            }
-            out = v;
-            return true;
-        } catch (...) {
-            return false;
-        }
-    };
-
-    double t0 = tmean;
-    const bool key_is_number = try_parse_double(key, t0);
-    if (key_is_number) {
-        key = "t0";
-    }
-
-    if (key == "t0") {
-        if (!key_is_number && args_.initial_temperature.size() >= 2) {
-            const std::string token = args_.initial_temperature[1];
-            if (!try_parse_double(token, t0)) {
-                throw std::runtime_error("initial_temperature t0 mode requires a finite numeric value.");
-            }
-        }
-        std::fill(particle_temperatures_.begin(), particle_temperatures_.end(), t0);
-        std::cout << "[init] initial_temperature mode=t0, T0=" << t0 << " K\n";
-    } else if (key == "linear") {
+    if (args_.initial_temperature.mode == InitialTemperatureMode::Uniform) {
+        const double uniform_temperature = args_.initial_temperature.uniform_temperature;
+        std::fill(particle_temperatures_.begin(), particle_temperatures_.end(), uniform_temperature);
+        std::cout << "[init] initial_temperature mode=uniform, T0=" << uniform_temperature << " K\n";
+    } else {
         const auto& rf = geometry.reservoir_facets();
         const auto& centroids = geometry.mesh().facet_centroids();
         int cold_facet = -1;
@@ -355,9 +362,6 @@ void MonteCarloSolver::initialize_particle_temperatures(const SimulationDomain& 
         std::cout << "[init] initial_temperature mode=linear, cold=" << cold_t
                   << " K (facet " << cold_facet << "), hot=" << hot_t
                   << " K (facet " << hot_facet << ")\n";
-    } else {
-        throw std::runtime_error(
-            "initial_temperature supports only: t0 (+value) or linear.");
     }
 }
 
@@ -684,7 +688,7 @@ void MonteCarloSolver::write_rough_boundary_mode_map(const SimulationDomain& geo
 void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geometry) {
     local_heat_source_enabled_ = false;
     local_heat_source_grid_weights_.clear();
-    local_heat_source_profile_ = "uniform";
+    local_heat_source_profile_ = HeatSourceProfile::Uniform;
     local_heat_source_power_density_wm3_ = args_.heat_source_power_density;
 
     if (!args_.heat_source_enabled) {
@@ -695,17 +699,7 @@ void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geom
                   << "Only positive volumetric source is supported for particle injection. Ignoring local heat source.\n";
         return;
     }
-    local_heat_source_profile_ = args_.heat_source_profile.empty() ? "uniform" : args_.heat_source_profile;
-    std::transform(
-        local_heat_source_profile_.begin(),
-        local_heat_source_profile_.end(),
-        local_heat_source_profile_.begin(),
-        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    if (local_heat_source_profile_ != "uniform" && local_heat_source_profile_ != "gaussian") {
-        std::cerr << "Warning: unsupported heat_source.profile='" << local_heat_source_profile_
-                  << "', fallback to uniform.\n";
-        local_heat_source_profile_ = "uniform";
-    }
+    local_heat_source_profile_ = args_.heat_source_profile;
 
     // Heat source coordinates are always interpreted as relative [0, 1] box fractions.
     const auto& bmin = geometry.bounds_min();
@@ -716,7 +710,7 @@ void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geom
     local_heat_source_grid_weights_.assign(centers.size(), 0.0);
     int selected = 0;
 
-    if (local_heat_source_profile_ == "uniform") {
+    if (local_heat_source_profile_ == HeatSourceProfile::Uniform) {
         if (args_.heat_source_min.size() != 3 || args_.heat_source_max.size() != 3) {
             std::cerr << "Warning: uniform heat source requires min/max 3D vectors. Ignoring local heat source.\n";
             return;
@@ -799,9 +793,9 @@ void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geom
 
     local_heat_source_enabled_ = true;
     std::cout << "Local heat source enabled: selected_grids=" << selected
-              << ", profile=" << local_heat_source_profile_
+              << ", profile=" << to_string(local_heat_source_profile_)
               << ", power_density=" << local_heat_source_power_density_wm3_ << " W/m^3"
-              << (local_heat_source_profile_ == "gaussian" ? " (peak)" : " (uniform value)") << '\n';
+              << (local_heat_source_profile_ == HeatSourceProfile::Gaussian ? " (peak)" : " (uniform value)") << '\n';
 }
 
 // 函数说明：将局部体热源功率转化为带正偏离能量的新粒子注入。
@@ -900,6 +894,7 @@ std::vector<std::pair<int, double>> MonteCarloSolver::inject_particles_from_loca
             cached_collision_facets_.push_back(-1);
             cached_collision_conditions_.push_back('R');
             particle_alive_flags_.push_back(static_cast<std::uint8_t>(1));
+            collision_failure_flags_.push_back(static_cast<std::uint8_t>(0));
             ++particle_count_;
             inserted.push_back({new_idx, time_step_ * U01(rng)});
             step_heat_source_injected_energy_ev_ += hw * dn;
@@ -1048,6 +1043,7 @@ void MonteCarloSolver::update_collision_cache(const SimulationDomain& geometry, 
     for (int k = 0; k < nidx; ++k) {
         update_collision_cache_single(geometry, indices[static_cast<size_t>(k)]);
     }
+    throw_if_collision_cache_failed("updating collision cache");
 }
 
 // 函数说明：为单个粒子更新下一次边界碰撞缓存。
@@ -1056,16 +1052,93 @@ void MonteCarloSolver::update_collision_cache_single(const SimulationDomain& geo
     if (i < 0 || i >= particle_count_) {
         return;
     }
-    auto [cp, t_hit, fct] = mesh.trace_boundary_intersection(particle_positions_[i], particle_velocities_[i]);
-    if (fct < 0 || std::isinf(t_hit)) {
-        // Robust fallback: reverse direction and retry once.
-        particle_velocities_[i] = mul(particle_velocities_[i], -1.0);
-        std::tie(cp, t_hit, fct) = mesh.trace_boundary_intersection(particle_positions_[i], particle_velocities_[i]);
+    const double particle_speed = norm(particle_velocities_[i]);
+    if (std::isfinite(particle_speed) && particle_speed <= 1e-18) {
+        cached_collision_positions_[i] = particle_positions_[i];
+        cached_collision_facets_[i] = -1;
+        cached_collision_conditions_[i] = 'R';
+        timesteps_to_collision_[i] = std::numeric_limits<double>::infinity();
+        collision_failure_flags_[static_cast<size_t>(i)] = static_cast<std::uint8_t>(0);
+        return;
     }
+    auto [cp, t_hit, fct] = mesh.trace_boundary_intersection(particle_positions_[i], particle_velocities_[i]);
+    if (fct < 0 || !std::isfinite(t_hit)) {
+        // Numerical correction only: try nearby interior points while keeping
+        // the particle velocity unchanged. Reversing velocity here would turn
+        // a geometry failure into an unphysical scattering event.
+        const Vec3 original = particle_positions_[i];
+        const Vec3 ext = sub(geometry.bounds_max(), geometry.bounds_min());
+        const double scale = std::max({1.0, std::abs(ext[0]), std::abs(ext[1]), std::abs(ext[2])});
+        const double eps = std::max(push_eps_, 1e-10 * scale);
+        std::array<Vec3, 4> candidates {original, original, original, original};
+        const int nearest = mesh.nearest_facet(original);
+        if (nearest >= 0 && nearest < static_cast<int>(mesh.facet_normals().size())) {
+            const Vec3 normal = mesh.facet_normals()[static_cast<size_t>(nearest)];
+            candidates[0] = add(original, mul(normal, eps));
+            candidates[1] = add(original, mul(normal, -eps));
+        }
+        const double speed = norm(particle_velocities_[i]);
+        if (speed > 0.0 && std::isfinite(speed)) {
+            const Vec3 direction = mul(particle_velocities_[i], 1.0 / speed);
+            candidates[2] = add(original, mul(direction, eps));
+            candidates[3] = add(original, mul(direction, -eps));
+        }
+        for (const Vec3& candidate : candidates) {
+            if (!mesh.contains_point(candidate)) {
+                continue;
+            }
+            std::tie(cp, t_hit, fct) = mesh.trace_boundary_intersection(candidate, particle_velocities_[i]);
+            if (fct >= 0 && std::isfinite(t_hit)) {
+                particle_positions_[i] = candidate;
+                collision_cache_corrections_total_.fetch_add(1, std::memory_order_relaxed);
+                break;
+            }
+        }
+    }
+    if (fct < 0 || !std::isfinite(t_hit)) {
+        cached_collision_positions_[i] = particle_positions_[i];
+        cached_collision_facets_[i] = -1;
+        cached_collision_conditions_[i] = 'R';
+        timesteps_to_collision_[i] = std::numeric_limits<double>::infinity();
+        if (collision_failure_flags_[static_cast<size_t>(i)] == 0) {
+            collision_failure_flags_[static_cast<size_t>(i)] = static_cast<std::uint8_t>(1);
+            collision_cache_failures_total_.fetch_add(1, std::memory_order_relaxed);
+        }
+        return;
+    }
+    collision_failure_flags_[static_cast<size_t>(i)] = static_cast<std::uint8_t>(0);
     cached_collision_positions_[i] = cp;
     cached_collision_facets_[i] = fct;
     cached_collision_conditions_[i] = geometry.facet_boundary_condition(fct);
     timesteps_to_collision_[i] = std::isinf(t_hit) ? std::numeric_limits<double>::infinity() : (t_hit / time_step_);
+}
+
+void MonteCarloSolver::throw_if_collision_cache_failed(const char* context) const {
+    for (size_t i = 0; i < collision_failure_flags_.size(); ++i) {
+        if (collision_failure_flags_[i] == 0) {
+            continue;
+        }
+        const Vec3& p = particle_positions_[i];
+        throw std::runtime_error(
+            std::string("Boundary intersection failed while ") + context +
+            " for particle " + std::to_string(i) + " at (" +
+            std::to_string(p[0]) + ", " + std::to_string(p[1]) + ", " +
+            std::to_string(p[2]) + "). Check that the STL is closed and manifold.");
+    }
+}
+
+void MonteCarloSolver::throw_if_excessive_collisions() const {
+    const int i = excessive_collision_particle_.load(std::memory_order_relaxed);
+    if (i < 0 || i >= particle_count_) {
+        return;
+    }
+    const Vec3& p = particle_positions_[static_cast<size_t>(i)];
+    throw std::runtime_error(
+        "Particle " + std::to_string(i) +
+        " exceeded 64 boundary collisions in one timestep at (" +
+        std::to_string(p[0]) + ", " + std::to_string(p[1]) + ", " +
+        std::to_string(p[2]) +
+        "). Reduce simulation.time_step or inspect narrow STL features.");
 }
 
 // 函数说明：处理边界事件（透射、吸收、周期、粗糙/镜面反射）并更新粒子态。
@@ -1082,11 +1155,28 @@ void MonteCarloSolver::process_boundary_collision(const SimulationDomain& geomet
     const double vn = dot(particle_velocities_[i], n);
 
     if (cond == 'T') {
+#ifdef _OPENMP
+        const int tid = omp_get_thread_num();
+        if (tid >= 0 && tid < boundary_tls_thread_count_) {
+            absorbed_tls_buffer_[static_cast<size_t>(tid)] += 1;
+        }
+#else
         ++step_absorbed_particles_;
+#endif
         if (facet >= 0 && facet < static_cast<int>(facet_to_reservoir_index_.size())) {
             const int rid = facet_to_reservoir_index_[static_cast<size_t>(facet)];
             if (rid >= 0 && rid < static_cast<int>(reservoir_leaving_curr_step_.size())) {
+#ifdef _OPENMP
+                if (tid >= 0 && tid < boundary_tls_thread_count_ &&
+                    rid < boundary_tls_reservoir_count_) {
+                    const size_t offset =
+                        static_cast<size_t>(tid) * static_cast<size_t>(boundary_tls_reservoir_count_) +
+                        static_cast<size_t>(rid);
+                    reservoir_leaving_tls_buffer_[offset] += 1;
+                }
+#else
                 reservoir_leaving_curr_step_[static_cast<size_t>(rid)] += 1;
+#endif
             }
         }
         if (i >= 0 && i < static_cast<int>(particle_alive_flags_.size())) {
@@ -1212,6 +1302,14 @@ int MonteCarloSolver::remove_absorbed_particles() {
         }
         v.swap(out);
     };
+    auto remap_vecu8 = [&keep](std::vector<std::uint8_t>& v) {
+        std::vector<std::uint8_t> out;
+        out.reserve(keep.size());
+        for (size_t k : keep) {
+            out.push_back(v[k]);
+        }
+        v.swap(out);
+    };
     auto remap_modes = [&keep](std::vector<std::array<int, 2>>& v) {
         std::vector<std::array<int, 2>> out;
         out.reserve(keep.size());
@@ -1233,6 +1331,7 @@ int MonteCarloSolver::remove_absorbed_particles() {
     remap_veci(particle_grid_id_);
     remap_veci(cached_collision_facets_);
     remap_vecc(cached_collision_conditions_);
+    remap_vecu8(collision_failure_flags_);
     particle_alive_flags_.assign(alive_count, static_cast<std::uint8_t>(1));
     particle_count_ = static_cast<int>(alive_count);
     return removed;
@@ -1249,15 +1348,26 @@ int MonteCarloSolver::recover_escaped_particles(const SimulationDomain& geometry
     const double scale = std::max({1.0, std::abs(ext[0]), std::abs(ext[1]), std::abs(ext[2])});
     const double tol = 1e-10 * scale;
 
-    std::vector<int> escaped_idx;
-    escaped_idx.reserve(64);
+    std::vector<std::uint8_t> escaped_flags(static_cast<size_t>(particle_count_), static_cast<std::uint8_t>(0));
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
     for (int i = 0; i < particle_count_; ++i) {
         const Vec3& p = particle_positions_[static_cast<size_t>(i)];
-        const bool out =
+        const bool out_bounds =
             (p[0] < bmin[0] - tol || p[0] > bmax[0] + tol) ||
             (p[1] < bmin[1] - tol || p[1] > bmax[1] + tol) ||
             (p[2] < bmin[2] - tol || p[2] > bmax[2] + tol);
-        if (out) {
+        const bool out_mesh = !out_bounds && !geometry.is_box_geometry() &&
+            !geometry.mesh().contains_point(p);
+        escaped_flags[static_cast<size_t>(i)] =
+            (out_bounds || out_mesh) ? static_cast<std::uint8_t>(1) : static_cast<std::uint8_t>(0);
+    }
+
+    std::vector<int> escaped_idx;
+    escaped_idx.reserve(64);
+    for (int i = 0; i < particle_count_; ++i) {
+        if (escaped_flags[static_cast<size_t>(i)] != 0) {
             escaped_idx.push_back(i);
         }
     }
@@ -1266,7 +1376,7 @@ int MonteCarloSolver::recover_escaped_particles(const SimulationDomain& geometry
     }
 
     const auto& mesh = geometry.mesh();
-    std::vector<Vec3> respawn = mesh.sample_volume_points(static_cast<int>(escaped_idx.size()));
+    std::vector<Vec3> respawn = mesh.sample_volume_points(static_cast<int>(escaped_idx.size()), rng_);
     for (size_t k = 0; k < escaped_idx.size(); ++k) {
         const int idx = escaped_idx[k];
         particle_positions_[static_cast<size_t>(idx)] = respawn[k];
@@ -1332,7 +1442,8 @@ std::vector<std::pair<int, double>> MonteCarloSolver::inject_particles_from_rese
         if (mode_idx.empty()) {
             continue;
         }
-        std::vector<Vec3> surf = mesh.sample_surface_points(static_cast<int>(mode_idx.size()), std::vector<int>{facet});
+        std::vector<Vec3> surf = mesh.sample_surface_points(
+            static_cast<int>(mode_idx.size()), std::vector<int>{facet}, rng);
         const Vec3 n = reservoir_normals_[static_cast<size_t>(r)];
         const double Tres = reservoir_temperatures_[static_cast<size_t>(r)];
 
@@ -1359,6 +1470,7 @@ std::vector<std::pair<int, double>> MonteCarloSolver::inject_particles_from_rese
             cached_collision_facets_.push_back(-1);
             cached_collision_conditions_.push_back('R');
             particle_alive_flags_.push_back(static_cast<std::uint8_t>(1));
+            collision_failure_flags_.push_back(static_cast<std::uint8_t>(0));
             ++particle_count_;
             inserted.push_back({new_idx, dt_in[k]});
         }
@@ -1539,10 +1651,10 @@ void MonteCarloSolver::update_heat_flux_and_conductivity(const SimulationDomain&
     }
 
     int axis = 0;
-    if (!args_.grid_layout.empty() && args_.grid_layout.front() == "grid" && args_.grid_layout.size() >= 4) {
-        const int nx = std::max(1, std::stoi(args_.grid_layout[1]));
-        const int ny = std::max(1, std::stoi(args_.grid_layout[2]));
-        const int nz = std::max(1, std::stoi(args_.grid_layout[3]));
+    {
+        const int nx = args_.grid.nx;
+        const int ny = args_.grid.ny;
+        const int nz = args_.grid.nz;
         if (ny > nx && ny >= nz) {
             axis = 1;
         } else if (nz > nx && nz > ny) {
@@ -1674,11 +1786,22 @@ void MonteCarloSolver::advance_particle(const SimulationDomain& geometry, const 
                 break;
             }
             update_collision_cache_single(geometry, i);
+            if (collision_failure_flags_[static_cast<size_t>(i)] != 0) {
+                break;
+            }
             if (timesteps_to_collision_[i] * time_step_ < 1e-12) {
                 particle_positions_[i] = add(particle_positions_[i], mul(particle_velocities_[i], 1e-12));
                 update_collision_cache_single(geometry, i);
+                if (collision_failure_flags_[static_cast<size_t>(i)] != 0) {
+                    break;
+                }
             }
         }
+    }
+    if (remaining > 1e-14 && particle_alive_flags_[static_cast<size_t>(i)] != 0) {
+        int expected = -1;
+        excessive_collision_particle_.compare_exchange_strong(
+            expected, i, std::memory_order_relaxed, std::memory_order_relaxed);
     }
     (void) phonon;
 }
@@ -1721,7 +1844,12 @@ void MonteCarloSolver::append_profile_summary(std::ostream& out) const {
     out << "openmp_enabled = false\n";
 #endif
     out << "openmp_thread_count = " << openmp_thread_count_ << '\n';
+    out << "random_seed = " << rng_seed_base_ << '\n';
     out << "profile_timers_enabled = " << (profile_timers_enabled_ ? "true" : "false") << '\n';
+    out << "collision_cache_corrections_total = "
+        << collision_cache_corrections_total_.load(std::memory_order_relaxed) << '\n';
+    out << "collision_cache_failures_total = "
+        << collision_cache_failures_total_.load(std::memory_order_relaxed) << '\n';
     const long long rough_total = rough_events_total_.load(std::memory_order_relaxed);
     const long long rough_spec = rough_specular_selected_.load(std::memory_order_relaxed);
     const long long rough_diff = rough_diffuse_selected_.load(std::memory_order_relaxed);
@@ -1819,7 +1947,12 @@ void MonteCarloSolver::run_timestep() {
     step_heat_source_injected_energy_ev_ = 0.0;
     step_recovered_particles_ = 0;
     step_net_particles_ = 0;
+    excessive_collision_particle_.store(-1, std::memory_order_relaxed);
     std::fill(reservoir_leaving_curr_step_.begin(), reservoir_leaving_curr_step_.end(), 0);
+#ifdef _OPENMP
+    ensure_boundary_tls_buffers(std::max(1, omp_get_max_threads()), reservoir_count_);
+    reset_boundary_tls_counters();
+#endif
 
     const int n_before = particle_count_;
     const auto t_advance_begin = Clock::now();
@@ -1832,6 +1965,8 @@ void MonteCarloSolver::run_timestep() {
             particle_grid_id_[i] = nearest_grid_index(geometry, particle_positions_[i]);
         }
     }
+    throw_if_excessive_collisions();
+    throw_if_collision_cache_failed("advancing particles");
     const auto t_advance_end = Clock::now();
     const auto t_remove1_begin = t_advance_end;
     (void) remove_absorbed_particles();
@@ -1873,6 +2008,8 @@ void MonteCarloSolver::run_timestep() {
                 particle_grid_id_[idx] = nearest_grid_index(geometry, particle_positions_[idx]);
             }
         }
+        throw_if_excessive_collisions();
+        throw_if_collision_cache_failed("advancing injected particles");
         const auto t_adv_inj_end = Clock::now();
         const auto t_remove2_begin = t_adv_inj_end;
         (void) remove_absorbed_particles();
@@ -1883,6 +2020,10 @@ void MonteCarloSolver::run_timestep() {
             timer_remove_absorb_2_ += std::chrono::duration<double>(t_remove2_end - t_remove2_begin).count();
         }
     }
+
+#ifdef _OPENMP
+    merge_boundary_tls_counters();
+#endif
 
     if (escaped_recovery_check_interval_ > 0 &&
         (current_timestep_ % escaped_recovery_check_interval_) == 0) {
