@@ -44,16 +44,20 @@ geometry and surface-scattering effects.
 FinFET heating
 --------------
 
-The FinFET example loads ``model/finfet.stl`` and injects a Gaussian volumetric
-heat source:
+The FinFET example loads ``model/finfet.stl`` and injects a Gaussian
+volumetric heat source using absolute nm coordinates in the mesh coordinate
+system:
 
 .. code-block:: bash
 
-   OMP_NUM_THREADS=32 ./build/PhonoMC \
+   OMP_NUM_THREADS=8 ./build/PhonoMC \
      example/input_finfet_stl_heat1e20.toml
 
-The provided production input uses ten million particles. For a smoke test,
-copy the input and reduce ``particle_count``, ``iterations``, and ``grid_xyz``.
+The repository input is a lightweight tutorial/smoke-test case
+(``particle_count = 200000``, ``time_step = 0.05`` ps, and
+``iterations = 2000``). For production calculations, copy the input and then
+increase ``particle_count``, ``iterations``, and, if needed, ``grid_xyz`` after
+checking the generated ``summary.txt``.
 
 Plot an existing or completed result:
 
@@ -61,7 +65,7 @@ Plot an existing or completed result:
 
    python3 tools/plot_temperature_3d.py \
      --input example/input_finfet_stl_heat1e20.toml \
-     --results example/results/FinFET_heat1e20_0
+     --results example/results/FinFET_heat1e20_1
 
 The command writes a 3D temperature view and x/y slice images under
 ``plots_3d``.

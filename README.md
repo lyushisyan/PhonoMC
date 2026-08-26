@@ -104,10 +104,11 @@ OMP_NUM_THREADS=64 ./build/PhonoMC example/input_cross_100nm.toml
 
 ```bash
 python3 tools/plot_convergence.py example/results/Cross_100nm_0
-python3 tools/plot_convergence.py example/results/Inplane_x10000nm_z100nm_r1nm_0
+python3 tools/plot_convergence.py example/results/Inplane_x1000nm_z100nm_r1nm_0
 ```
 
 Each run writes three figures under `plots_1d/`: `temperature_vs_time.png`, `heatflux_vs_time.png`, and `kappa_vs_time.png`.
+Generated result directories under `example/results/` are local artifacts and are ignored by git.
 
 3D FinFET results:
 
@@ -118,6 +119,7 @@ python3 tools/plot_temperature_3d.py \
 ```
 
 This writes `temperature_3d.png`, `temperature_slice_xrel0.500_yz.png`, and `temperature_slice_yrel0.500_xz.png` under `plots_3d/`. Slice locations can be changed with `--x-slice-rel` and `--y-slice-rel`.
+The provided FinFET input is a lightweight tutorial case (`particle_count = 200000`, `time_step = 0.05 ps`, `iterations = 2000`); copy it and increase the resolution for production runs.
 
 ---
 
@@ -222,10 +224,11 @@ OMP_NUM_THREADS=64 ./build/PhonoMC example/input_cross_100nm.toml
 
 ```bash
 python3 tools/plot_convergence.py example/results/Cross_100nm_0
-python3 tools/plot_convergence.py example/results/Inplane_x10000nm_z100nm_r1nm_0
+python3 tools/plot_convergence.py example/results/Inplane_x1000nm_z100nm_r1nm_0
 ```
 
 每次会在对应结果目录的 `plots_1d/` 中输出三张图：`temperature_vs_time.png`、`heatflux_vs_time.png`、`kappa_vs_time.png`。
+`example/results/` 下生成的结果目录属于本地运行产物，默认被 git 忽略。
 
 3D FinFET 结果：
 
@@ -236,6 +239,7 @@ python3 tools/plot_temperature_3d.py \
 ```
 
 会在 `plots_3d/` 中输出：`temperature_3d.png`、`temperature_slice_xrel0.500_yz.png`、`temperature_slice_yrel0.500_xz.png`。截面位置可用 `--x-slice-rel` 和 `--y-slice-rel` 调整。
+当前 FinFET 输入是轻量教程算例（`particle_count = 200000`、`time_step = 0.05 ps`、`iterations = 2000`）；正式计算请复制该输入并提高粒子数、步数和必要的网格分辨率。
 
 ---
 
@@ -341,10 +345,11 @@ OMP_NUM_THREADS=64 ./build/PhonoMC example/input_cross_100nm.toml
 
 ```bash
 python3 tools/plot_convergence.py example/results/Cross_100nm_0
-python3 tools/plot_convergence.py example/results/Inplane_x10000nm_z100nm_r1nm_0
+python3 tools/plot_convergence.py example/results/Inplane_x1000nm_z100nm_r1nm_0
 ```
 
 Команда создаёт три файла в `plots_1d/`: `temperature_vs_time.png`, `heatflux_vs_time.png` и `kappa_vs_time.png`.
+Сгенерированные каталоги в `example/results/` являются локальными артефактами и игнорируются git.
 
 3D результаты FinFET:
 
@@ -355,3 +360,4 @@ python3 tools/plot_temperature_3d.py \
 ```
 
 Команда создаёт `temperature_3d.png`, `temperature_slice_xrel0.500_yz.png` и `temperature_slice_yrel0.500_xz.png` в `plots_3d/`. Положение срезов задаётся параметрами `--x-slice-rel` и `--y-slice-rel`.
+Входной файл FinFET является лёгким учебным примером (`particle_count = 200000`, `time_step = 0.05 ps`, `iterations = 2000`); для производственных расчётов скопируйте его и увеличьте число частиц, число шагов и при необходимости разрешение сетки.

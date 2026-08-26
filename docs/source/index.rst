@@ -16,7 +16,7 @@ It supports:
 - cross-plane and in-plane thermal-conductivity simulations
 - STL and OBJ device geometries, including the provided FinFET model
 - strict POSCAR and HDF5 material loading
-- local or fixed temperature references for energy and lifetime calculations
+- fixed deviational background temperature with fixed or local lifetime lookup
 - uniform and Gaussian volumetric heat sources
 - temperature, heat-flux, conductivity, particle-balance, and geometry output
 - bundled plotting tools for one-dimensional and three-dimensional results
