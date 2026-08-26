@@ -23,7 +23,7 @@ The header begins with ``#`` and defines all columns. The current columns are:
    Grid temperatures in K, in the same index order as ``grid_centers.csv``.
 
 ``heatflux``
-   Particle-weighted average heat flux along the inferred transport axis in
+   Volume-weighted average heat flux along the inferred transport axis in
    W/m².
 
 ``kappa_int``
@@ -32,12 +32,28 @@ The header begins with ``#`` and defines all columns. The current columns are:
 ``kappa_eff``
    Conductivity from reservoir endpoint temperatures and full domain length.
 
-``absorbed``, ``injected``, ``recovered``, ``net``
+``particle_count``, ``absorbed``, ``injected``, ``recovered``, ``net``
    Per-step reservoir and recovery bookkeeping. ``net`` is reservoir injection
-   minus absorption.
+   minus absorption. A local heat source does not change ``particle_count``.
 
-``hs_injected`` / ``hs_injected_energy_ev``
-   Local-heat-source particle count and injected energy for the step.
+``reservoir_absorbed_energy_ev`` / ``reservoir_injected_energy_ev``
+   Deviational energy removed and supplied by thermal reservoirs in the step.
+
+``hs_occupation_updates`` / ``hs_injected_energy_ev``
+   Number of carrier-occupation updates made across the two split source
+   half-steps and the prescribed physical source energy added in the step.
+
+``lifetime_energy_residual_ev``
+   Numerical energy residual of the finite-step lifetime scattering solve. It
+   should remain close to floating-point roundoff.
+
+``energy_balance_residual_ev``
+   Remaining step-wise closure error after accounting for the heat source,
+   reservoir exchange, and the recorded lifetime-scattering residual. A
+   closed or correctly accounted domain should keep this near roundoff.
+
+``total_thermal_energy_ev``
+   Domain-integrated thermal energy with the zero-point contribution removed.
 
 Temperature convergence
 -----------------------
@@ -80,7 +96,10 @@ The summary includes normalized input, geometry, grid and boundary counts,
 runtime, OpenMP settings, rough-scattering selection statistics, escaped
 particle recovery, reservoir totals, and heat-source injection totals.
 
-Large rough-boundary fallback counts deserve investigation. They can indicate
+Large rough-boundary fallback counts deserve investigation. The rough-boundary
+summary also reports normal-flux-weighted frequency-window selections and the
+number of guarded uniform fallbacks; the latter should normally remain zero.
+Nonzero or large fallback counts can indicate
 that no frequency-compatible reflected mode was available for many events.
 
 One-dimensional plots

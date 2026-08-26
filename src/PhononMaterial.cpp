@@ -616,6 +616,10 @@ PhononMaterial::Vec3 PhononMaterial::normalize_to_energy_density(const Vec3& x) 
     return {x[0] / den, x[1] / den, x[2] / den};
 }
 
+double PhononMaterial::energy_density_normalization() const {
+    return std::max(1.0, static_cast<double>(qpoint_count_) * unit_cell_volume_);
+}
+
 // 函数说明：累计所有活跃模态得到晶体能量密度。
 double PhononMaterial::crystal_energy_density(double temperature) const {
     double e = 0.0;

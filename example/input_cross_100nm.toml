@@ -9,6 +9,8 @@ iterations = 10000
 random_seed = 12345
 compute_kappa = true
 initial_temperature = "linear"
+background_temperature = 300
+lifetime_temperature = "local"
 grid_xyz = [10, 1, 1]
 
 [boundary]

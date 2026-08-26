@@ -80,12 +80,17 @@ Example:
 ``temperature_lookup_dt``
    Positive lookup-table temperature step in K. Default: ``0.1``.
 
-``background_temperature_mode`` / ``lifetime_temperature_mode``
-   ``"local"`` or ``"fixed"``.
+``background_temperature``
+   Unquoted, finite, non-negative temperature in K. It is the invariant global
+   reference for deviational energy. ``"local"`` is deliberately rejected
+   because a moving reference can create gauge energy during carrier motion.
+   Use ``0`` for full-phonon sampling or a fixed value such as ``300`` for
+   deviational sampling.
 
-``background_temperature`` / ``lifetime_temperature``
-   Non-negative fixed temperatures used when the corresponding mode is
-   ``"fixed"``.
+``lifetime_temperature``
+   Either an unquoted, finite, non-negative fixed temperature in K or
+   ``"local"`` to evaluate each mode lifetime at the local particle
+   temperature.
 
 ``[boundary]``
 --------------
@@ -137,7 +142,11 @@ Example:
 -----------------
 
 ``enabled``
-   Enable local volumetric particle injection.
+   Enable a local volumetric energy source. The source changes the occupation
+   carried by the existing fixed-weight Monte Carlo carriers; it does not
+   create additional computational particles. Energy is distributed over the
+   sampled modes as a Bose--Einstein thermal increment, with a cell-wise
+   pseudo-temperature solve enforcing the prescribed energy exactly.
 
 ``profile``
    ``"uniform"`` or ``"gaussian"``.
@@ -148,30 +157,34 @@ Example:
 Uniform profile keys
 ~~~~~~~~~~~~~~~~~~~~
 
-``min`` and ``max`` define opposite corners of a relative region.
+``min`` and ``max`` define opposite corners of an absolute region in nm, the
+same unit as ``[geometry].sizes`` for box geometries. For STL/mesh geometries,
+use the mesh coordinate system expressed in nm.
 
 .. code-block:: toml
 
    [heat_source]
    enabled = true
    profile = "uniform"
-   min = [0.3, 0.6, 0.7]
-   max = [0.7, 0.8, 1.0]
+   min = [6.6, 21.6, 21.0]
+   max = [15.4, 28.8, 30.0]
    power_density = 1.0e20
 
 Gaussian profile keys
 ~~~~~~~~~~~~~~~~~~~~~
 
-``center`` and ``sigma`` are relative coordinates. A non-positive sigma makes
-that axis uniform.
+``center`` and ``sigma`` are absolute lengths in nm, the same unit as
+``[geometry].sizes`` for box geometries. For STL/mesh geometries, use the
+mesh coordinate system expressed in nm. A non-positive sigma makes that axis
+uniform.
 
 .. code-block:: toml
 
    [heat_source]
    enabled = true
    profile = "gaussian"
-   center = [0.5, 0.7, 1.0]
-   sigma = [0.0, 0.04, 0.10]
+   center = [11.0, 25.2, 30.0]
+   sigma = [0.0, 1.44, 3.0]
    power_density = 1.0e20
 
 ``[io]``

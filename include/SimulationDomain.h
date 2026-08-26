@@ -5,6 +5,7 @@
 
 #include <array>
 #include <string>
+#include <tuple>
 #include <vector>
 
 class SimulationDomain {
@@ -23,7 +24,11 @@ public:
     const std::vector<double>& reservoir_values() const { return reservoir_values_; }
     bool fast_grid_index_enabled() const { return fast_grid_index_enabled_; }
     bool is_box_geometry() const { return is_box_geometry_; }
+    bool analytic_box_intersection_enabled() const { return analytic_box_intersection_enabled_; }
     int fast_grid_index(const std::array<double, 3>& p) const;
+    std::tuple<std::array<double, 3>, double, int> trace_boundary_intersection(
+        const std::array<double, 3>& position,
+        const std::array<double, 3>& velocity) const;
     char facet_boundary_condition(int facet) const;
     double reservoir_value_for_facet(int facet, double fallback = 300.0) const;
     bool has_periodic_pair(int facet) const;
@@ -35,6 +40,7 @@ public:
 private:
     void build_surface_mesh(const SimulationConfig& args);
     void sync_surface_mesh_properties();
+    void initialize_analytic_box_intersection();
     void assign_boundary_conditions(const SimulationConfig& args);
     void build_periodic_connections(const SimulationConfig& args);
     void initialize_grids(const SimulationConfig& args);
@@ -66,4 +72,7 @@ private:
     std::array<double, 3> fast_grid_inv_cell_ {0.0, 0.0, 0.0};
     std::vector<int> cell_to_grid_index_;
     bool is_box_geometry_ = true;
+    bool analytic_box_intersection_enabled_ = false;
+    // Plane order: xmin, xmax, ymin, ymax, zmin, zmax.
+    std::array<int, 6> box_plane_facets_ {-1, -1, -1, -1, -1, -1};
 };

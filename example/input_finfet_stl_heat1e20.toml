@@ -2,12 +2,14 @@
 model = "../model/finfet.stl"
 
 [simulation]
-particle_count = 10000000
-time_step = 0.1
-iterations = 1000
+particle_count = 200000
+time_step = 0.05
+iterations = 2000
 random_seed = 12345
 compute_kappa = false
 initial_temperature = 300
+background_temperature = 300
+lifetime_temperature = "local"
 grid_xyz = [22, 36, 30]
 progress_temperature_summary_only = true
 
@@ -30,13 +32,13 @@ periodic_pair = [
 
 [heat_source]
 enabled = true
-min = [0.3, 0.6, 0.7]
-max = [0.7, 0.8, 1.0]
+min = [6.6, 21.6, 21.0]
+max = [15.4, 28.8, 30.0]
 power_density = 1.0e20
 
 profile = "gaussian"
-center = [0.5, 0.7, 1.0]
-sigma  = [0.0, 0.04, 0.10]
+center = [11.0, 25.2, 30.0]
+sigma  = [0.0, 1.44, 3.0]
 
 [io]
 material_folder = "../material/Si/"

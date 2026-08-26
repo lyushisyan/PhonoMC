@@ -78,10 +78,10 @@ OMP_NUM_THREADS=64 ./build/PhonoMC example/input_cross_100nm.toml
 - `initial_temperature` supports:
   - `300` (uniform initial temperature, unit: K)
   - `"linear"` (linear profile from cold reservoir to hot reservoir)
-- Temperature reference controls:
-  - default: `background_temperature_mode = "local"` and `lifetime_temperature_mode = "local"` use `E(Tgrid)` and `tau(Tgrid)`.
-  - fixed background with local lifetime: `background_temperature_mode = "fixed"`, `background_temperature = 300`, `lifetime_temperature_mode = "local"`.
-  - fixed background and fixed lifetime: also set `lifetime_temperature_mode = "fixed"`, `lifetime_temperature = 300`.
+- Temperature reference controls use an invariant numeric `background_temperature`; the removed `"local"` background is rejected:
+  - full-phonon sampling: `background_temperature = 0`, `lifetime_temperature = "local"`.
+  - fixed-reference linearized sampling: `background_temperature = 300`, `lifetime_temperature = 300`.
+  - fixed-reference sampling with local lifetimes: `background_temperature = 300`, `lifetime_temperature = "local"`.
 - Reservoir refill uses `one_to_one` (inject by previous-step leaving counts).
 - If no valid thermal reservoirs are present, fallback temperature range is `299/301 K`.
 - `sizes` in TOML use **nm**.
@@ -92,7 +92,7 @@ OMP_NUM_THREADS=64 ./build/PhonoMC example/input_cross_100nm.toml
 ### Outputs
 
 - `convergence.txt`
-  - Columns include: `timestep`, `time_ps`, `T_1 ... T_n`, `heatflux`, `kappa_int`, `kappa_eff`, `absorbed`, `injected`, `recovered`, `net`.
+  - Columns include: `timestep`, `time_ps`, `T_1 ... T_n`, `heatflux`, `kappa_int`, `kappa_eff`, particle/reservoir balance, source energy, lifetime-scattering residual, step energy-balance residual, and total thermal energy.
 - `summary.txt`
   - Consolidated input/geometry/grid/boundary/runtime summary.
 - `grid_centers.csv`
@@ -196,10 +196,10 @@ OMP_NUM_THREADS=64 ./build/PhonoMC example/input_cross_100nm.toml
 - `initial_temperature` 支持：
   - `300`（全域统一初始温度，单位 K）
   - `"linear"`（按冷热库方向线性初始化）
-- 温度参考控制：
-  - 默认：`background_temperature_mode = "local"` 且 `lifetime_temperature_mode = "local"`，即使用 `E(Tgrid)` 和 `tau(Tgrid)`。
-  - 固定背景、局部寿命：`background_temperature_mode = "fixed"`，`background_temperature = 300`，`lifetime_temperature_mode = "local"`。
-  - 固定背景、固定寿命：再设置 `lifetime_temperature_mode = "fixed"`，`lifetime_temperature = 300`。
+- 温度参考必须使用数值型固定 `background_temperature`；已移除并拒绝 `"local"` 背景：
+  - 全声子：`background_temperature = 0`，`lifetime_temperature = "local"`。
+  - 偏差 + 固定参考/寿命：`background_temperature = 300`，`lifetime_temperature = 300`。
+  - 偏差 + 固定背景/局部寿命：`background_temperature = 300`，`lifetime_temperature = "local"`。
 - 热库回填固定为 `one_to_one`（按上一步离开热库的粒子数回填）。
 - 若没有可用热库，默认回退温度范围为 `299/301 K`。
 - TOML 中 `sizes` 单位是 **nm**。
@@ -210,7 +210,7 @@ OMP_NUM_THREADS=64 ./build/PhonoMC example/input_cross_100nm.toml
 ### 输出文件
 
 - `convergence.txt`
-  - 包含：`timestep`、`time_ps`、`T_1 ... T_n`、`heatflux`、`kappa_int`、`kappa_eff`、`absorbed`、`injected`、`recovered`、`net`。
+  - 包含：`timestep`、`time_ps`、`T_1 ... T_n`、`heatflux`、`kappa_int`、`kappa_eff`、粒子/热库收支、热源能量、寿命散射残差与总热能。
 - `summary.txt`
   - 汇总关键输入与几何/网格/边界/运行时间信息。
 - `grid_centers.csv`
@@ -315,10 +315,10 @@ OMP_NUM_THREADS=64 ./build/PhonoMC example/input_cross_100nm.toml
 - `initial_temperature` поддерживает:
   - `300` (равномерная начальная температура, K)
   - `"linear"` (линейный профиль между холодным и горячим резервуарами)
-- Настройки температурной привязки:
-  - по умолчанию: `background_temperature_mode = "local"` и `lifetime_temperature_mode = "local"` используют `E(Tgrid)` и `tau(Tgrid)`.
-  - фиксированный фон и локальное время жизни: `background_temperature_mode = "fixed"`, `background_temperature = 300`, `lifetime_temperature_mode = "local"`.
-  - фиксированный фон и фиксированное время жизни: дополнительно `lifetime_temperature_mode = "fixed"`, `lifetime_temperature = 300`.
+- Температура фона всегда задаётся фиксированным числом; `background_temperature = "local"` больше не поддерживается:
+  - полные фононы: `background_temperature = 0`, `lifetime_temperature = "local"`.
+  - фиксированные фон и время жизни: `background_temperature = 300`, `lifetime_temperature = 300`.
+  - фиксированный фон и локальное время жизни: `background_temperature = 300`, `lifetime_temperature = "local"`.
 - Пополнение резервуаров фиксировано как `one_to_one` (инжекция по числу частиц, покинувших резервуары на предыдущем шаге).
 - Если валидные терморезервуары отсутствуют, используется диапазон по умолчанию `299/301 K`.
 - `sizes` в TOML задаются в **nm**.
@@ -329,7 +329,7 @@ OMP_NUM_THREADS=64 ./build/PhonoMC example/input_cross_100nm.toml
 ### Выходные файлы
 
 - `convergence.txt`
-  - Колонки: `timestep`, `time_ps`, `T_1 ... T_n`, `heatflux`, `kappa_int`, `kappa_eff`, `absorbed`, `injected`, `recovered`, `net`.
+  - Колонки: `timestep`, `time_ps`, `T_1 ... T_n`, `heatflux`, `kappa_int`, `kappa_eff`, баланс частиц/резервуаров, энергия источника, остаток релаксации и полная тепловая энергия.
 - `summary.txt`
   - Сводка ключевых входных параметров и статистики geometry/grid/boundary/runtime.
 - `grid_centers.csv`

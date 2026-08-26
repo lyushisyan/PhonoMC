@@ -13,10 +13,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
-
-const char* to_string(TemperatureReferenceMode mode) {
-    return mode == TemperatureReferenceMode::Fixed ? "fixed" : "local";
-}
+#include <utility>
 
 const char* to_string(InitialTemperatureMode mode) {
     return mode == InitialTemperatureMode::Linear ? "linear" : "uniform";
@@ -33,6 +30,10 @@ const char* to_string(BoundaryCondition condition) {
 
 const char* to_string(HeatSourceProfile profile) {
     return profile == HeatSourceProfile::Gaussian ? "gaussian" : "uniform";
+}
+
+const char* to_string(HeatSourceTimeProfile profile) {
+    return profile == HeatSourceTimeProfile::Square ? "square" : "constant";
 }
 
 char boundary_condition_code(BoundaryCondition condition) {
@@ -263,6 +264,19 @@ std::vector<std::array<double, 6>> parse_region_array(const std::string& value, 
     return boxes;
 }
 
+// 函数说明：解析三维点阵数组参数，每行必须为三元组。
+std::vector<double> parse_vec3_array_flat(const std::string& value, const std::string& field_name) {
+    std::vector<double> out;
+    for (const auto& row : parse_array_elements(value)) {
+        const auto coords = parse_number_array(row);
+        if (coords.size() != 3) {
+            throw std::runtime_error(field_name + " row must be [x,y,z].");
+        }
+        out.insert(out.end(), coords.begin(), coords.end());
+    }
+    return out;
+}
+
 // 函数说明：将数值格式化为紧凑字符串，便于输出文件可读性。
 std::string format_number(double x) {
     std::ostringstream oss;
@@ -383,15 +397,17 @@ void reject_unknown_keys(const std::unordered_map<std::string, std::string>& kv)
         "simulation.particle_count", "simulation.time_step", "simulation.iterations",
         "simulation.convergence_write_interval", "simulation.random_seed", "simulation.compute_kappa",
         "simulation.profile_timers", "simulation.progress_temperature_summary_only",
-        "simulation.temperature_lookup_dt", "simulation.background_temperature_mode",
-        "simulation.background_temperature", "simulation.lifetime_temperature_mode",
+        "simulation.temperature_lookup_dt", "simulation.background_temperature",
         "simulation.lifetime_temperature", "simulation.initial_temperature",
         "simulation.grid_xyz",
         "boundary.boundary_conditions", "boundary.boundary_values",
         "boundary.boundary_position", "boundary.periodic_pair",
         "heat_source.enabled", "heat_source.min", "heat_source.max",
-        "heat_source.power_density", "heat_source.profile", "heat_source.center",
-        "heat_source.sigma",
+        "heat_source.power_density", "heat_source.power_densities",
+        "heat_source.profile", "heat_source.center", "heat_source.centers",
+        "heat_source.sigma", "heat_source.half_width", "heat_source.time_profile", "heat_source.start_time",
+        "heat_source.end_time", "heat_source.period", "heat_source.on_duration",
+        "heat_source.duty_cycle", "heat_source.amplitude",
         "io.material_folder", "io.output_folder"
     };
     for (const auto& [key, _] : kv) {
@@ -420,21 +436,54 @@ bool infer_heat_source_enabled(const SimulationConfig& args) {
         return false;
     }
     if (args.heat_source_profile == HeatSourceProfile::Gaussian) {
-        return args.heat_source_center.size() == 3 && args.heat_source_sigma.size() == 3;
+        return (args.heat_source_center.size() == 3 || args.heat_source_centers.size() >= 3) &&
+               args.heat_source_sigma.size() == 3;
     }
     return args.heat_source_min.size() == 3 && args.heat_source_max.size() == 3;
 }
 
-// 函数说明：标准化温度模式字符串，约束为 local/fixed 两类可解释模式。
-TemperatureReferenceMode parse_temperature_mode(const std::string& value, const std::string& field_name) {
-    const std::string mode = to_lower(trim(unquote(value)));
-    if (mode == "local") {
-        return TemperatureReferenceMode::Local;
+// 函数说明：背景温度是全局不变的能量参考，只接受非负数值。
+double parse_background_temperature_reference(const std::string& value) {
+    const std::string raw = trim(value);
+    if (is_quoted(raw)) {
+        throw std::runtime_error(
+            "background_temperature must be an unquoted finite non-negative number; "
+            "the local background mode has been removed.");
     }
-    if (mode == "fixed") {
-        return TemperatureReferenceMode::Fixed;
+    try {
+        const double temperature = parse_double_scalar(raw);
+        if (temperature >= 0.0) {
+            return temperature;
+        }
+    } catch (...) {
     }
-    throw std::runtime_error(field_name + " must be either 'local' or 'fixed'.");
+    throw std::runtime_error(
+        "background_temperature must be an unquoted finite non-negative number; "
+        "the local background mode has been removed.");
+}
+
+// 函数说明：寿命查询温度可使用局部温度或一个固定数值。
+std::pair<bool, double> parse_lifetime_temperature_reference(
+    const std::string& value,
+    const std::string& field_name) {
+    const std::string raw = trim(value);
+    const std::string token = to_lower(unquote(raw));
+    if (is_quoted(raw)) {
+        if (token == "local") {
+            return {true, 300.0};
+        }
+        throw std::runtime_error(field_name + " string value must be 'local'. Numeric fixed temperatures must not be quoted.");
+    }
+    try {
+        size_t consumed = 0;
+        const std::string number = normalise_number_token(raw);
+        const double temperature = std::stod(number, &consumed);
+        if (consumed == number.size() && std::isfinite(temperature) && temperature >= 0.0) {
+            return {false, temperature};
+        }
+    } catch (...) {
+    }
+    throw std::runtime_error(field_name + " must be a finite non-negative number or the string 'local'.");
 }
 
 BoundaryCondition parse_boundary_condition(const std::string& value, size_t index) {
@@ -473,6 +522,17 @@ HeatSourceProfile parse_heat_source_profile(const std::string& value) {
     throw std::runtime_error("heat_source.profile must be either 'uniform' or 'gaussian'.");
 }
 
+HeatSourceTimeProfile parse_heat_source_time_profile(const std::string& value) {
+    const std::string profile = to_lower(trim(unquote(value)));
+    if (profile == "constant") {
+        return HeatSourceTimeProfile::Constant;
+    }
+    if (profile == "square") {
+        return HeatSourceTimeProfile::Square;
+    }
+    throw std::runtime_error("heat_source.time_profile must be either 'constant' or 'square'.");
+}
+
 InitialTemperatureConfig parse_initial_temperature(const std::string& value) {
     const std::string raw = trim(value);
     const std::string token = to_lower(unquote(raw));
@@ -495,7 +555,7 @@ InitialTemperatureConfig parse_initial_temperature(const std::string& value) {
 }
 
 // 函数说明：校验温度参考配置，避免非法固定温度进入热物性查询。
-void validate_temperature_mode_config(const SimulationConfig& args) {
+void validate_temperature_reference_config(const SimulationConfig& args) {
     if (!std::isfinite(args.background_temperature) || args.background_temperature < 0.0) {
         throw std::runtime_error("background_temperature must be a finite non-negative value.");
     }
@@ -556,6 +616,69 @@ void validate_boundary_config(const SimulationConfig& args) {
     }
 }
 
+void validate_heat_source_config(const SimulationConfig& args) {
+    if (!args.heat_source_enabled) {
+        return;
+    }
+    if (!(args.heat_source_power_density > 0.0) || !std::isfinite(args.heat_source_power_density)) {
+        throw std::runtime_error("enabled heat_source requires a finite positive power_density.");
+    }
+    for (double q : args.heat_source_power_densities) {
+        if (!(q > 0.0) || !std::isfinite(q)) {
+            throw std::runtime_error("heat_source.power_densities values must be finite and positive.");
+        }
+    }
+    if (args.heat_source_profile == HeatSourceProfile::Uniform) {
+        if (args.heat_source_min.size() != 3 || args.heat_source_max.size() != 3) {
+            throw std::runtime_error("uniform heat_source requires min and max arrays with 3 values.");
+        }
+    } else {
+        const bool has_single_center = args.heat_source_center.size() == 3;
+        const bool has_multi_centers = !args.heat_source_centers.empty();
+        if ((!has_single_center && !has_multi_centers) || args.heat_source_sigma.size() != 3) {
+            throw std::runtime_error("gaussian heat_source requires center=[x,y,z] or centers=[[x,y,z],...] and sigma=[sx,sy,sz].");
+        }
+        if (has_multi_centers && (args.heat_source_centers.size() % 3 != 0)) {
+            throw std::runtime_error("heat_source.centers must contain one or more [x,y,z] rows.");
+        }
+        const size_t nsrc = has_multi_centers ? args.heat_source_centers.size() / 3 : 1;
+        if (!args.heat_source_power_densities.empty() &&
+            args.heat_source_power_densities.size() != nsrc) {
+            throw std::runtime_error("heat_source.power_densities must match the number of heat_source.centers.");
+        }
+        if (!args.heat_source_half_width.empty() && args.heat_source_half_width.size() != 3) {
+            throw std::runtime_error("heat_source.half_width must contain 3 values if provided.");
+        }
+        if ((!args.heat_source_min.empty() || !args.heat_source_max.empty()) &&
+            (args.heat_source_min.size() != 3 || args.heat_source_max.size() != 3)) {
+            throw std::runtime_error("gaussian heat_source min/max clipping box must be omitted or contain 3 values each.");
+        }
+    }
+    if (!std::isfinite(args.heat_source_amplitude) || args.heat_source_amplitude < 0.0) {
+        throw std::runtime_error("heat_source.amplitude must be finite and non-negative.");
+    }
+    if (!std::isfinite(args.heat_source_time_start)) {
+        throw std::runtime_error("heat_source.start_time must be finite.");
+    }
+    if (!std::isfinite(args.heat_source_time_end)) {
+        throw std::runtime_error("heat_source.end_time must be finite.");
+    }
+    if (!std::isfinite(args.heat_source_duty_cycle) ||
+        args.heat_source_duty_cycle < 0.0 || args.heat_source_duty_cycle > 1.0) {
+        throw std::runtime_error("heat_source.duty_cycle must be in [0, 1].");
+    }
+    if (args.heat_source_time_profile == HeatSourceTimeProfile::Square) {
+        if (!(args.heat_source_period > 0.0) || !std::isfinite(args.heat_source_period)) {
+            throw std::runtime_error("square heat_source.time_profile requires a finite positive period.");
+        }
+        if (args.heat_source_on_duration >= 0.0 &&
+            (!std::isfinite(args.heat_source_on_duration) ||
+             args.heat_source_on_duration > args.heat_source_period)) {
+            throw std::runtime_error("heat_source.on_duration must be finite and no larger than period.");
+        }
+    }
+}
+
 // 函数说明：解析 TOML 输入并构造仿真配置对象（含单位与默认规则）。
 SimulationConfig parse_toml_file(const std::string& path) {
     SimulationConfig args;
@@ -608,17 +731,14 @@ SimulationConfig parse_toml_file(const std::string& path) {
     if (auto v = get_value(kv, "simulation.temperature_lookup_dt"); v.has_value()) {
         args.temperature_lookup_dt = parse_double_scalar(*v);
     }
-    if (auto v = get_value(kv, "simulation.background_temperature_mode"); v.has_value()) {
-        args.background_temperature_mode = parse_temperature_mode(*v, "background_temperature_mode");
-    }
     if (auto v = get_value(kv, "simulation.background_temperature"); v.has_value()) {
-        args.background_temperature = parse_double_scalar(*v);
-    }
-    if (auto v = get_value(kv, "simulation.lifetime_temperature_mode"); v.has_value()) {
-        args.lifetime_temperature_mode = parse_temperature_mode(*v, "lifetime_temperature_mode");
+        args.background_temperature = parse_background_temperature_reference(*v);
     }
     if (auto v = get_value(kv, "simulation.lifetime_temperature"); v.has_value()) {
-        args.lifetime_temperature = parse_double_scalar(*v);
+        const auto [is_local, temperature] =
+            parse_lifetime_temperature_reference(*v, "lifetime_temperature");
+        args.lifetime_temperature_is_local = is_local;
+        args.lifetime_temperature = temperature;
     }
 
     if (auto v = get_value(kv, "simulation.initial_temperature"); v.has_value()) {
@@ -677,21 +797,76 @@ SimulationConfig parse_toml_file(const std::string& path) {
     }
     if (auto v = get_value(kv, "heat_source.min"); v.has_value()) {
         args.heat_source_min = parse_number_array(*v);
+        // Heat-source min/max coordinates are specified in nm, matching
+        // geometry.sizes.  Internally, PhonoMC stores geometry coordinates in
+        // Angstrom.
+        for (double& x : args.heat_source_min) {
+            x *= 10.0;
+        }
     }
     if (auto v = get_value(kv, "heat_source.max"); v.has_value()) {
         args.heat_source_max = parse_number_array(*v);
+        for (double& x : args.heat_source_max) {
+            x *= 10.0;
+        }
     }
     if (auto v = get_value(kv, "heat_source.power_density"); v.has_value()) {
         args.heat_source_power_density = parse_double_scalar(*v);
+    }
+    if (auto v = get_value(kv, "heat_source.power_densities"); v.has_value()) {
+        args.heat_source_power_densities = parse_number_array(*v);
     }
     if (auto v = get_value(kv, "heat_source.profile"); v.has_value()) {
         args.heat_source_profile = parse_heat_source_profile(*v);
     }
     if (auto v = get_value(kv, "heat_source.center"); v.has_value()) {
         args.heat_source_center = parse_number_array(*v);
+        // Heat-source center coordinates are specified in nm, matching geometry.sizes.
+        // Internally, PhonoMC stores geometry coordinates in Angstrom.
+        for (double& x : args.heat_source_center) {
+            x *= 10.0;
+        }
+    }
+    if (auto v = get_value(kv, "heat_source.centers"); v.has_value()) {
+        args.heat_source_centers = parse_vec3_array_flat(*v, "heat_source.centers");
+        for (double& x : args.heat_source_centers) {
+            x *= 10.0;
+        }
     }
     if (auto v = get_value(kv, "heat_source.sigma"); v.has_value()) {
         args.heat_source_sigma = parse_number_array(*v);
+        // Heat-source Gaussian widths are specified in nm.  Non-positive values
+        // remain non-positive after conversion and keep the "uniform axis" meaning.
+        for (double& x : args.heat_source_sigma) {
+            x *= 10.0;
+        }
+    }
+    if (auto v = get_value(kv, "heat_source.half_width"); v.has_value()) {
+        args.heat_source_half_width = parse_number_array(*v);
+        for (double& x : args.heat_source_half_width) {
+            x *= 10.0;
+        }
+    }
+    if (auto v = get_value(kv, "heat_source.time_profile"); v.has_value()) {
+        args.heat_source_time_profile = parse_heat_source_time_profile(*v);
+    }
+    if (auto v = get_value(kv, "heat_source.start_time"); v.has_value()) {
+        args.heat_source_time_start = parse_double_scalar(*v);
+    }
+    if (auto v = get_value(kv, "heat_source.end_time"); v.has_value()) {
+        args.heat_source_time_end = parse_double_scalar(*v);
+    }
+    if (auto v = get_value(kv, "heat_source.period"); v.has_value()) {
+        args.heat_source_period = parse_double_scalar(*v);
+    }
+    if (auto v = get_value(kv, "heat_source.on_duration"); v.has_value()) {
+        args.heat_source_on_duration = parse_double_scalar(*v);
+    }
+    if (auto v = get_value(kv, "heat_source.duty_cycle"); v.has_value()) {
+        args.heat_source_duty_cycle = parse_double_scalar(*v);
+    }
+    if (auto v = get_value(kv, "heat_source.amplitude"); v.has_value()) {
+        args.heat_source_amplitude = parse_double_scalar(*v);
     }
     if (!heat_source_enabled_set && infer_heat_source_enabled(args)) {
         args.heat_source_enabled = true;
@@ -711,8 +886,9 @@ SimulationConfig load_simulation_config(const std::string& path) {
     if (!(args.temperature_lookup_dt > 0.0) || !std::isfinite(args.temperature_lookup_dt)) {
         throw std::runtime_error("temperature_lookup_dt must be a finite positive value.");
     }
-    validate_temperature_mode_config(args);
+    validate_temperature_reference_config(args);
     validate_boundary_config(args);
+    validate_heat_source_config(args);
     if (args.convergence_write_interval <= 0) {
         throw std::runtime_error("convergence_write_interval must be a positive integer.");
     }

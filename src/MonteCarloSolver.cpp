@@ -1,5 +1,7 @@
 #include "MonteCarloSolver.h"
 
+#include "FluxWeightedWindow.h"
+
 #include "SimulationDomain.h"
 #include "PhononMaterial.h"
 
@@ -57,6 +59,7 @@ void MonteCarloSolver::ensure_boundary_tls_buffers(int thread_count, int reservo
     boundary_tls_thread_count_ = thread_count;
     boundary_tls_reservoir_count_ = reservoir_count;
     absorbed_tls_buffer_.assign(static_cast<size_t>(thread_count), 0);
+    absorbed_energy_tls_buffer_.assign(static_cast<size_t>(thread_count), 0.0);
     reservoir_leaving_tls_buffer_.assign(
         static_cast<size_t>(thread_count) * static_cast<size_t>(reservoir_count), 0);
 }
@@ -64,6 +67,7 @@ void MonteCarloSolver::ensure_boundary_tls_buffers(int thread_count, int reservo
 // 函数说明：在每个时间步开始前清空线程局部边界计数。
 void MonteCarloSolver::reset_boundary_tls_counters() {
     std::fill(absorbed_tls_buffer_.begin(), absorbed_tls_buffer_.end(), 0);
+    std::fill(absorbed_energy_tls_buffer_.begin(), absorbed_energy_tls_buffer_.end(), 0.0);
     std::fill(reservoir_leaving_tls_buffer_.begin(), reservoir_leaving_tls_buffer_.end(), 0);
 }
 
@@ -71,6 +75,8 @@ void MonteCarloSolver::reset_boundary_tls_counters() {
 void MonteCarloSolver::merge_boundary_tls_counters() {
     step_absorbed_particles_ = std::accumulate(
         absorbed_tls_buffer_.begin(), absorbed_tls_buffer_.end(), 0LL);
+    step_reservoir_absorbed_energy_ev_ = std::accumulate(
+        absorbed_energy_tls_buffer_.begin(), absorbed_energy_tls_buffer_.end(), 0.0);
     std::fill(reservoir_leaving_curr_step_.begin(), reservoir_leaving_curr_step_.end(), 0);
     for (int tid = 0; tid < boundary_tls_thread_count_; ++tid) {
         const size_t base = static_cast<size_t>(tid) * static_cast<size_t>(boundary_tls_reservoir_count_);
@@ -102,14 +108,13 @@ MonteCarloSolver::MonteCarloSolver(const SimulationConfig& args, const Simulatio
     rng_seed_base_ = args_.random_seed;
     rng_.seed(rng_seed_base_);
     particle_count_ = std::max(1, static_cast<int>(std::llround(args_.particle_count)));
+    initial_particle_count_ = particle_count_;
     time_step_ = std::max(1e-12, args_.time_step);
     convergence_write_interval_ = std::max(1, args_.convergence_write_interval);
     push_eps_ = 1e-10 * std::max(time_step_, 1.0);
     particle_density_ = static_cast<double>(particle_count_) / std::max(geometry.volume(), 1e-12);
-    fixed_background_temperature_ =
-        (args_.background_temperature_mode == TemperatureReferenceMode::Fixed);
-    fixed_lifetime_temperature_ =
-        (args_.lifetime_temperature_mode == TemperatureReferenceMode::Fixed);
+    particle_spatial_weight_a3_ = geometry.volume() / static_cast<double>(initial_particle_count_);
+    fixed_lifetime_temperature_ = !args_.lifetime_temperature_is_local;
     background_temperature_ = args_.background_temperature;
     lifetime_temperature_ = args_.lifetime_temperature;
 
@@ -122,11 +127,8 @@ MonteCarloSolver::MonteCarloSolver(const SimulationConfig& args, const Simulatio
     std::cout << "Thermal conductivity estimation: "
               << (args_.compute_kappa ? "enabled" : "disabled")
               << '\n';
-    std::cout << "Temperature reference: background="
-              << (fixed_background_temperature_ ? "fixed" : "local");
-    if (fixed_background_temperature_) {
-        std::cout << " T=" << background_temperature_ << " K";
-    }
+    std::cout << "Temperature reference: background=fixed T="
+              << background_temperature_ << " K";
     std::cout << ", lifetime=" << (fixed_lifetime_temperature_ ? "fixed" : "local");
     if (fixed_lifetime_temperature_) {
         std::cout << " T=" << lifetime_temperature_ << " K";
@@ -160,6 +162,7 @@ MonteCarloSolver::MonteCarloSolver(const SimulationConfig& args, const Simulatio
 
     initialize_particles(geometry, phonon);
     initialize_local_heat_source(geometry);
+    total_thermal_energy_ev_ = compute_total_thermal_energy_ev(geometry, phonon);
     write_convergence_header();
     update_heat_flux_and_conductivity(geometry);
     append_convergence_row();
@@ -169,18 +172,9 @@ MonteCarloSolver::MonteCarloSolver(const SimulationConfig& args, const Simulatio
               << init_sec << " s\n";
 }
 
-// 函数说明：返回偏离能量统计所用的背景温度，可选局部网格温度或固定温度。
-double MonteCarloSolver::background_temperature_for_grid(int sv) const {
-    if (fixed_background_temperature_) {
-        return background_temperature_;
-    }
-    if (sv >= 0 && sv < static_cast<int>(grid_temperatures_.size())) {
-        const double T = grid_temperatures_[static_cast<size_t>(sv)];
-        if (std::isfinite(T) && T > 0.0) {
-            return T;
-        }
-    }
-    return 300.0;
+// 函数说明：返回全局不变的偏差能量背景温度。
+double MonteCarloSolver::background_temperature_reference() const {
+    return background_temperature_;
 }
 
 // 函数说明：返回寿命查询所用温度，可选局部粒子温度或固定温度。
@@ -533,7 +527,8 @@ void MonteCarloSolver::initialize_rough_boundary_scattering(const SimulationDoma
             [&omega_active](int a, int b) { return omega_active[static_cast<size_t>(a)] < omega_active[static_cast<size_t>(b)]; });
         rd.outgoing_sorted_omega.resize(rd.outgoing_sorted_active.size());
         for (size_t k = 0; k < rd.outgoing_sorted_active.size(); ++k) {
-            rd.outgoing_sorted_omega[k] = omega_active[static_cast<size_t>(rd.outgoing_sorted_active[k])];
+            const int ao = rd.outgoing_sorted_active[k];
+            rd.outgoing_sorted_omega[k] = omega_active[static_cast<size_t>(ao)];
         }
 
         for (int ai : incoming) {
@@ -584,29 +579,24 @@ void MonteCarloSolver::initialize_rough_boundary_scattering(const SimulationDoma
             }
         }
 
-        // Population.py style diffuse creation rate:
+        // Detailed-balance residual:
         // creation_rate(out) = C_total(out) - sum(specular_D(in -> out)).
-        for (int ao : outgoing) {
-            rd.diffuse_creation_rate[static_cast<size_t>(ao)] = outgoing_creation[static_cast<size_t>(ao)];
-        }
-        for (int ai : incoming) {
-            const int ao = rd.spec_match_active[static_cast<size_t>(ai)];
-            if (ao < 0 || ao >= na) {
-                continue;
-            }
-            const double specular_d =
-                incoming_destruction[static_cast<size_t>(ai)] * rd.specularity[static_cast<size_t>(ai)];
-            rd.diffuse_creation_rate[static_cast<size_t>(ao)] -= specular_d;
-        }
+        rd.diffuse_creation_rate =
+            phonomc_detail::residual_diffuse_creation_rates(
+                outgoing_creation,
+                incoming_destruction,
+                rd.specularity,
+                rd.spec_match_active);
 
         double rate_sum = 0.0;
         for (int ao : outgoing) {
             double& r = rd.diffuse_creation_rate[static_cast<size_t>(ao)];
-            if (!std::isfinite(r) || r < 0.0) {
-                r = 0.0;
-            }
             rate_sum += r;
         }
+        rd.outgoing_sorted_residual_flux_prefix =
+            phonomc_detail::ordered_nonnegative_prefix(
+                rd.diffuse_creation_rate,
+                rd.outgoing_sorted_active);
         if (rate_sum > 0.0) {
             double cdf = 0.0;
             for (int ao : outgoing) {
@@ -696,16 +686,14 @@ void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geom
     }
     if (!(local_heat_source_power_density_wm3_ > 0.0)) {
         std::cerr << "Warning: heat source enabled but power_density is non-positive. "
-                  << "Only positive volumetric source is supported for particle injection. Ignoring local heat source.\n";
+                  << "Only positive volumetric occupation sources are supported. Ignoring local heat source.\n";
         return;
     }
     local_heat_source_profile_ = args_.heat_source_profile;
 
-    // Heat source coordinates are always interpreted as relative [0, 1] box fractions.
-    const auto& bmin = geometry.bounds_min();
-    const auto& bmax = geometry.bounds_max();
-    const Vec3 ext {bmax[0] - bmin[0], bmax[1] - bmin[1], bmax[2] - bmin[2]};
-
+    // Heat-source min/max/center/sigma are absolute lengths in the input file
+    // (nm) and have already been converted to internal Angstrom by the
+    // configuration loader.
     const auto& centers = geometry.grid_centers();
     local_heat_source_grid_weights_.assign(centers.size(), 0.0);
     int selected = 0;
@@ -722,8 +710,6 @@ void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geom
             args_.heat_source_max[0], args_.heat_source_max[1], args_.heat_source_max[2]
         };
         for (int k = 0; k < 3; ++k) {
-            hs_min[k] = bmin[k] + hs_min[k] * ext[k];
-            hs_max[k] = bmin[k] + hs_max[k] * ext[k];
             if (hs_min[k] > hs_max[k]) {
                 std::swap(hs_min[k], hs_max[k]);
             }
@@ -744,19 +730,77 @@ void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geom
             return;
         }
     } else {
-        if (args_.heat_source_center.size() != 3 || args_.heat_source_sigma.size() != 3) {
-            std::cerr << "Warning: gaussian heat source requires center/sigma 3D vectors. Ignoring local heat source.\n";
+        if ((args_.heat_source_center.size() != 3 && args_.heat_source_centers.empty()) ||
+            args_.heat_source_sigma.size() != 3 ||
+            (!args_.heat_source_centers.empty() && (args_.heat_source_centers.size() % 3) != 0)) {
+            std::cerr << "Warning: gaussian heat source requires center=[x,y,z] or centers=[[x,y,z],...] and sigma=[sx,sy,sz]. Ignoring local heat source.\n";
             return;
         }
-        Vec3 hs_center {0.0, 0.0, 0.0};
+        std::vector<Vec3> hs_centers;
+        if (!args_.heat_source_centers.empty()) {
+            hs_centers.reserve(args_.heat_source_centers.size() / 3);
+            for (size_t j = 0; j + 2 < args_.heat_source_centers.size(); j += 3) {
+                hs_centers.push_back({
+                    args_.heat_source_centers[j],
+                    args_.heat_source_centers[j + 1],
+                    args_.heat_source_centers[j + 2]
+                });
+            }
+        } else {
+            hs_centers.push_back({
+                args_.heat_source_center[0],
+                args_.heat_source_center[1],
+                args_.heat_source_center[2]
+            });
+        }
+        std::vector<double> source_peak_scale(hs_centers.size(), 1.0);
+        if (!args_.heat_source_power_densities.empty()) {
+            if (args_.heat_source_power_densities.size() != hs_centers.size()) {
+                std::cerr << "Warning: heat_source.power_densities size does not match heat_source.centers. Ignoring local heat source.\n";
+                return;
+            }
+            for (size_t j = 0; j < hs_centers.size(); ++j) {
+                const double qj = args_.heat_source_power_densities[j];
+                if (!(std::isfinite(qj) && qj > 0.0)) {
+                    std::cerr << "Warning: heat_source.power_densities must be finite positive values. Ignoring local heat source.\n";
+                    return;
+                }
+                source_peak_scale[j] = qj / local_heat_source_power_density_wm3_;
+            }
+        }
         Vec3 hs_sigma {1.0, 1.0, 1.0};
+        Vec3 hs_min {0.0, 0.0, 0.0};
+        Vec3 hs_max {0.0, 0.0, 0.0};
+        const bool has_clip_box = args_.heat_source_min.size() == 3 && args_.heat_source_max.size() == 3;
         for (int k = 0; k < 3; ++k) {
-            hs_center[k] = bmin[k] + args_.heat_source_center[k] * ext[k];
+            if (has_clip_box) {
+                hs_min[k] = args_.heat_source_min[k];
+                hs_max[k] = args_.heat_source_max[k];
+                if (hs_min[k] > hs_max[k]) {
+                    std::swap(hs_min[k], hs_max[k]);
+                }
+            }
         }
         std::array<bool, 3> gaussian_axis_enabled {true, true, true};
+        std::array<double, 3> uniform_half_width {
+            std::numeric_limits<double>::infinity(),
+            std::numeric_limits<double>::infinity(),
+            std::numeric_limits<double>::infinity()
+        };
+        if (!args_.heat_source_half_width.empty()) {
+            if (args_.heat_source_half_width.size() != 3) {
+                std::cerr << "Warning: heat_source.half_width must contain 3 values. Ignoring local heat source.\n";
+                return;
+            }
+            for (int k = 0; k < 3; ++k) {
+                if (std::isfinite(args_.heat_source_half_width[k]) && args_.heat_source_half_width[k] > 0.0) {
+                    uniform_half_width[k] = args_.heat_source_half_width[k];
+                }
+            }
+        }
         for (int k = 0; k < 3; ++k) {
             if (std::isfinite(args_.heat_source_sigma[k]) && args_.heat_source_sigma[k] > 0.0) {
-                hs_sigma[k] = std::max(1e-12, args_.heat_source_sigma[k] * ext[k]);
+                hs_sigma[k] = std::max(1e-12, args_.heat_source_sigma[k]);
                 gaussian_axis_enabled[k] = true;
             } else {
                 // sigma<=0 means this axis is uniform (no Gaussian variation).
@@ -766,24 +810,45 @@ void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geom
         }
         for (size_t i = 0; i < centers.size(); ++i) {
             const Vec3 c = centers[i];
-            double r2 = 0.0;
             bool outside_cutoff = false;
-            for (int k = 0; k < 3; ++k) {
-                if (gaussian_axis_enabled[k]) {
-                    const double u = std::abs(c[k] - hs_center[k]) / hs_sigma[k];
-                    if (u > 2.0) {
+            if (has_clip_box) {
+                for (int k = 0; k < 3; ++k) {
+                    if (c[k] < hs_min[k] || c[k] > hs_max[k]) {
                         outside_cutoff = true;
                         break;
                     }
-                    r2 += u * u;
                 }
             }
             if (outside_cutoff) {
                 local_heat_source_grid_weights_[i] = 0.0;
                 continue;
             }
-            local_heat_source_grid_weights_[i] = std::exp(-0.5 * r2);
-            ++selected;
+            double wsum = 0.0;
+            for (size_t src = 0; src < hs_centers.size(); ++src) {
+                double r2 = 0.0;
+                bool outside_source = false;
+                for (int k = 0; k < 3; ++k) {
+                    if (gaussian_axis_enabled[k]) {
+                        const double u = std::abs(c[k] - hs_centers[src][k]) / hs_sigma[k];
+                        if (u > 2.0) {
+                            outside_source = true;
+                            break;
+                        }
+                        r2 += u * u;
+                    } else if (std::isfinite(uniform_half_width[k]) &&
+                               std::abs(c[k] - hs_centers[src][k]) > uniform_half_width[k]) {
+                        outside_source = true;
+                        break;
+                    }
+                }
+                if (!outside_source) {
+                    wsum += source_peak_scale[src] * std::exp(-0.5 * r2);
+                }
+            }
+            if (wsum > 0.0) {
+                local_heat_source_grid_weights_[i] = wsum;
+                ++selected;
+            }
         }
         if (selected == 0) {
             std::cerr << "Warning: gaussian heat source cannot be applied because grid is empty.\n";
@@ -795,120 +860,255 @@ void MonteCarloSolver::initialize_local_heat_source(const SimulationDomain& geom
     std::cout << "Local heat source enabled: selected_grids=" << selected
               << ", profile=" << to_string(local_heat_source_profile_)
               << ", power_density=" << local_heat_source_power_density_wm3_ << " W/m^3"
-              << (local_heat_source_profile_ == HeatSourceProfile::Gaussian ? " (peak)" : " (uniform value)") << '\n';
+              << (local_heat_source_profile_ == HeatSourceProfile::Gaussian ? " (peak)" : " (uniform value)")
+              << ", time_profile=" << to_string(args_.heat_source_time_profile)
+              << ", injection=thermal_occupation_increment\n";
 }
 
-// 函数说明：将局部体热源功率转化为带正偏离能量的新粒子注入。
-std::vector<std::pair<int, double>> MonteCarloSolver::inject_particles_from_local_heat_source(
+double MonteCarloSolver::local_heat_source_integrated_time_factor(
+    double time_begin_ps,
+    double time_end_ps) const {
+    if (!std::isfinite(time_begin_ps) || !std::isfinite(time_end_ps) || time_end_ps <= time_begin_ps) {
+        return 0.0;
+    }
+    const double begin = std::max(time_begin_ps, args_.heat_source_time_start);
+    const double end = (args_.heat_source_time_end >= 0.0)
+        ? std::min(time_end_ps, args_.heat_source_time_end) : time_end_ps;
+    if (end <= begin) {
+        return 0.0;
+    }
+    const double amplitude = std::max(0.0, args_.heat_source_amplitude);
+    if (args_.heat_source_time_profile == HeatSourceTimeProfile::Constant) {
+        return amplitude * (end - begin);
+    }
+
+    const double period = args_.heat_source_period;
+    if (!(period > 0.0) || !std::isfinite(period)) {
+        return 0.0;
+    }
+    double on_duration = args_.heat_source_on_duration;
+    if (on_duration < 0.0) {
+        on_duration = args_.heat_source_duty_cycle * period;
+    }
+    on_duration = std::clamp(on_duration, 0.0, period);
+    if (on_duration <= 0.0) {
+        return 0.0;
+    }
+    const auto accumulated_on_time = [period, on_duration](double relative_time) {
+        if (!(relative_time > 0.0)) {
+            return 0.0;
+        }
+        const double cycles = std::floor(relative_time / period);
+        const double remainder = relative_time - cycles * period;
+        return cycles * on_duration + std::min(remainder, on_duration);
+    };
+    const double rel_begin = begin - args_.heat_source_time_start;
+    const double rel_end = end - args_.heat_source_time_start;
+    return amplitude * std::max(0.0, accumulated_on_time(rel_end) - accumulated_on_time(rel_begin));
+}
+
+// 函数说明：将局部体热源能量写入现有相空间载体的占据数，不创建新粒子。
+void MonteCarloSolver::apply_local_heat_source_to_occupations(
     const SimulationDomain& geometry,
-    const PhononMaterial& phonon) {
-    std::vector<std::pair<int, double>> inserted;
-    step_heat_source_injected_energy_ev_ = 0.0;
-    if (!local_heat_source_enabled_) {
-        return inserted;
+    const PhononMaterial& phonon,
+    double integrated_time_factor_ps) {
+    if (!local_heat_source_enabled_ || !(integrated_time_factor_ps > 0.0)) {
+        return;
     }
     const double power_density_evpsa3 = local_heat_source_power_density_wm3_ * wm3_to_evpsa3_;
-    if (!std::isfinite(power_density_evpsa3) || power_density_evpsa3 <= 0.0) {
-        return inserted;
+    if (!(power_density_evpsa3 > 0.0) || !std::isfinite(power_density_evpsa3)) {
+        return;
     }
 
-    const auto& centers = geometry.grid_centers();
     const auto& volumes = geometry.grid_volumes();
-    const size_t n = std::min({local_heat_source_grid_weights_.size(), centers.size(), volumes.size()});
-    if (n == 0) {
-        return inserted;
+    const size_t ngrid = std::min(local_heat_source_grid_weights_.size(), volumes.size());
+    if (ngrid == 0 || particle_count_ <= 0) {
+        return;
     }
-
-    auto& rng = thread_rng();
-    std::uniform_real_distribution<double> U01(0.0, 1.0);
     constexpr double kHbarEvPs = 6.582119569e-4;
-    constexpr double kMinOmega = 1e-9;
-    constexpr double kMinHwEv = 1e-10;
-    constexpr double kMinSpeed = 1e-12;
-    constexpr double kTargetDnPerParticle = 0.5;
-    constexpr int kMaxParticlesPerGridPerStep = 200000;
-
-    for (size_t sv = 0; sv < n; ++sv) {
-        const double w = local_heat_source_grid_weights_[sv];
-        if (!std::isfinite(w) || w <= 0.0) {
+    constexpr double kMinHwEv = 1e-14;
+    std::vector<int> counts(ngrid, 0);
+    for (int i = 0; i < particle_count_; ++i) {
+        const int sv = particle_grid_id_[static_cast<size_t>(i)];
+        if (sv < 0 || sv >= static_cast<int>(ngrid) ||
+            !(local_heat_source_grid_weights_[static_cast<size_t>(sv)] > 0.0) ||
+            !(volumes[static_cast<size_t>(sv)] > 0.0)) {
             continue;
         }
-        const double vol = volumes[sv];
-        if (!std::isfinite(vol) || vol <= 0.0) {
-            continue;
-        }
-        const double source_energy = power_density_evpsa3 * time_step_ * vol * w;
-        if (!std::isfinite(source_energy) || source_energy <= 0.0) {
-            continue;
-        }
-
-        const double Tlocal = (sv < grid_temperatures_.size() && std::isfinite(grid_temperatures_[sv]) && grid_temperatures_[sv] > 0.0)
-            ? grid_temperatures_[sv]
-            : 300.0;
-        const double Tbackground = background_temperature_for_grid(static_cast<int>(sv));
-
-        const auto ref_mode = phonon.sample_active_mode(rng);
-        const double omega_ref = std::max(kMinOmega, phonon.mode_angular_frequency(ref_mode));
-        const double hw_ref = std::max(kMinHwEv, kHbarEvPs * omega_ref);
-        int n_emit = static_cast<int>(std::ceil(source_energy / (hw_ref * kTargetDnPerParticle)));
-        n_emit = std::clamp(n_emit, 1, kMaxParticlesPerGridPerStep);
-        const double packet_energy = source_energy / static_cast<double>(n_emit);
-
-        for (int k = 0; k < n_emit; ++k) {
-            auto mode = phonon.sample_active_mode(rng);
-            Vec3 gv = phonon.mode_group_velocity(mode);
-            double speed = norm(gv);
-            int resample_guard = 0;
-            while ((!std::isfinite(speed) || speed <= kMinSpeed) && resample_guard < 8) {
-                mode = phonon.sample_active_mode(rng);
-                gv = phonon.mode_group_velocity(mode);
-                speed = norm(gv);
-                ++resample_guard;
-            }
-            if (!std::isfinite(speed) || speed <= kMinSpeed) {
-                gv = mul(random_unit_vector(), 1e-9);
-                speed = 1e-9;
-            }
-
-            const double omega = std::max(kMinOmega, phonon.mode_angular_frequency(mode));
-            const double hw = std::max(kMinHwEv, kHbarEvPs * omega);
-            const double dn = packet_energy / hw;
-            if (!std::isfinite(dn) || dn <= 0.0) {
-                continue;
-            }
-            const double n_eq = phonon.bose_occupation(Tbackground, mode);
-            const double n_src = n_eq + dn;  // Positive deviational occupation by construction.
-
-            const Vec3 pos = add(centers[sv], mul(gv, push_eps_ / std::max(speed, kMinSpeed)));
-            const int new_idx = particle_count_;
-            particle_modes_.push_back(mode);
-            particle_positions_.push_back(pos);
-            particle_velocities_.push_back(gv);
-            cached_collision_positions_.push_back(pos);
-            timesteps_to_collision_.push_back(std::numeric_limits<double>::infinity());
-            particle_temperatures_.push_back(Tlocal);
-            particle_omega_.push_back(omega);
-            particle_occupation_.push_back(n_src);
-            particle_energies_.push_back(hw * dn);
-            particle_grid_id_.push_back(nearest_grid_index(geometry, pos));
-            cached_collision_facets_.push_back(-1);
-            cached_collision_conditions_.push_back('R');
-            particle_alive_flags_.push_back(static_cast<std::uint8_t>(1));
-            collision_failure_flags_.push_back(static_cast<std::uint8_t>(0));
-            ++particle_count_;
-            inserted.push_back({new_idx, time_step_ * U01(rng)});
-            step_heat_source_injected_energy_ev_ += hw * dn;
+        const double omega =
+            std::max(0.0, phonon.mode_angular_frequency(particle_modes_[static_cast<size_t>(i)]));
+        const double hw = kHbarEvPs * omega;
+        if (hw > kMinHwEv && std::isfinite(hw)) {
+            counts[static_cast<size_t>(sv)] += 1;
         }
     }
-    return inserted;
+
+    double nominal_weighted_volume = 0.0;
+    double occupied_weighted_volume = 0.0;
+    for (size_t sv = 0; sv < ngrid; ++sv) {
+        const double w = local_heat_source_grid_weights_[sv];
+        const double volume = volumes[sv];
+        if (!(w > 0.0) || !std::isfinite(w) || !(volume > 0.0) || !std::isfinite(volume)) {
+            continue;
+        }
+        nominal_weighted_volume += w * volume;
+        if (counts[sv] > 0) {
+            occupied_weighted_volume += w * volume;
+        }
+    }
+    if (!(nominal_weighted_volume > 0.0)) {
+        return;
+    }
+    if (!(occupied_weighted_volume > 0.0)) {
+        throw std::runtime_error(
+            "Local heat source has no particle carriers in any selected grid. "
+            "Increase particle_count or coarsen the source grid.");
+    }
+
+    // If a selected cell is momentarily empty, redistribute only its share of
+    // the source over occupied source cells.  This keeps total injected power
+    // exact and avoids silently dropping energy.
+    const double occupied_scale = nominal_weighted_volume / occupied_weighted_volume;
+    const double normalization = phonon.energy_density_normalization();
+    const double raw_to_physical_ev =
+        static_cast<double>(phonon.active_mode_count()) * particle_spatial_weight_a3_ / normalization;
+    if (!(raw_to_physical_ev > 0.0) || !std::isfinite(raw_to_physical_ev)) {
+        throw std::runtime_error("Invalid Monte Carlo carrier energy weight for local heat source.");
+    }
+
+    std::vector<int> offsets(ngrid + 1, 0);
+    for (size_t sv = 0; sv < ngrid; ++sv) {
+        offsets[sv + 1] = offsets[sv] + counts[sv];
+    }
+    std::vector<int> cursor = offsets;
+    std::vector<int> source_particles(static_cast<size_t>(offsets.back()), 0);
+    for (int i = 0; i < particle_count_; ++i) {
+        const int sv = particle_grid_id_[static_cast<size_t>(i)];
+        if (sv < 0 || sv >= static_cast<int>(ngrid) || counts[static_cast<size_t>(sv)] <= 0) {
+            continue;
+        }
+        const double omega =
+            std::max(0.0, phonon.mode_angular_frequency(particle_modes_[static_cast<size_t>(i)]));
+        const double hw = kHbarEvPs * omega;
+        if (!(hw > kMinHwEv) || !std::isfinite(hw)) {
+            continue;
+        }
+        source_particles[static_cast<size_t>(cursor[static_cast<size_t>(sv)]++)] = i;
+    }
+
+    constexpr double kBoltzmannEvK = 8.617333262145e-5;
+    long long modified = 0;
+    for (size_t sv = 0; sv < ngrid; ++sv) {
+        const int begin = offsets[sv];
+        const int end = offsets[sv + 1];
+        if (end <= begin) {
+            continue;
+        }
+        const double w = local_heat_source_grid_weights_[sv];
+        const double volume = volumes[sv];
+        if (!(w > 0.0) || !(volume > 0.0)) {
+            continue;
+        }
+        const double physical_energy_ev =
+            power_density_evpsa3 * integrated_time_factor_ps * w * volume * occupied_scale;
+        const double target_raw_energy_ev = physical_energy_ev / raw_to_physical_ev;
+        double base_temperature = background_temperature_reference();
+        if (sv < grid_temperatures_.size() && std::isfinite(grid_temperatures_[sv]) &&
+            grid_temperatures_[sv] >= 0.0) {
+            base_temperature = grid_temperatures_[sv];
+        }
+
+        auto thermal_increment_energy = [&](double temperature, double* derivative) {
+            double energy = 0.0;
+            double slope = 0.0;
+            for (int pos = begin; pos < end; ++pos) {
+                const int i = source_particles[static_cast<size_t>(pos)];
+                const auto& mode = particle_modes_[static_cast<size_t>(i)];
+                const double hw = kHbarEvPs * std::max(0.0, phonon.mode_angular_frequency(mode));
+                const double n0 = phonon.bose_occupation(base_temperature, mode);
+                const double n = phonon.bose_occupation(temperature, mode);
+                energy += hw * (n - n0);
+                if (derivative != nullptr && temperature > 0.0) {
+                    const double dndt = hw * n * (n + 1.0) /
+                        (kBoltzmannEvK * temperature * temperature);
+                    slope += hw * dndt;
+                }
+            }
+            if (derivative != nullptr) {
+                *derivative = slope;
+            }
+            return energy;
+        };
+
+        double low = std::max(0.0, base_temperature);
+        double high = std::max(low + 1.0, 1.05 * low + 1.0);
+        double high_energy = thermal_increment_energy(high, nullptr);
+        for (int expand = 0; high_energy < target_raw_energy_ev && expand < 60; ++expand) {
+            high = 2.0 * high + 1.0;
+            high_energy = thermal_increment_energy(high, nullptr);
+        }
+        if (!(high_energy >= target_raw_energy_ev) || !std::isfinite(high_energy)) {
+            throw std::runtime_error("Could not bracket the occupation-source pseudo-temperature.");
+        }
+
+        double source_temperature = 0.5 * (low + high);
+        const double tolerance = 1e-12 * std::max(1e-6, target_raw_energy_ev);
+        for (int iter = 0; iter < 60; ++iter) {
+            double derivative = 0.0;
+            const double residual =
+                thermal_increment_energy(source_temperature, &derivative) - target_raw_energy_ev;
+            if (std::abs(residual) <= tolerance) {
+                break;
+            }
+            if (residual > 0.0) {
+                high = source_temperature;
+            } else {
+                low = source_temperature;
+            }
+            double candidate = 0.5 * (low + high);
+            if (derivative > 0.0 && std::isfinite(derivative)) {
+                const double newton = source_temperature - residual / derivative;
+                if (newton > low && newton < high && std::isfinite(newton)) {
+                    candidate = newton;
+                }
+            }
+            source_temperature = candidate;
+        }
+
+        double applied_raw_energy_ev = 0.0;
+        for (int pos = begin; pos < end; ++pos) {
+            const int i = source_particles[static_cast<size_t>(pos)];
+            const auto& mode = particle_modes_[static_cast<size_t>(i)];
+            const double hw = kHbarEvPs * std::max(0.0, phonon.mode_angular_frequency(mode));
+            const double occupation_increment =
+                phonon.bose_occupation(source_temperature, mode) -
+                phonon.bose_occupation(base_temperature, mode);
+            particle_occupation_[static_cast<size_t>(i)] += occupation_increment;
+            applied_raw_energy_ev += hw * occupation_increment;
+            ++modified;
+        }
+        // Remove the final root-solve roundoff without changing the thermal
+        // spectrum at a physically meaningful scale.
+        const int correction_particle = source_particles[static_cast<size_t>(begin)];
+        const double correction_hw = kHbarEvPs * std::max(
+            0.0,
+            phonon.mode_angular_frequency(particle_modes_[static_cast<size_t>(correction_particle)]));
+        particle_occupation_[static_cast<size_t>(correction_particle)] +=
+            (target_raw_energy_ev - applied_raw_energy_ev) / correction_hw;
+    }
+
+    const double physical_energy_ev =
+        power_density_evpsa3 * integrated_time_factor_ps * nominal_weighted_volume;
+    step_heat_source_injected_particles_ += modified;
+    step_heat_source_injected_energy_ev_ += physical_energy_ev;
 }
 
 // 函数说明：在粗糙边界条件下采样漫反射后的活跃模态索引。
-// source: 1=creation-roulette, 2=outgoing-pool fallback, 3=global-random fallback.
+// source: 1=precomputed window/roulette, 2=outgoing-pool fallback,
+// 3=global-random fallback.
 int MonteCarloSolver::sample_diffuse_active_mode(int rough_idx, int in_ai, int* source) const {
     auto& rng = thread_rng();
     const int na = (phonon_ != nullptr) ? phonon_->active_mode_count() : 0;
-    (void) in_ai;
     if (na <= 0) {
         if (source != nullptr) {
             *source = 3;
@@ -923,6 +1123,37 @@ int MonteCarloSolver::sample_diffuse_active_mode(int rough_idx, int in_ai, int* 
         return U(rng);
     }
     const auto& rd = rough_boundary_data_[static_cast<size_t>(rough_idx)];
+
+    // Adiabatic rough scattering is elastic. Draw within the incoming mode's
+    // frequency window from the residual diffuse creation flux. The full
+    // outgoing |v_g.n| distribution is not valid for partial specularity:
+    // the specular channel has already supplied part of that equilibrium
+    // outgoing flux and must be subtracted to preserve detailed balance.
+    if (in_ai >= 0 && in_ai < static_cast<int>(rd.diffuse_begin.size()) &&
+        in_ai < static_cast<int>(rd.diffuse_end.size())) {
+        const int begin = rd.diffuse_begin[static_cast<size_t>(in_ai)];
+        const int end = rd.diffuse_end[static_cast<size_t>(in_ai)];
+        if (begin >= 0 && end > begin && end <= static_cast<int>(rd.outgoing_sorted_active.size())) {
+            std::uniform_real_distribution<double> U01(0.0, 1.0);
+            const int pos = phonomc_detail::flux_weighted_window_index(
+                rd.outgoing_sorted_residual_flux_prefix,
+                begin,
+                end,
+                U01(rng));
+            if (pos >= begin && pos < end) {
+                rough_residual_window_selected_.fetch_add(1, std::memory_order_relaxed);
+                if (source != nullptr) {
+                    *source = 1;
+                }
+                return rd.outgoing_sorted_active[static_cast<size_t>(pos)];
+            }
+            // A zero-residual elastic window can occur because the discrete
+            // mode list does not provide a complete frequency-shell match.
+            // Use the global residual creation distribution before falling
+            // back to an unbalanced uniform outgoing draw.
+            rough_residual_window_fallback_.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
 
     if (!rd.diffuse_roulette_active.empty() &&
         !rd.diffuse_roulette_cdf.empty() &&
@@ -957,11 +1188,9 @@ int MonteCarloSolver::sample_diffuse_active_mode(int rough_idx, int in_ai, int* 
 
 // 函数说明：按镜面/漫反射概率选择碰撞后的模态与占据数。
 std::array<int, 2> MonteCarloSolver::select_reflected_mode(
-    const SimulationDomain& geometry,
     const PhononMaterial& phonon,
     int rough_idx,
     const std::array<int, 2>& in_mode,
-    const Vec3& collision_pos,
     double& out_occupation,
     double in_occupation) const {
     const int na = phonon.active_mode_count();
@@ -986,8 +1215,19 @@ std::array<int, 2> MonteCarloSolver::select_reflected_mode(
         const int out_ai = rd.spec_match_active[static_cast<size_t>(in_ai)];
         if (out_ai >= 0 && out_ai < na) {
             rough_specular_selected_.fetch_add(1, std::memory_order_relaxed);
+            const std::array<int, 2> out_mode = phonon.active_mode_at(out_ai);
+            const double Tref = background_temperature_reference();
+            const double win = phonon.mode_angular_frequency(in_mode);
+            const double wout = phonon.mode_angular_frequency(out_mode);
+            const double neq_in = phonon.bose_occupation(Tref, in_mode);
+            const double neq_out = phonon.bose_occupation(Tref, out_mode);
+            const double mapped = neq_out + win * (in_occupation - neq_in) / std::max(1e-30, wout);
+            if (std::isfinite(mapped) && mapped >= 0.0) {
+                out_occupation = mapped;
+                return out_mode;
+            }
             out_occupation = in_occupation;
-            return phonon.active_mode_at(out_ai);
+            return in_mode;
         }
         rough_fallback_missing_spec_match_.fetch_add(1, std::memory_order_relaxed);
     }
@@ -1001,12 +1241,21 @@ std::array<int, 2> MonteCarloSolver::select_reflected_mode(
         rough_fallback_global_random_.fetch_add(1, std::memory_order_relaxed);
     }
     const std::array<int, 2> out_mode = phonon.active_mode_at(out_ai);
-    const int nsv = std::max(1, geometry.grid_count());
-    const int sv = std::clamp(nearest_grid_index(geometry, collision_pos), 0, nsv - 1);
-    const double Tdiff = (sv >= 0 && sv < static_cast<int>(grid_temperatures_.size()))
-        ? grid_temperatures_[static_cast<size_t>(sv)] : 300.0;
-    out_occupation = phonon.bose_occupation(Tdiff, out_mode);
-    return out_mode;
+    const double Tref = background_temperature_reference();
+    const double win = phonon.mode_angular_frequency(in_mode);
+    const double wout = phonon.mode_angular_frequency(out_mode);
+    const double neq_in = phonon.bose_occupation(Tref, in_mode);
+    const double neq_out = phonon.bose_occupation(Tref, out_mode);
+    const double mapped = neq_out + win * (in_occupation - neq_in) / std::max(1e-30, wout);
+    if (std::isfinite(mapped) && mapped >= 0.0) {
+        out_occupation = mapped;
+        return out_mode;
+    }
+    // A signed deviational mapping can be incompatible with a non-negative
+    // physical occupation for a poorly matched mode.  Fall back to an elastic
+    // reflection in the incoming mode rather than destroying energy.
+    out_occupation = in_occupation;
+    return in_mode;
 }
 
 // 函数说明：将粒子位置映射到最近控制体网格索引。
@@ -1061,7 +1310,7 @@ void MonteCarloSolver::update_collision_cache_single(const SimulationDomain& geo
         collision_failure_flags_[static_cast<size_t>(i)] = static_cast<std::uint8_t>(0);
         return;
     }
-    auto [cp, t_hit, fct] = mesh.trace_boundary_intersection(particle_positions_[i], particle_velocities_[i]);
+    auto [cp, t_hit, fct] = geometry.trace_boundary_intersection(particle_positions_[i], particle_velocities_[i]);
     if (fct < 0 || !std::isfinite(t_hit)) {
         // Numerical correction only: try nearby interior points while keeping
         // the particle velocity unchanged. Reversing velocity here would turn
@@ -1087,7 +1336,7 @@ void MonteCarloSolver::update_collision_cache_single(const SimulationDomain& geo
             if (!mesh.contains_point(candidate)) {
                 continue;
             }
-            std::tie(cp, t_hit, fct) = mesh.trace_boundary_intersection(candidate, particle_velocities_[i]);
+            std::tie(cp, t_hit, fct) = geometry.trace_boundary_intersection(candidate, particle_velocities_[i]);
             if (fct >= 0 && std::isfinite(t_hit)) {
                 particle_positions_[i] = candidate;
                 collision_cache_corrections_total_.fetch_add(1, std::memory_order_relaxed);
@@ -1141,6 +1390,53 @@ void MonteCarloSolver::throw_if_excessive_collisions() const {
         "). Reduce simulation.time_step or inspect narrow STL features.");
 }
 
+void MonteCarloSolver::recover_excessive_collision_particle(const SimulationDomain& geometry, int i) {
+    if (i < 0 || i >= particle_count_) {
+        return;
+    }
+    if (i < static_cast<int>(particle_alive_flags_.size()) &&
+        particle_alive_flags_[static_cast<size_t>(i)] == 0) {
+        return;
+    }
+
+    const auto& centers = geometry.grid_centers();
+    if (centers.empty()) {
+        return;
+    }
+
+    int gid = -1;
+    if (i < static_cast<int>(particle_grid_id_.size())) {
+        gid = particle_grid_id_[static_cast<size_t>(i)];
+    }
+    if (gid < 0 || gid >= static_cast<int>(centers.size())) {
+        gid = nearest_grid_index(geometry, particle_positions_[static_cast<size_t>(i)]);
+    }
+    if (gid < 0 || gid >= static_cast<int>(centers.size())) {
+        gid = 0;
+    }
+
+    Vec3 recovered = centers[static_cast<size_t>(gid)];
+    if (geometry.is_box_geometry()) {
+        const auto& bmin = geometry.bounds_min();
+        const auto& bmax = geometry.bounds_max();
+        const Vec3 ext = sub(bmax, bmin);
+        const double scale = std::max({1.0, std::abs(ext[0]), std::abs(ext[1]), std::abs(ext[2])});
+        const double eps = std::max(push_eps_, 1e-10 * scale);
+        for (int a = 0; a < 3; ++a) {
+            recovered[a] = std::min(bmax[a] - eps, std::max(bmin[a] + eps, recovered[a]));
+        }
+    } else if (!geometry.mesh().contains_point(recovered)) {
+        recovered = geometry.mesh().sample_volume_points(1, thread_rng()).front();
+        gid = nearest_grid_index(geometry, recovered);
+    }
+
+    particle_positions_[static_cast<size_t>(i)] = recovered;
+    particle_grid_id_[static_cast<size_t>(i)] = gid;
+    collision_failure_flags_[static_cast<size_t>(i)] = static_cast<std::uint8_t>(0);
+    excessive_collision_recoveries_total_.fetch_add(1, std::memory_order_relaxed);
+    update_collision_cache_single(geometry, i);
+}
+
 // 函数说明：处理边界事件（透射、吸收、周期、粗糙/镜面反射）并更新粒子态。
 void MonteCarloSolver::process_boundary_collision(const SimulationDomain& geometry, int i) {
     const int facet = cached_collision_facets_[i];
@@ -1155,13 +1451,27 @@ void MonteCarloSolver::process_boundary_collision(const SimulationDomain& geomet
     const double vn = dot(particle_velocities_[i], n);
 
     if (cond == 'T') {
+        double absorbed_energy_ev = 0.0;
+        if (phonon_ != nullptr) {
+            constexpr double kHbarEvPs = 6.582119569e-4;
+            const double neq = phonon_->bose_occupation(
+                background_temperature_reference(), particle_modes_[static_cast<size_t>(i)]);
+            const double raw_deviation_ev = kHbarEvPs *
+                phonon_->mode_angular_frequency(particle_modes_[static_cast<size_t>(i)]) *
+                (particle_occupation_[static_cast<size_t>(i)] - neq);
+            absorbed_energy_ev = raw_deviation_ev *
+                static_cast<double>(phonon_->active_mode_count()) * particle_spatial_weight_a3_ /
+                phonon_->energy_density_normalization();
+        }
 #ifdef _OPENMP
         const int tid = omp_get_thread_num();
         if (tid >= 0 && tid < boundary_tls_thread_count_) {
             absorbed_tls_buffer_[static_cast<size_t>(tid)] += 1;
+            absorbed_energy_tls_buffer_[static_cast<size_t>(tid)] += absorbed_energy_ev;
         }
 #else
         ++step_absorbed_particles_;
+        step_reservoir_absorbed_energy_ev_ += absorbed_energy_ev;
 #endif
         if (facet >= 0 && facet < static_cast<int>(facet_to_reservoir_index_.size())) {
             const int rid = facet_to_reservoir_index_[static_cast<size_t>(facet)];
@@ -1194,7 +1504,7 @@ void MonteCarloSolver::process_boundary_collision(const SimulationDomain& geomet
             const double in_occ = particle_occupation_[i];
             double out_occ = in_occ;
             const std::array<int, 2> out_mode =
-                select_reflected_mode(geometry, *phonon_, rough_idx, particle_modes_[i], cached_collision_positions_[i], out_occ, in_occ);
+                select_reflected_mode(*phonon_, rough_idx, particle_modes_[i], out_occ, in_occ);
             particle_modes_[i] = out_mode;
             particle_velocities_[i] = phonon_->mode_group_velocity(particle_modes_[i]);
             if (dot(particle_velocities_[i], n) > 0.0) {
@@ -1215,16 +1525,15 @@ void MonteCarloSolver::process_boundary_collision(const SimulationDomain& geomet
             } else {
                 rough_diffuse_selected_.fetch_add(1, std::memory_order_relaxed);
                 rough_fallback_global_random_.fetch_add(1, std::memory_order_relaxed);
-                particle_modes_[i] = phonon_->sample_active_mode(rng);
-                const double speed = std::max(1e-9, norm(phonon_->mode_group_velocity(particle_modes_[i])));
+                // Missing rough-mode data must not thermalize an adiabatic
+                // wall. Keep mode and occupation, randomizing direction only.
+                const double speed = std::max(1e-9, norm(particle_velocities_[i]));
                 Vec3 dir = random_unit_vector();
                 if (dot(dir, n) > 0.0) {
                     dir = mul(dir, -1.0);
                 }
                 particle_velocities_[i] = mul(dir, speed);
                 particle_omega_[i] = phonon_->mode_angular_frequency(particle_modes_[i]);
-                particle_occupation_[i] = phonon_->bose_occupation(particle_temperatures_[i], particle_modes_[i]);
-                particle_energies_[i] = 0.0;
             }
         }
     } else {
@@ -1464,21 +1773,30 @@ std::vector<std::pair<int, double>> MonteCarloSolver::inject_particles_from_rese
             timesteps_to_collision_.push_back(std::numeric_limits<double>::infinity());
             particle_temperatures_.push_back(Tres);
             particle_omega_.push_back(phonon.mode_angular_frequency(mode));
-            particle_occupation_.push_back(phonon.bose_occupation(Tres, mode));
+            const double occupation = phonon.bose_occupation(Tres, mode);
+            particle_occupation_.push_back(occupation);
             particle_energies_.push_back(0.0);
-            particle_grid_id_.push_back(nearest_grid_index(geometry, pos));
+            const int grid_id = nearest_grid_index(geometry, pos);
+            particle_grid_id_.push_back(grid_id);
             cached_collision_facets_.push_back(-1);
             cached_collision_conditions_.push_back('R');
             particle_alive_flags_.push_back(static_cast<std::uint8_t>(1));
             collision_failure_flags_.push_back(static_cast<std::uint8_t>(0));
             ++particle_count_;
             inserted.push_back({new_idx, dt_in[k]});
+
+            constexpr double kHbarEvPs = 6.582119569e-4;
+            const double neq = phonon.bose_occupation(background_temperature_reference(), mode);
+            const double raw_deviation_ev = kHbarEvPs * phonon.mode_angular_frequency(mode) * (occupation - neq);
+            step_reservoir_injected_energy_ev_ += raw_deviation_ev *
+                static_cast<double>(phonon.active_mode_count()) * particle_spatial_weight_a3_ /
+                phonon.energy_density_normalization();
         }
     }
     return inserted;
 }
 
-// 函数说明：由粒子非平衡占据统计网格能量密度并做归一化修正。
+// 函数说明：由固定统计体积的粒子载体统计网格能量密度。
 void MonteCarloSolver::update_grid_energy_density(const SimulationDomain& geometry, const PhononMaterial& phonon) {
     const int nsv = std::max(1, geometry.grid_count());
     grid_energy_density_.assign(static_cast<size_t>(nsv), 0.0);
@@ -1494,7 +1812,7 @@ void MonteCarloSolver::update_grid_energy_density(const SimulationDomain& geomet
 #pragma omp for
         for (int i = 0; i < particle_count_; ++i) {
             const int sv = std::clamp(particle_grid_id_[i], 0, nsv - 1);
-            const double n_eq = phonon.bose_occupation(background_temperature_for_grid(sv), particle_modes_[i]);
+            const double n_eq = phonon.bose_occupation(background_temperature_reference(), particle_modes_[i]);
             const double dn = particle_occupation_[i] - n_eq;
             particle_omega_[i] = phonon.mode_angular_frequency(particle_modes_[i]);
             particle_energies_[i] = 6.582119569e-4 * particle_omega_[i] * dn;  // hbar[eV*ps] * mode_angular_frequency[rad/ps] => eV
@@ -1510,7 +1828,7 @@ void MonteCarloSolver::update_grid_energy_density(const SimulationDomain& geomet
 #else
     for (int i = 0; i < particle_count_; ++i) {
         const int sv = std::clamp(particle_grid_id_[i], 0, nsv - 1);
-        const double n_eq = phonon.bose_occupation(background_temperature_for_grid(sv), particle_modes_[i]);
+        const double n_eq = phonon.bose_occupation(background_temperature_reference(), particle_modes_[i]);
         const double dn = particle_occupation_[i] - n_eq;
         particle_omega_[i] = phonon.mode_angular_frequency(particle_modes_[i]);
         particle_energies_[i] = 6.582119569e-4 * particle_omega_[i] * dn;  // hbar[eV*ps] * mode_angular_frequency[rad/ps] => eV
@@ -1518,18 +1836,21 @@ void MonteCarloSolver::update_grid_energy_density(const SimulationDomain& geomet
     }
 #endif
 
+    const auto& volumes = geometry.grid_volumes();
+    const double mode_count = static_cast<double>(phonon.active_mode_count());
 #ifdef _OPENMP
 #pragma omp parallel for
 #endif
     for (int sv = 0; sv < nsv; ++sv) {
-        const int np = grid_particle_counts_[static_cast<size_t>(sv)];
-        double norm_fac = 0.0;
-        if (np > 0) {
-            norm_fac = static_cast<double>(phonon.active_mode_count()) / static_cast<double>(np);
-        }
-        double e = grid_energy_density_[static_cast<size_t>(sv)] * norm_fac;
+        const double volume = (sv < static_cast<int>(volumes.size()))
+            ? std::max(1e-30, volumes[static_cast<size_t>(sv)]) : 1.0;
+        // Each carrier keeps the spatial volume assigned at initialization.
+        // Unlike M/N_g, this weight does not change when carriers cross a cell
+        // boundary, so free flight cannot create or destroy represented energy.
+        const double spatial_fac = mode_count * particle_spatial_weight_a3_ / volume;
+        double e = grid_energy_density_[static_cast<size_t>(sv)] * spatial_fac;
         e = phonon.normalize_to_energy_density(e);
-        e += phonon.energy_density_from_temperature(background_temperature_for_grid(sv));
+        e += phonon.energy_density_from_temperature(background_temperature_reference());
         grid_energy_density_[static_cast<size_t>(sv)] = e;
     }
 }
@@ -1583,21 +1904,156 @@ void MonteCarloSolver::update_particle_temperatures(const SimulationDomain& geom
     }
 }
 
-// 函数说明：按模态寿命推进粒子占据数，模拟弛豫散射过程。
+double MonteCarloSolver::compute_total_thermal_energy_ev(
+    const SimulationDomain& geometry,
+    const PhononMaterial& phonon) const {
+    const auto& volumes = geometry.grid_volumes();
+    const size_t n = std::min(grid_energy_density_.size(), volumes.size());
+    const double zero_point_density = phonon.zero_point_energy_density();
+    double total = 0.0;
+#ifdef _OPENMP
+#pragma omp parallel for reduction(+:total)
+#endif
+    for (int sv = 0; sv < static_cast<int>(n); ++sv) {
+        total += (grid_energy_density_[static_cast<size_t>(sv)] - zero_point_density) *
+            volumes[static_cast<size_t>(sv)];
+    }
+    return total;
+}
+
+// 函数说明：按模态寿命推进占据数，并通过网格伪温度保证有限时间步能量守恒。
 void MonteCarloSolver::apply_lifetime_scattering(const PhononMaterial& phonon) {
+    const int nsv = static_cast<int>(grid_particle_counts_.size());
+    if (particle_count_ <= 0 || nsv <= 0) {
+        step_lifetime_energy_residual_ev_ = 0.0;
+        return;
+    }
+
+    std::vector<int> offsets(static_cast<size_t>(nsv + 1), 0);
+    for (int sv = 0; sv < nsv; ++sv) {
+        offsets[static_cast<size_t>(sv + 1)] =
+            offsets[static_cast<size_t>(sv)] + grid_particle_counts_[static_cast<size_t>(sv)];
+    }
+    std::vector<int> cursor = offsets;
+    std::vector<int> particle_indices(static_cast<size_t>(particle_count_), 0);
+    for (int i = 0; i < particle_count_; ++i) {
+        const int sv = std::clamp(particle_grid_id_[static_cast<size_t>(i)], 0, nsv - 1);
+        particle_indices[static_cast<size_t>(cursor[static_cast<size_t>(sv)]++)] = i;
+    }
+
+    std::vector<double> relaxation_weight(static_cast<size_t>(particle_count_), 0.0);
 #ifdef _OPENMP
 #pragma omp parallel for
 #endif
     for (int i = 0; i < particle_count_; ++i) {
-        const double n0 = phonon.bose_occupation(particle_temperatures_[i], particle_modes_[i]);
         const double tau = phonon.mode_lifetime(lifetime_temperature_for_particle(i), particle_modes_[i]);
-        if (tau > 0.0) {
-            const double fac = std::exp(-time_step_ / tau);
-            particle_occupation_[i] = n0 + (particle_occupation_[i] - n0) * fac;
-        } else {
-            particle_occupation_[i] = n0;
-        }
+        relaxation_weight[static_cast<size_t>(i)] =
+            (tau > 0.0 && std::isfinite(tau)) ? -std::expm1(-time_step_ / tau) : 1.0;
     }
+
+    constexpr double kHbarEvPs = 6.582119569e-4;
+    constexpr double kBoltzmannEvK = 8.617333262145e-5;
+    double residual_raw_ev = 0.0;
+#ifdef _OPENMP
+#pragma omp parallel for reduction(+:residual_raw_ev) schedule(dynamic, 16)
+#endif
+    for (int sv = 0; sv < nsv; ++sv) {
+        const int begin = offsets[static_cast<size_t>(sv)];
+        const int end = offsets[static_cast<size_t>(sv + 1)];
+        if (end <= begin) {
+            continue;
+        }
+        auto evaluate = [&](double temperature, double* derivative) {
+            double value = 0.0;
+            double slope = 0.0;
+            const double T = std::max(0.0, temperature);
+            for (int pos = begin; pos < end; ++pos) {
+                const int i = particle_indices[static_cast<size_t>(pos)];
+                const double omega = std::max(0.0, phonon.mode_angular_frequency(particle_modes_[static_cast<size_t>(i)]));
+                const double hw = kHbarEvPs * omega;
+                const double a = relaxation_weight[static_cast<size_t>(i)];
+                if (!(hw > 0.0) || !(a > 0.0)) {
+                    continue;
+                }
+                const double neq = phonon.bose_occupation(T, particle_modes_[static_cast<size_t>(i)]);
+                value += hw * a * (particle_occupation_[static_cast<size_t>(i)] - neq);
+                if (T > 0.0) {
+                    const double dndt = hw * neq * (neq + 1.0) / (kBoltzmannEvK * T * T);
+                    slope -= hw * a * dndt;
+                }
+            }
+            if (derivative != nullptr) {
+                *derivative = slope;
+            }
+            return value;
+        };
+
+        double low = 0.0;
+        double high = std::max(1000.0, 2.0 * std::max(1.0, grid_temperatures_[static_cast<size_t>(sv)]));
+        const double f_low = evaluate(low, nullptr);
+        double f_high = evaluate(high, nullptr);
+        for (int expand = 0; f_high > 0.0 && expand < 20; ++expand) {
+            high *= 2.0;
+            f_high = evaluate(high, nullptr);
+        }
+
+        double pseudo_temperature = std::clamp(grid_temperatures_[static_cast<size_t>(sv)], low, high);
+        if (f_low <= 0.0) {
+            pseudo_temperature = low;
+        } else if (f_high >= 0.0) {
+            pseudo_temperature = high;
+        } else {
+            double energy_scale = 0.0;
+            for (int pos = begin; pos < end; ++pos) {
+                const int i = particle_indices[static_cast<size_t>(pos)];
+                const double hw = kHbarEvPs * std::max(
+                    0.0, phonon.mode_angular_frequency(particle_modes_[static_cast<size_t>(i)]));
+                energy_scale += hw * relaxation_weight[static_cast<size_t>(i)] *
+                    std::max(1.0, particle_occupation_[static_cast<size_t>(i)]);
+            }
+            for (int iter = 0; iter < 40; ++iter) {
+                double derivative = 0.0;
+                const double value = evaluate(pseudo_temperature, &derivative);
+                if (std::abs(value) <= 1e-13 * std::max(1.0, energy_scale)) {
+                    break;
+                }
+                if (value > 0.0) {
+                    low = pseudo_temperature;
+                } else {
+                    high = pseudo_temperature;
+                }
+                double candidate = 0.5 * (low + high);
+                if (derivative < 0.0 && std::isfinite(derivative)) {
+                    const double newton = pseudo_temperature - value / derivative;
+                    if (newton > low && newton < high && std::isfinite(newton)) {
+                        candidate = newton;
+                    }
+                }
+                pseudo_temperature = candidate;
+            }
+        }
+
+        double energy_before = 0.0;
+        double energy_after = 0.0;
+        for (int pos = begin; pos < end; ++pos) {
+            const int i = particle_indices[static_cast<size_t>(pos)];
+            const double omega = std::max(0.0, phonon.mode_angular_frequency(particle_modes_[static_cast<size_t>(i)]));
+            const double hw = kHbarEvPs * omega;
+            const double a = relaxation_weight[static_cast<size_t>(i)];
+            const double old_occupation = particle_occupation_[static_cast<size_t>(i)];
+            const double neq = phonon.bose_occupation(pseudo_temperature, particle_modes_[static_cast<size_t>(i)]);
+            const double new_occupation = old_occupation + a * (neq - old_occupation);
+            energy_before += hw * old_occupation;
+            energy_after += hw * new_occupation;
+            particle_occupation_[static_cast<size_t>(i)] = std::max(0.0, new_occupation);
+        }
+        residual_raw_ev += energy_after - energy_before;
+    }
+
+    const double raw_to_physical_ev =
+        static_cast<double>(phonon.active_mode_count()) * particle_spatial_weight_a3_ /
+        phonon.energy_density_normalization();
+    step_lifetime_energy_residual_ev_ = residual_raw_ev * raw_to_physical_ev;
 }
 
 // 函数说明：统计网格热流并计算导热率估计（端点法与线性拟合法）。
@@ -1634,15 +2090,16 @@ void MonteCarloSolver::update_heat_flux_and_conductivity(const SimulationDomain&
     }
 #endif
 
+    const auto& volumes = geometry.grid_volumes();
 #ifdef _OPENMP
 #pragma omp parallel for
 #endif
     for (int sv = 0; sv < nsv; ++sv) {
-        const int np = grid_particle_counts_[static_cast<size_t>(sv)];
-        double norm_fac = 0.0;
-        if (np > 0 && phonon_ != nullptr) {
-            norm_fac = static_cast<double>(phonon_->active_mode_count()) / static_cast<double>(np);
-        }
+        const double volume = (sv < static_cast<int>(volumes.size()))
+            ? std::max(1e-30, volumes[static_cast<size_t>(sv)]) : 1.0;
+        const double norm_fac = (phonon_ != nullptr)
+            ? static_cast<double>(phonon_->active_mode_count()) * particle_spatial_weight_a3_ / volume
+            : 0.0;
         grid_heat_flux_[static_cast<size_t>(sv)] = mul(grid_heat_flux_[static_cast<size_t>(sv)], norm_fac);
         if (phonon_ != nullptr) {
             grid_heat_flux_[static_cast<size_t>(sv)] = phonon_->normalize_to_energy_density(grid_heat_flux_[static_cast<size_t>(sv)]);
@@ -1662,15 +2119,18 @@ void MonteCarloSolver::update_heat_flux_and_conductivity(const SimulationDomain&
         }
     }
 
-    const int total_np = std::max(1, std::accumulate(grid_particle_counts_.begin(), grid_particle_counts_.end(), 0));
     double phi_weighted = 0.0;
+    double total_volume = 0.0;
 #ifdef _OPENMP
-#pragma omp parallel for reduction(+:phi_weighted)
+#pragma omp parallel for reduction(+:phi_weighted,total_volume)
 #endif
     for (int sv = 0; sv < nsv; ++sv) {
-        phi_weighted += grid_heat_flux_[static_cast<size_t>(sv)][axis] * static_cast<double>(grid_particle_counts_[static_cast<size_t>(sv)]);
+        const double volume = (sv < static_cast<int>(volumes.size()))
+            ? std::max(0.0, volumes[static_cast<size_t>(sv)]) : 0.0;
+        phi_weighted += grid_heat_flux_[static_cast<size_t>(sv)][axis] * volume;
+        total_volume += volume;
     }
-    average_heat_flux_along_axis_ = phi_weighted / static_cast<double>(total_np);
+    average_heat_flux_along_axis_ = phi_weighted / std::max(1e-30, total_volume);
 
     if (!args_.compute_kappa) {
         thermal_conductivity_fit_ = 0.0;
@@ -1799,9 +2259,7 @@ void MonteCarloSolver::advance_particle(const SimulationDomain& geometry, const 
         }
     }
     if (remaining > 1e-14 && particle_alive_flags_[static_cast<size_t>(i)] != 0) {
-        int expected = -1;
-        excessive_collision_particle_.compare_exchange_strong(
-            expected, i, std::memory_order_relaxed, std::memory_order_relaxed);
+        recover_excessive_collision_particle(geometry, i);
     }
     (void) phonon;
 }
@@ -1817,7 +2275,10 @@ void MonteCarloSolver::write_convergence_header() {
     for (int i = 0; i < ngrid; ++i) {
         out << " T_" << (i + 1);
     }
-    out << " heatflux kappa_int kappa_eff absorbed injected recovered net hs_injected hs_injected_energy_ev\n";
+    out << " heatflux kappa_int kappa_eff particle_count absorbed injected recovered net"
+           " reservoir_absorbed_energy_ev reservoir_injected_energy_ev"
+           " hs_occupation_updates hs_injected_energy_ev lifetime_energy_residual_ev"
+           " energy_balance_residual_ev total_thermal_energy_ev\n";
 }
 
 // 函数说明：追加当前时间步温度、热流与导热率统计结果。
@@ -1831,12 +2292,18 @@ void MonteCarloSolver::append_convergence_row() const {
     for (double tsv : grid_temperatures_) {
         out << " " << tsv;
     }
+    out << std::setprecision(12);
     out << " " << average_heat_flux_along_axis_ << " " << thermal_conductivity_fit_ << " " << thermal_conductivity_endpoints_
+        << " " << particle_count_
         << " " << step_absorbed_particles_ << " " << step_injected_particles_ << " " << step_recovered_particles_ << " " << step_net_particles_
-        << " " << step_heat_source_injected_particles_ << " " << step_heat_source_injected_energy_ev_ << '\n';
+        << " " << step_reservoir_absorbed_energy_ev_ << " " << step_reservoir_injected_energy_ev_
+        << " " << step_heat_source_injected_particles_ << " " << step_heat_source_injected_energy_ev_
+        << " " << step_lifetime_energy_residual_ev_ << " " << step_energy_balance_residual_ev_
+        << " " << total_thermal_energy_ev_ << '\n';
 }
 
 void MonteCarloSolver::append_profile_summary(std::ostream& out) const {
+    out << std::setprecision(17);
     out << "\n[performance]\n";
 #ifdef _OPENMP
     out << "openmp_enabled = true\n";
@@ -1850,9 +2317,13 @@ void MonteCarloSolver::append_profile_summary(std::ostream& out) const {
         << collision_cache_corrections_total_.load(std::memory_order_relaxed) << '\n';
     out << "collision_cache_failures_total = "
         << collision_cache_failures_total_.load(std::memory_order_relaxed) << '\n';
+    out << "excessive_collision_recoveries_total = "
+        << excessive_collision_recoveries_total_.load(std::memory_order_relaxed) << '\n';
     const long long rough_total = rough_events_total_.load(std::memory_order_relaxed);
     const long long rough_spec = rough_specular_selected_.load(std::memory_order_relaxed);
     const long long rough_diff = rough_diffuse_selected_.load(std::memory_order_relaxed);
+    const long long rough_residual_window = rough_residual_window_selected_.load(std::memory_order_relaxed);
+    const long long rough_residual_fallback = rough_residual_window_fallback_.load(std::memory_order_relaxed);
     const long long rough_fb_no_data = rough_fallback_missing_rough_data_.load(std::memory_order_relaxed);
     const long long rough_fb_no_spec = rough_fallback_missing_spec_match_.load(std::memory_order_relaxed);
     const long long rough_fb_pool = rough_fallback_outgoing_pool_.load(std::memory_order_relaxed);
@@ -1864,11 +2335,15 @@ void MonteCarloSolver::append_profile_summary(std::ostream& out) const {
     out << "diffuse_selected = " << rough_diff << '\n';
     out << "specular_ratio = " << (static_cast<double>(rough_spec) / rough_den) << '\n';
     out << "diffuse_ratio = " << (static_cast<double>(rough_diff) / rough_den) << '\n';
+    out << "residual_flux_frequency_window_selected = " << rough_residual_window << '\n';
+    out << "residual_flux_frequency_window_fallback = " << rough_residual_fallback << '\n';
     out << "fallback_missing_rough_data = " << rough_fb_no_data << '\n';
     out << "fallback_missing_spec_match = " << rough_fb_no_spec << '\n';
     out << "fallback_outgoing_pool = " << rough_fb_pool << '\n';
     out << "fallback_global_random = " << rough_fb_rand << '\n';
-    out << "fallback_total = " << (rough_fb_no_data + rough_fb_no_spec + rough_fb_pool + rough_fb_rand) << '\n';
+    out << "fallback_total = "
+        << (rough_residual_fallback + rough_fb_no_data + rough_fb_no_spec + rough_fb_pool + rough_fb_rand)
+        << '\n';
     out << "mode_map_csv = disabled\n";
     out << "\n[escaped_particle_recovery]\n";
     out << "check_interval = " << escaped_recovery_check_interval_ << '\n';
@@ -1880,12 +2355,30 @@ void MonteCarloSolver::append_profile_summary(std::ostream& out) const {
     out << "injected_particles_total = " << total_injected_particles_ << '\n';
     out << "recovered_particles_total = " << total_recovered_particles_ << '\n';
     out << "net_particles_total = " << total_net_particles_ << '\n';
-    out << "\n[local_heat_source_particle_injection]\n";
+    out << "absorbed_deviational_energy_total_ev = " << total_reservoir_absorbed_energy_ev_ << '\n';
+    out << "injected_deviational_energy_total_ev = " << total_reservoir_injected_energy_ev_ << '\n';
+    out << "\n[energy_weighting]\n";
+    out << "initial_particle_count = " << initial_particle_count_ << '\n';
+    out << "current_particle_count = " << particle_count_ << '\n';
+    out << "particle_spatial_weight_a3 = " << particle_spatial_weight_a3_ << '\n';
+    out << "background_reference_temperature_k = " << background_temperature_ << '\n';
+    out << "total_thermal_energy_ev = " << total_thermal_energy_ev_ << '\n';
+    out << "lifetime_energy_residual_total_ev = " << total_lifetime_energy_residual_ev_ << '\n';
+    out << "energy_balance_residual_total_ev = " << total_energy_balance_residual_ev_ << '\n';
+    out << "\n[local_heat_source_occupation_injection]\n";
     out << "enabled = " << (local_heat_source_enabled_ ? "true" : "false") << '\n';
+    out << "profile = " << to_string(local_heat_source_profile_) << '\n';
     out << "power_density_wm3 = " << local_heat_source_power_density_wm3_ << '\n';
-    out << "injected_particles_total = " << total_heat_source_injected_particles_ << '\n';
+    out << "time_profile = " << to_string(args_.heat_source_time_profile) << '\n';
+    out << "time_start_ps = " << args_.heat_source_time_start << '\n';
+    out << "time_end_ps = " << args_.heat_source_time_end << '\n';
+    out << "period_ps = " << args_.heat_source_period << '\n';
+    out << "on_duration_ps = " << args_.heat_source_on_duration << '\n';
+    out << "duty_cycle = " << args_.heat_source_duty_cycle << '\n';
+    out << "amplitude = " << args_.heat_source_amplitude << '\n';
+    out << "occupation_updates_total = " << total_heat_source_injected_particles_ << '\n';
     out << "injected_energy_total_ev = " << total_heat_source_injected_energy_ev_ << '\n';
-    out << "injected_particles_last_step = " << step_heat_source_injected_particles_ << '\n';
+    out << "occupation_updates_last_step = " << step_heat_source_injected_particles_ << '\n';
     out << "injected_energy_last_step_ev = " << step_heat_source_injected_energy_ev_ << '\n';
     if (!profile_timers_enabled_) {
         return;
@@ -1939,12 +2432,17 @@ void MonteCarloSolver::run_timestep() {
     }
     const SimulationDomain& geometry = *geometry_;
     const PhononMaterial& phonon = *phonon_;
+    const double thermal_energy_before_step_ev = total_thermal_energy_ev_;
     using Clock = std::chrono::steady_clock;
     const auto t_step_begin = Clock::now();
     step_absorbed_particles_ = 0;
     step_injected_particles_ = 0;
     step_heat_source_injected_particles_ = 0;
     step_heat_source_injected_energy_ev_ = 0.0;
+    step_reservoir_absorbed_energy_ev_ = 0.0;
+    step_reservoir_injected_energy_ev_ = 0.0;
+    step_lifetime_energy_residual_ev_ = 0.0;
+    step_energy_balance_residual_ev_ = 0.0;
     step_recovered_particles_ = 0;
     step_net_particles_ = 0;
     excessive_collision_particle_.store(-1, std::memory_order_relaxed);
@@ -1953,6 +2451,19 @@ void MonteCarloSolver::run_timestep() {
     ensure_boundary_tls_buffers(std::max(1, omp_get_max_threads()), reservoir_count_);
     reset_boundary_tls_counters();
 #endif
+
+    const double midpoint_time = elapsed_time_ + 0.5 * time_step_;
+    const double first_source_time_ps = local_heat_source_integrated_time_factor(
+        elapsed_time_, midpoint_time);
+    const double second_source_time_ps = local_heat_source_integrated_time_factor(
+        midpoint_time, elapsed_time_ + time_step_);
+    if (first_source_time_ps > 0.0) {
+        apply_local_heat_source_to_occupations(
+            geometry, phonon, first_source_time_ps);
+        // First half of a Strang-split source must update the local reference
+        // temperature before transport and boundary scattering.
+        update_particle_temperatures(geometry, phonon);
+    }
 
     const int n_before = particle_count_;
     const auto t_advance_begin = Clock::now();
@@ -1975,12 +2486,7 @@ void MonteCarloSolver::run_timestep() {
     const auto t_inject_begin = t_remove1_end;
     const auto injected_reservoir = inject_particles_from_reservoirs(geometry, phonon);
     step_injected_particles_ = static_cast<long long>(injected_reservoir.size());
-    const auto injected_heat_source = inject_particles_from_local_heat_source(geometry, phonon);
-    step_heat_source_injected_particles_ = static_cast<long long>(injected_heat_source.size());
-    std::vector<std::pair<int, double>> injected;
-    injected.reserve(injected_reservoir.size() + injected_heat_source.size());
-    injected.insert(injected.end(), injected_reservoir.begin(), injected_reservoir.end());
-    injected.insert(injected.end(), injected_heat_source.begin(), injected_heat_source.end());
+    const auto& injected = injected_reservoir;
     const auto t_inject_end = Clock::now();
     if (!injected.empty()) {
         const auto t_cache_begin = Clock::now();
@@ -2030,12 +2536,6 @@ void MonteCarloSolver::run_timestep() {
         step_recovered_particles_ = static_cast<long long>(recover_escaped_particles(geometry));
     }
     step_net_particles_ = step_injected_particles_ - step_absorbed_particles_;
-    total_absorbed_particles_ += step_absorbed_particles_;
-    total_injected_particles_ += step_injected_particles_;
-    total_heat_source_injected_particles_ += step_heat_source_injected_particles_;
-    total_heat_source_injected_energy_ev_ += step_heat_source_injected_energy_ev_;
-    total_recovered_particles_ += step_recovered_particles_;
-    total_net_particles_ += step_net_particles_;
     if (!reservoir_leaving_curr_step_.empty() &&
         reservoir_leaving_curr_step_.size() == reservoir_leaving_prev_step_.size()) {
         reservoir_leaving_prev_step_ = reservoir_leaving_curr_step_;
@@ -2047,6 +2547,30 @@ void MonteCarloSolver::run_timestep() {
     const auto t_life_begin = t_temp_end;
     apply_lifetime_scattering(phonon);
     const auto t_life_end = Clock::now();
+
+    if (second_source_time_ps > 0.0) {
+        apply_local_heat_source_to_occupations(
+            geometry, phonon, second_source_time_ps);
+    }
+    // Occupations changed during both RTA and the second source half. Refresh
+    // particle energies and temperatures before heat-flux/output statistics.
+    update_particle_temperatures(geometry, phonon);
+    total_thermal_energy_ev_ = compute_total_thermal_energy_ev(geometry, phonon);
+    step_energy_balance_residual_ev_ =
+        total_thermal_energy_ev_ - thermal_energy_before_step_ev -
+        step_heat_source_injected_energy_ev_ - step_reservoir_injected_energy_ev_ +
+        step_reservoir_absorbed_energy_ev_ - step_lifetime_energy_residual_ev_;
+
+    total_absorbed_particles_ += step_absorbed_particles_;
+    total_injected_particles_ += step_injected_particles_;
+    total_heat_source_injected_particles_ += step_heat_source_injected_particles_;
+    total_heat_source_injected_energy_ev_ += step_heat_source_injected_energy_ev_;
+    total_reservoir_absorbed_energy_ev_ += step_reservoir_absorbed_energy_ev_;
+    total_reservoir_injected_energy_ev_ += step_reservoir_injected_energy_ev_;
+    total_lifetime_energy_residual_ev_ += step_lifetime_energy_residual_ev_;
+    total_energy_balance_residual_ev_ += step_energy_balance_residual_ev_;
+    total_recovered_particles_ += step_recovered_particles_;
+    total_net_particles_ += step_net_particles_;
 
     ++current_timestep_;
     elapsed_time_ += time_step_;
@@ -2100,11 +2624,17 @@ void MonteCarloSolver::run_timestep() {
         std::cout << "Reservoir Balance (step): absorbed=" << step_absorbed_particles_
                   << ", injected=" << step_injected_particles_
                   << ", recovered=" << step_recovered_particles_
-                  << ", net=" << step_net_particles_ << std::endl;
+                  << ", net=" << step_net_particles_
+                  << ", particle_count=" << particle_count_ << std::endl;
         if (local_heat_source_enabled_) {
-            std::cout << "Local Heat Source (step): injected_particles=" << step_heat_source_injected_particles_
+            std::cout << "Local Heat Source (step): occupation_updates=" << step_heat_source_injected_particles_
                       << ", injected_energy_ev=" << step_heat_source_injected_energy_ev_ << std::endl;
         }
+        std::cout << "Energy Diagnostics (eV): reservoir_absorbed=" << step_reservoir_absorbed_energy_ev_
+                  << ", reservoir_injected=" << step_reservoir_injected_energy_ev_
+                  << ", lifetime_residual=" << step_lifetime_energy_residual_ev_
+                  << ", balance_residual=" << step_energy_balance_residual_ev_
+                  << ", total_thermal=" << total_thermal_energy_ev_ << std::endl;
         std::cout << "-------------------------" << std::endl;
     }
     report_timestep_timers_if_needed();

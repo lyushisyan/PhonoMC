@@ -450,8 +450,125 @@ void SimulationDomain::sync_surface_mesh_properties() {
     bounds_max_ = mesh_.bounds_max();
     volume_ = mesh_.volume();
     facet_count_ = mesh_.facet_count();
+    initialize_analytic_box_intersection();
     periodic_pair_.assign(static_cast<size_t>(facet_count_), -1);
     periodic_shift_.assign(static_cast<size_t>(facet_count_), {0.0, 0.0, 0.0});
+}
+
+// 函数说明：为六面轴对齐 box 建立解析求交所需的平面到 facet 映射。
+void SimulationDomain::initialize_analytic_box_intersection() {
+    analytic_box_intersection_enabled_ = false;
+    box_plane_facets_.fill(-1);
+    if (!is_box_geometry_ || facet_count_ != 6) {
+        return;
+    }
+
+    const Vec3 ext = sub(bounds_max_, bounds_min_);
+    const double scale = std::max({1.0, std::abs(ext[0]), std::abs(ext[1]), std::abs(ext[2])});
+    const double plane_tol = 1e-10 * scale;
+    const auto& centroids = mesh_.facet_centroids();
+    const auto& normals = mesh_.facet_normals();
+    if (centroids.size() != 6 || normals.size() != 6) {
+        return;
+    }
+
+    for (int facet = 0; facet < facet_count_; ++facet) {
+        int plane = -1;
+        for (int axis = 0; axis < 3; ++axis) {
+            for (int side = 0; side < 2; ++side) {
+                const double target = (side == 0) ? bounds_min_[axis] : bounds_max_[axis];
+                if (std::abs(centroids[static_cast<size_t>(facet)][axis] - target) > plane_tol) {
+                    continue;
+                }
+                const double expected_normal = (side == 0) ? -1.0 : 1.0;
+                if (normals[static_cast<size_t>(facet)][axis] * expected_normal < 1.0 - 1e-10) {
+                    continue;
+                }
+                bool other_components_zero = true;
+                for (int other = 0; other < 3; ++other) {
+                    if (other != axis && std::abs(normals[static_cast<size_t>(facet)][other]) > 1e-10) {
+                        other_components_zero = false;
+                    }
+                }
+                if (!other_components_zero) {
+                    continue;
+                }
+                if (plane >= 0) {
+                    return;
+                }
+                plane = 2 * axis + side;
+            }
+        }
+        if (plane < 0 || box_plane_facets_[static_cast<size_t>(plane)] >= 0) {
+            box_plane_facets_.fill(-1);
+            return;
+        }
+        box_plane_facets_[static_cast<size_t>(plane)] = facet;
+    }
+
+    analytic_box_intersection_enabled_ = std::all_of(
+        box_plane_facets_.begin(), box_plane_facets_.end(), [](int facet) { return facet >= 0; });
+}
+
+// 函数说明：轴对齐 box 使用解析平面求交，其余几何保留三角面/BVH 求交。
+std::tuple<Vec3, double, int> SimulationDomain::trace_boundary_intersection(
+    const Vec3& position,
+    const Vec3& velocity) const {
+    if (!analytic_box_intersection_enabled_) {
+        return mesh_.trace_boundary_intersection(position, velocity);
+    }
+
+    constexpr double velocity_eps = 1e-18;
+    constexpr double time_eps = 1e-14;
+    const Vec3 ext = sub(bounds_max_, bounds_min_);
+    const double scale = std::max({1.0, std::abs(ext[0]), std::abs(ext[1]), std::abs(ext[2])});
+    const double position_tol = std::max(1e-9, 64.0 * std::numeric_limits<double>::epsilon() * scale);
+    for (int axis = 0; axis < 3; ++axis) {
+        if (!std::isfinite(position[axis]) ||
+            position[axis] < bounds_min_[axis] - position_tol ||
+            position[axis] > bounds_max_[axis] + position_tol) {
+            return {position, std::numeric_limits<double>::infinity(), -1};
+        }
+    }
+
+    double best_time = std::numeric_limits<double>::infinity();
+    int best_plane = -1;
+
+    for (int axis = 0; axis < 3; ++axis) {
+        const double component = velocity[axis];
+        if (!std::isfinite(component) || std::abs(component) <= velocity_eps) {
+            continue;
+        }
+        const int side = (component > 0.0) ? 1 : 0;
+        const double target = (side == 0) ? bounds_min_[axis] : bounds_max_[axis];
+        const double hit_time = (target - position[axis]) / component;
+        if (std::isfinite(hit_time) && hit_time > time_eps && hit_time < best_time) {
+            best_time = hit_time;
+            best_plane = 2 * axis + side;
+        }
+    }
+
+    if (best_plane < 0) {
+        return {position, std::numeric_limits<double>::infinity(), -1};
+    }
+
+    Vec3 collision = add(position, mul(velocity, best_time));
+    const int hit_axis = best_plane / 2;
+    const int hit_side = best_plane % 2;
+    collision[hit_axis] = (hit_side == 0) ? bounds_min_[hit_axis] : bounds_max_[hit_axis];
+    // Roundoff in the two tangential coordinates must not place a cached
+    // collision infinitesimally outside the closed analytical box. A larger
+    // excursion remains a hard geometry failure instead of being hidden by
+    // clamping.
+    for (int axis = 0; axis < 3; ++axis) {
+        if (!std::isfinite(collision[axis]) ||
+            collision[axis] < bounds_min_[axis] - position_tol ||
+            collision[axis] > bounds_max_[axis] + position_tol) {
+            return {position, std::numeric_limits<double>::infinity(), -1};
+        }
+        collision[axis] = std::clamp(collision[axis], bounds_min_[axis], bounds_max_[axis]);
+    }
+    return {collision, best_time, box_plane_facets_[static_cast<size_t>(best_plane)]};
 }
 
 // 函数说明：将输入边界条件映射到 facet，并识别热库/粗糙边界。
@@ -845,6 +962,13 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
         oss << "]";
         return oss.str();
     };
+    auto scale_numbers = [](const std::vector<double>& v, double scale) -> std::vector<double> {
+        std::vector<double> out = v;
+        for (double& x : out) {
+            x *= scale;
+        }
+        return out;
+    };
     auto region_count = [](const std::vector<std::string>& v) -> int {
         if (v.empty()) {
             return 0;
@@ -880,10 +1004,14 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
     out << "convergence_write_interval = " << args.convergence_write_interval << '\n';
     out << "random_seed = " << args.random_seed << '\n';
     out << "temperature_lookup_dt = " << args.temperature_lookup_dt << '\n';
-    out << "background_temperature_mode = " << to_string(args.background_temperature_mode) << '\n';
     out << "background_temperature = " << args.background_temperature << '\n';
-    out << "lifetime_temperature_mode = " << to_string(args.lifetime_temperature_mode) << '\n';
-    out << "lifetime_temperature = " << args.lifetime_temperature << '\n';
+    out << "lifetime_temperature = ";
+    if (args.lifetime_temperature_is_local) {
+        out << "local";
+    } else {
+        out << args.lifetime_temperature;
+    }
+    out << '\n';
     out << "compute_kappa = " << (args.compute_kappa ? "true" : "false") << '\n';
     out << "profile_timers = " << (args.profile_timers ? "true" : "false") << '\n';
     out << "progress_temperature_summary_only = "
@@ -917,11 +1045,21 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
     out << "output_folder = " << args.output_folder << '\n';
     out << "heat_source_enabled = " << (args.heat_source_enabled ? "true" : "false") << '\n';
     out << "heat_source_profile = " << to_string(args.heat_source_profile) << '\n';
-    out << "heat_source_min = " << join_numbers(args.heat_source_min) << '\n';
-    out << "heat_source_max = " << join_numbers(args.heat_source_max) << '\n';
-    out << "heat_source_center = " << join_numbers(args.heat_source_center) << '\n';
-    out << "heat_source_sigma = " << join_numbers(args.heat_source_sigma) << '\n';
+    out << "heat_source_min_nm = " << join_numbers(scale_numbers(args.heat_source_min, 0.1)) << '\n';
+    out << "heat_source_max_nm = " << join_numbers(scale_numbers(args.heat_source_max, 0.1)) << '\n';
+    out << "heat_source_center_nm = " << join_numbers(scale_numbers(args.heat_source_center, 0.1)) << '\n';
+    out << "heat_source_centers_nm = " << join_numbers(scale_numbers(args.heat_source_centers, 0.1)) << '\n';
+    out << "heat_source_sigma_nm = " << join_numbers(scale_numbers(args.heat_source_sigma, 0.1)) << '\n';
+    out << "heat_source_half_width_nm = " << join_numbers(scale_numbers(args.heat_source_half_width, 0.1)) << '\n';
+    out << "heat_source_min_angstrom = " << join_numbers(args.heat_source_min) << '\n';
+    out << "heat_source_max_angstrom = " << join_numbers(args.heat_source_max) << '\n';
+    out << "heat_source_center_angstrom = " << join_numbers(args.heat_source_center) << '\n';
+    out << "heat_source_centers_angstrom = " << join_numbers(args.heat_source_centers) << '\n';
+    out << "heat_source_sigma_angstrom = " << join_numbers(args.heat_source_sigma) << '\n';
+    out << "heat_source_half_width_angstrom = " << join_numbers(args.heat_source_half_width) << '\n';
     out << "heat_source_power_density = " << args.heat_source_power_density << '\n';
+    out << "heat_source_power_densities = " << join_numbers(args.heat_source_power_densities) << '\n';
+    out << "heat_source_time_profile = " << to_string(args.heat_source_time_profile) << '\n';
     out << '\n';
 
     out << "[geometry]\n";

@@ -34,6 +34,8 @@ public:
     double temperature_from_energy_density(double energy_density) const;
     double normalize_to_energy_density(double x) const;
     Vec3 normalize_to_energy_density(const Vec3& x) const;
+    double energy_density_normalization() const;
+    double zero_point_energy_density() const { return zero_point_energy_density_; }
 
 private:
     static Vec3 random_unit_vector(std::mt19937_64& rng);

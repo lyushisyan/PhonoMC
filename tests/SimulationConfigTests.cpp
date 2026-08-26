@@ -59,9 +59,8 @@ sizes = [10, 20, 30]
 grid_xyz = [2, 3, 4]
 random_seed = 18446744073709551615
 initial_temperature = "linear"
-background_temperature_mode = "fixed"
 background_temperature = 310
-lifetime_temperature_mode = "local"
+lifetime_temperature = "local"
 [boundary]
 boundary_position = [
   [-0.01, 0, 0, 0.01, 1, 1],
@@ -77,24 +76,42 @@ periodic_pair = [
 ]
 [heat_source]
 profile = "gaussian"
-center = [0.5, 0.5, 0.5]
-sigma = [0.1, 0.1, 0.1]
+min = [1, 2, 3]
+max = [9, 18, 27]
+center = [5, 10, 15]
+sigma = [1, 2, 3]
 power_density = 1e20
+time_profile = "square"
+period = 20
+on_duration = 5
 )");
 
     const SimulationConfig cfg = load_simulation_config(path.string());
     check(cfg.grid.nx == 2 && cfg.grid.ny == 3 && cfg.grid.nz == 4, "grid_xyz maps to GridShape");
     check(cfg.random_seed == UINT64_MAX, "random_seed preserves the full unsigned 64-bit range");
     check(cfg.initial_temperature.mode == InitialTemperatureMode::Linear, "linear initial temperature is typed");
-    check(cfg.background_temperature_mode == TemperatureReferenceMode::Fixed, "fixed background mode is typed");
-    check(cfg.lifetime_temperature_mode == TemperatureReferenceMode::Local, "local lifetime mode is typed");
+    check_close(cfg.background_temperature, 310.0, "fixed background temperature is retained");
+    check(cfg.lifetime_temperature_is_local, "local lifetime mode is typed");
     check(cfg.boundary_conditions.size() == 4, "all boundary conditions are parsed");
     check(cfg.boundary_conditions[0] == BoundaryCondition::ThermalReservoir, "T boundary is typed");
     check(cfg.boundary_conditions[1] == BoundaryCondition::Periodic, "P boundary is typed");
     check(cfg.boundary_conditions[2] == BoundaryCondition::Periodic, "paired P boundary is typed");
     check(cfg.boundary_conditions[3] == BoundaryCondition::Rough, "R boundary is typed");
     check(cfg.heat_source_profile == HeatSourceProfile::Gaussian, "heat source profile is typed");
+    check(cfg.heat_source_time_profile == HeatSourceTimeProfile::Square, "square heat source time profile is typed");
     check(cfg.heat_source_enabled, "complete heat source configuration enables the source");
+    check_close(cfg.heat_source_min[0], 10.0, "heat source min nm converts to Angstrom");
+    check_close(cfg.heat_source_min[1], 20.0, "heat source min y nm converts to Angstrom");
+    check_close(cfg.heat_source_min[2], 30.0, "heat source min z nm converts to Angstrom");
+    check_close(cfg.heat_source_max[0], 90.0, "heat source max nm converts to Angstrom");
+    check_close(cfg.heat_source_max[1], 180.0, "heat source max y nm converts to Angstrom");
+    check_close(cfg.heat_source_max[2], 270.0, "heat source max z nm converts to Angstrom");
+    check_close(cfg.heat_source_center[0], 50.0, "heat source center nm converts to Angstrom");
+    check_close(cfg.heat_source_center[1], 100.0, "heat source center y nm converts to Angstrom");
+    check_close(cfg.heat_source_center[2], 150.0, "heat source center z nm converts to Angstrom");
+    check_close(cfg.heat_source_sigma[0], 10.0, "heat source sigma nm converts to Angstrom");
+    check_close(cfg.heat_source_sigma[1], 20.0, "heat source sigma y nm converts to Angstrom");
+    check_close(cfg.heat_source_sigma[2], 30.0, "heat source sigma z nm converts to Angstrom");
     check_close(cfg.sizes[0], 100.0, "nm sizes convert to Angstrom");
 }
 
@@ -107,6 +124,26 @@ initial_temperature = 325.5
     const SimulationConfig numeric_cfg = load_simulation_config(numeric.string());
     check(numeric_cfg.initial_temperature.mode == InitialTemperatureMode::Uniform, "numeric temperature selects uniform mode");
     check_close(numeric_cfg.initial_temperature.uniform_temperature, 325.5, "numeric initial temperature is retained");
+
+    const fs::path full_phonon = write_file(root, "full-phonon.toml", R"(
+[simulation]
+grid_xyz = [1, 1, 1]
+background_temperature = 0
+lifetime_temperature = "local"
+)");
+    const SimulationConfig full_phonon_cfg = load_simulation_config(full_phonon.string());
+    check_close(full_phonon_cfg.background_temperature, 0.0, "zero-K full-phonon background is retained");
+    check(full_phonon_cfg.lifetime_temperature_is_local, "full-phonon mode supports local lifetimes");
+
+    const fs::path fixed_reference = write_file(root, "fixed-reference.toml", R"(
+[simulation]
+grid_xyz = [1, 1, 1]
+background_temperature = 300
+lifetime_temperature = 300
+)");
+    const SimulationConfig fixed_reference_cfg = load_simulation_config(fixed_reference.string());
+    check_close(fixed_reference_cfg.background_temperature, 300.0, "fixed deviational background is retained");
+    check(!fixed_reference_cfg.lifetime_temperature_is_local, "fixed lifetime temperature is retained");
 }
 
 void test_removed_formats_are_rejected(const fs::path& root) {
@@ -182,6 +219,15 @@ grid_xyz = [1, 1, 1]
 random_seed = -1
 )");
     expect_throw([&] { (void) load_simulation_config(bad_seed.string()); }, "negative random seed is rejected");
+
+    const fs::path local_background = write_file(root, "local-background.toml", R"(
+[simulation]
+grid_xyz = [1, 1, 1]
+background_temperature = "local"
+)");
+    expect_throw(
+        [&] { (void) load_simulation_config(local_background.string()); },
+        "local background reference is rejected");
 
     const fs::path cylinder = write_file(root, "cylinder.toml", R"(
 [geometry]

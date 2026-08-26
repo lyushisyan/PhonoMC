@@ -55,6 +55,7 @@ int main() {
         check(std::abs(domain.volume() - expected_box_volume) <= expected_box_volume * 1e-12,
               "signed surface volume matches the analytical box volume");
         check(domain.fast_grid_index_enabled(), "box enables constant-time grid lookup");
+        check(domain.analytic_box_intersection_enabled(), "six-facet box enables analytical boundary intersection");
         for (int i = 0; i < domain.grid_count(); ++i) {
             check(domain.fast_grid_index(domain.grid_centers()[static_cast<size_t>(i)]) == i,
                   "box grid center maps to its exact grid index");
@@ -65,6 +66,50 @@ int main() {
                 check(domain.has_periodic_pair(facet), "every periodic facet has a pair");
             }
         }
+
+        // A highly elongated thin-film box previously exposed tolerance gaps
+        // in triangle/BVH ray tracing. Its next boundary hit is now obtained
+        // directly from the six analytical planes.
+        SimulationConfig thin = valid;
+        thin.sizes = {100000.0, 100.0, 100.0};
+        thin.grid = {1, 1, 1};
+        thin.output_folder = (root / "thin-box").string();
+        const SimulationDomain thin_domain(thin);
+        check(thin_domain.analytic_box_intersection_enabled(),
+              "elongated six-facet box enables analytical boundary intersection");
+        const std::array<double, 3> ray_position {77733.988621, 94.639404, 50.214196};
+        const std::array<double, 3> ray_velocity {1.0e-9, 2.0, -0.25};
+        const auto [hit, hit_time, hit_facet] = thin_domain.trace_boundary_intersection(ray_position, ray_velocity);
+        check(std::isfinite(hit_time) && std::abs(hit_time - 2.680298) <= 1e-9,
+              "elongated-box analytical hit time reaches the outgoing y plane");
+        check(std::abs(hit[1] - 100.0) <= 1e-12,
+              "elongated-box analytical collision lies exactly on the y-max plane");
+        check(hit_facet >= 0 && thin_domain.mesh().facet_normals()[static_cast<size_t>(hit_facet)][1] > 0.999999,
+              "elongated-box analytical collision returns the y-max facet");
+
+        // Exercise all six planes and a ray that lands on a triangulation
+        // diagonal; neither case should depend on the box's triangle split.
+        const std::array<double, 3> box_center {50000.0, 50.0, 50.0};
+        for (int axis = 0; axis < 3; ++axis) {
+            for (int sign : {-1, 1}) {
+                std::array<double, 3> velocity {0.0, 0.0, 0.0};
+                velocity[axis] = static_cast<double>(sign);
+                const auto [plane_hit, plane_time, plane_facet] =
+                    thin_domain.trace_boundary_intersection(box_center, velocity);
+                const double target = (sign < 0) ? thin_domain.bounds_min()[axis] : thin_domain.bounds_max()[axis];
+                check(std::isfinite(plane_time) && plane_time > 0.0,
+                      "analytical box ray has a finite positive hit time");
+                check(std::abs(plane_hit[axis] - target) <= 1e-12,
+                      "analytical box ray reaches the expected plane");
+                check(plane_facet >= 0 &&
+                          thin_domain.mesh().facet_normals()[static_cast<size_t>(plane_facet)][axis] * sign > 0.999999,
+                      "analytical box ray returns the facet with the expected outward normal");
+            }
+        }
+        const auto [seam_hit, seam_time, seam_facet] = thin_domain.trace_boundary_intersection(
+            box_center, {1000.0, 0.5, 0.5});
+        check(std::isfinite(seam_time) && seam_facet >= 0 && std::abs(seam_hit[0] - 100000.0) <= 1e-12,
+              "analytical box intersection is independent of triangular face seams");
 
         SimulationConfig finfet = load_simulation_config(
             (fs::path(PHONOMC_SOURCE_DIR) / "example" / "input_finfet_stl_heat1e20.toml").string());

@@ -3,11 +3,22 @@
 
 # Build artifacts
 build/
+tmp/
+
+# Local calculations and analysis artifacts
+analysis/
+calculation/
 
 # Input examples are tracked; other TOML files are local runs.
 *.toml
 !example/
-!example/*.toml
+!example/input_cross_100nm.toml
+!example/input_finfet_stl_heat1e20.toml
+!example/input_inplane_x1000nm_z100nm_r1nm.toml
+example/results/
+example/*.log
+example/*.time
+model/finfet_array_1x6*
 
 # Python caches
 **/__pycache__/

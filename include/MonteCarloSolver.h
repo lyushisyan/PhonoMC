@@ -19,8 +19,13 @@ public:
 
     void run_timestep();
     int current_timestep() const { return current_timestep_; }
+    int particle_count() const { return particle_count_; }
     int openmp_thread_count() const { return openmp_thread_count_; }
     bool profile_timers_enabled() const { return profile_timers_enabled_; }
+    double total_heat_source_energy_ev() const { return total_heat_source_injected_energy_ev_; }
+    double total_thermal_energy_ev() const { return total_thermal_energy_ev_; }
+    double total_lifetime_energy_residual_ev() const { return total_lifetime_energy_residual_ev_; }
+    double total_energy_balance_residual_ev() const { return total_energy_balance_residual_ev_; }
     void append_profile_summary(std::ostream& out) const;
 
 private:
@@ -36,28 +41,32 @@ private:
     std::mt19937_64& thread_rng() const;
     int sample_diffuse_active_mode(int rough_idx, int in_ai, int* source = nullptr) const;
     std::array<int, 2> select_reflected_mode(
-        const SimulationDomain& geometry,
         const PhononMaterial& phonon,
         int rough_idx,
         const std::array<int, 2>& in_mode,
-        const Vec3& collision_pos,
         double& out_occupation,
         double in_occupation) const;
     void update_collision_cache(const SimulationDomain& geometry, const std::vector<int>& indices);
     void update_collision_cache_single(const SimulationDomain& geometry, int i);
     void throw_if_collision_cache_failed(const char* context) const;
     void throw_if_excessive_collisions() const;
+    void recover_excessive_collision_particle(const SimulationDomain& geometry, int i);
     int nearest_grid_index(const SimulationDomain& geometry, const Vec3& p) const;
     void process_boundary_collision(const SimulationDomain& geometry, int i);
     int remove_absorbed_particles();
     int recover_escaped_particles(const SimulationDomain& geometry);
     std::vector<std::pair<int, double>> inject_particles_from_reservoirs(const SimulationDomain& geometry, const PhononMaterial& phonon);
-    std::vector<std::pair<int, double>> inject_particles_from_local_heat_source(const SimulationDomain& geometry, const PhononMaterial& phonon);
+    void apply_local_heat_source_to_occupations(
+        const SimulationDomain& geometry,
+        const PhononMaterial& phonon,
+        double integrated_time_factor_ps);
+    double local_heat_source_integrated_time_factor(double time_begin_ps, double time_end_ps) const;
     void advance_particle(const SimulationDomain& geometry, const PhononMaterial& phonon, int i, double dt_remaining);
     void update_particle_temperatures(const SimulationDomain& geometry, const PhononMaterial& phonon);
     void update_grid_energy_density(const SimulationDomain& geometry, const PhononMaterial& phonon);
     void apply_lifetime_scattering(const PhononMaterial& phonon);
-    double background_temperature_for_grid(int sv) const;
+    double compute_total_thermal_energy_ev(const SimulationDomain& geometry, const PhononMaterial& phonon) const;
+    double background_temperature_reference() const;
     double lifetime_temperature_for_particle(int i) const;
     void update_heat_flux_and_conductivity(const SimulationDomain& geometry);
     void report_timestep_timers_if_needed() const;
@@ -84,6 +93,7 @@ private:
     std::uint64_t rng_seed_base_ = 0;
     mutable std::vector<std::mt19937_64> thread_rngs_;
     int particle_count_ = 0;
+    int initial_particle_count_ = 0;
     double time_step_ = 1.0;
     double elapsed_time_ = 0.0;
     int current_timestep_ = 0;
@@ -92,8 +102,8 @@ private:
     const double evpsa2_to_wm2_ = 1.602176634e13;
     const double wm3_to_evpsa3_ = 6.241509074e-24;
     double particle_density_ = 0.0;
+    double particle_spatial_weight_a3_ = 0.0;
     double push_eps_ = 1e-10;
-    bool fixed_background_temperature_ = false;
     bool fixed_lifetime_temperature_ = false;
     double background_temperature_ = 300.0;
     double lifetime_temperature_ = 300.0;
@@ -141,6 +151,10 @@ private:
         std::vector<int> outgoing_active;
         std::vector<int> outgoing_sorted_active;
         std::vector<double> outgoing_sorted_omega;
+        // Prefix sum of the residual diffuse creation flux for modes in
+        // outgoing_sorted_active. The residual is the equilibrium outgoing
+        // normal flux left after the specular channel has been removed.
+        std::vector<double> outgoing_sorted_residual_flux_prefix;
         std::vector<int> diffuse_begin;
         std::vector<int> diffuse_end;
         std::vector<int> diffuse_roulette_active;
@@ -164,6 +178,7 @@ private:
     // Per-thread boundary counters. Boundary collisions run inside OpenMP loops,
     // so shared step/reservoir counters are merged only after particle advance.
     std::vector<long long> absorbed_tls_buffer_;
+    std::vector<double> absorbed_energy_tls_buffer_;
     std::vector<int> reservoir_leaving_tls_buffer_;
     int boundary_tls_thread_count_ = 0;
     int boundary_tls_reservoir_count_ = 0;
@@ -185,6 +200,8 @@ private:
     mutable std::atomic<long long> rough_events_total_ {0};
     mutable std::atomic<long long> rough_specular_selected_ {0};
     mutable std::atomic<long long> rough_diffuse_selected_ {0};
+    mutable std::atomic<long long> rough_residual_window_selected_ {0};
+    mutable std::atomic<long long> rough_residual_window_fallback_ {0};
     mutable std::atomic<long long> rough_fallback_missing_rough_data_ {0};
     mutable std::atomic<long long> rough_fallback_missing_spec_match_ {0};
     mutable std::atomic<long long> rough_fallback_outgoing_pool_ {0};
@@ -195,6 +212,7 @@ private:
     mutable std::atomic<long long> collision_cache_corrections_total_ {0};
     mutable std::atomic<long long> collision_cache_failures_total_ {0};
     mutable std::atomic<int> excessive_collision_particle_ {-1};
+    mutable std::atomic<long long> excessive_collision_recoveries_total_ {0};
 
     // Escaped-particle recovery diagnostics.
     long long escaped_recovery_events_ = 0;
@@ -204,14 +222,23 @@ private:
     // Per-step reservoir bookkeeping diagnostics.
     long long step_absorbed_particles_ = 0;
     long long step_injected_particles_ = 0;
-    long long step_heat_source_injected_particles_ = 0;
+    long long step_heat_source_injected_particles_ = 0;  // occupation carriers modified
     double step_heat_source_injected_energy_ev_ = 0.0;
+    double step_reservoir_absorbed_energy_ev_ = 0.0;
+    double step_reservoir_injected_energy_ev_ = 0.0;
+    double step_lifetime_energy_residual_ev_ = 0.0;
+    double step_energy_balance_residual_ev_ = 0.0;
+    double total_thermal_energy_ev_ = 0.0;
     long long step_recovered_particles_ = 0;
     long long step_net_particles_ = 0;  // injected - absorbed
     long long total_absorbed_particles_ = 0;
     long long total_injected_particles_ = 0;
     long long total_heat_source_injected_particles_ = 0;
     double total_heat_source_injected_energy_ev_ = 0.0;
+    double total_reservoir_absorbed_energy_ev_ = 0.0;
+    double total_reservoir_injected_energy_ev_ = 0.0;
+    double total_lifetime_energy_residual_ev_ = 0.0;
+    double total_energy_balance_residual_ev_ = 0.0;
     long long total_recovered_particles_ = 0;
     long long total_net_particles_ = 0;  // cumulative(injected - absorbed)
 };

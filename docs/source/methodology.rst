@@ -49,18 +49,26 @@ occupation at the selected background temperature. The deviation energy is
 
    \Delta E_i = \hbar\omega_i\left(n_i-n_\mathrm{eq}\right).
 
-The sampled sum is normalized by the ratio of active modes to particles in the
-cell, converted to an energy density using the crystal normalization, and
-added to the equilibrium background energy. The temperature is then recovered
-from the inverse energy table.
+Each carrier has the fixed spatial weight ``domain_volume / initial_count``.
+The sampled deviation is converted to an energy density with that weight, the
+active-mode count, the grid volume, and the crystal normalization, then added
+to the exact equilibrium energy at ``background_temperature``. The temperature
+is recovered from the inverse energy table.
 
-The background reference can be local or fixed:
+The background reference is always a fixed numeric temperature. A moving local
+reference is not supported because changing the reference as a carrier crosses
+a grid boundary changes its represented deviational energy. The supported
+combinations are:
 
-``background_temperature_mode = "local"``
-   Use the current grid temperature.
+``background_temperature = 0`` and ``lifetime_temperature = "local"``
+   Full-phonon sampling with temperature-dependent local lifetimes.
 
-``background_temperature_mode = "fixed"``
-   Use ``background_temperature`` everywhere.
+``background_temperature = 300`` and ``lifetime_temperature = 300``
+   Fixed-reference deviational sampling with lifetimes linearized at 300 K.
+
+``background_temperature = 300`` and ``lifetime_temperature = "local"``
+   Fixed-reference deviational sampling with local temperature-dependent
+   lifetimes.
 
 Lifetime scattering
 -------------------
@@ -80,8 +88,8 @@ toward equilibrium:
    n(t+\Delta t) = n_0 + \left[n(t)-n_0\right]
    \exp\left(-\frac{\Delta t}{\tau}\right).
 
-``lifetime_temperature_mode`` independently selects a local particle
-temperature or the fixed ``lifetime_temperature``.
+``lifetime_temperature`` independently selects a local particle temperature
+with ``"local"`` or a fixed numeric temperature.
 
 Boundary scattering
 -------------------
@@ -102,7 +110,10 @@ For rough boundaries, the fallback specularity expression is
 where :math:`\eta` is RMS roughness, :math:`k` is estimated from
 :math:`\omega/|v_g|`, and :math:`\theta` is the incidence angle. The main
 rough-boundary path additionally uses precomputed frequency-compatible mode
-maps and diffuse-selection probabilities.
+maps. Diffuse candidates inside the incoming mode's elastic frequency window
+are sampled in proportion to their inward normal flux
+:math:`|\mathbf{v}_g\!\cdot\!\mathbf{n}|`; this is required to avoid
+over-populating nearly grazing modes.
 
 Heat flux and conductivity
 --------------------------

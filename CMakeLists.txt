@@ -72,4 +72,20 @@ if(BUILD_TESTING)
     target_include_directories(PhonoMCMaterialTests PRIVATE include ${HDF5_INCLUDE_DIRS})
     target_link_libraries(PhonoMCMaterialTests PRIVATE ${HDF5_CXX_LIBRARIES})
     add_test(NAME phonon_material COMMAND PhonoMCMaterialTests)
+
+    add_executable(PhonoMCEnergyTests
+        tests/MonteCarloEnergyTests.cpp
+        src/SimulationConfig.cpp
+        src/SurfaceMesh.cpp
+        src/SimulationDomain.cpp
+        src/PhononMaterial.cpp
+        src/MonteCarloSolver.cpp
+    )
+    target_include_directories(PhonoMCEnergyTests PRIVATE include ${HDF5_INCLUDE_DIRS})
+    target_link_libraries(PhonoMCEnergyTests PRIVATE ${HDF5_CXX_LIBRARIES})
+    if(PHONOMC_ENABLE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(PhonoMCEnergyTests PRIVATE OpenMP::OpenMP_CXX)
+        target_compile_definitions(PhonoMCEnergyTests PRIVATE PHONOMC_USE_OPENMP=1)
+    endif()
+    add_test(NAME monte_carlo_energy COMMAND PhonoMCEnergyTests)
 endif()
