@@ -36,8 +36,22 @@ const char* to_string(HeatSourceTimeProfile profile) {
     return profile == HeatSourceTimeProfile::Square ? "square" : "constant";
 }
 
+const char* to_string(InterfaceModel model) {
+    switch (model) {
+    case InterfaceModel::DiffuseMismatch: return "diffuse_mismatch";
+    case InterfaceModel::AcousticMismatch: return "acoustic_mismatch";
+    case InterfaceModel::MixedMismatch: return "mixed_mismatch";
+    }
+    return "diffuse_mismatch";
+}
+
 char boundary_condition_code(BoundaryCondition condition) {
     return to_string(condition)[0];
+}
+
+const char* to_string(HeatSourceSpectrum spectrum) {
+    if (spectrum == HeatSourceSpectrum::Gaussian) return "gaussian";
+    return spectrum == HeatSourceSpectrum::Weighted ? "weighted" : "thermal";
 }
 
 namespace {
@@ -167,6 +181,24 @@ bool parse_bool_scalar(const std::string& s) {
         return false;
     }
     throw std::runtime_error("Expected TOML boolean true or false, got: " + s);
+}
+
+int parse_axis(const std::string& s, const std::string& field_name) {
+    const std::string value = to_lower(unquote(s));
+    if (value == "x") return 0;
+    if (value == "y") return 1;
+    if (value == "z") return 2;
+    throw std::runtime_error(field_name + " must be one of 'x', 'y', or 'z'.");
+}
+
+InterfaceModel parse_interface_model(const std::string& s) {
+    const std::string value = to_lower(unquote(s));
+    if (value == "diffuse_mismatch" || value == "dmm") {
+        return InterfaceModel::DiffuseMismatch;
+    }
+    if (value == "acoustic_mismatch" || value == "amm") return InterfaceModel::AcousticMismatch;
+    if (value == "mixed_mismatch" || value == "mmm") return InterfaceModel::MixedMismatch;
+    throw std::runtime_error("materials.interface_model must be dmm, amm or mmm.");
 }
 
 // 函数说明：按顶层分隔符切分数组文本，正确处理嵌套括号与引号。
@@ -336,7 +368,8 @@ void parse_toml_assignments(const std::string& path, std::unordered_map<std::str
         if (clean.front() == '[' && clean.back() == ']') {
             section = to_lower(trim(clean.substr(1, clean.size() - 2)));
             static const std::unordered_set<std::string> allowed_sections {
-                "geometry", "simulation", "boundary", "heat_source", "io"
+                "sampling", "convergence",
+                "geometry", "simulation", "boundary", "heat_source", "mode_excitation", "materials", "io", "scattering", "driving"
             };
             if (allowed_sections.find(section) == allowed_sections.end()) {
                 throw std::runtime_error("Unknown TOML section: [" + section + "]");
@@ -393,21 +426,37 @@ std::optional<std::string> get_value(
 
 void reject_unknown_keys(const std::unordered_map<std::string, std::string>& kv) {
     static const std::unordered_set<std::string> allowed {
-        "geometry.model", "geometry.sizes", "geometry.merge_coplanar_facets",
+        "geometry.model", "geometry.sizes", "geometry.merge_coplanar_facets", "geometry.extruded_z",
         "simulation.particle_count", "simulation.time_step", "simulation.iterations",
-        "simulation.convergence_write_interval", "simulation.random_seed", "simulation.compute_kappa",
+        "simulation.convergence_write_interval", "simulation.random_seed", "simulation.compute_kappa", "simulation.write_cell_heat_flux",
         "simulation.profile_timers", "simulation.progress_temperature_summary_only",
         "simulation.temperature_lookup_dt", "simulation.background_temperature",
         "simulation.lifetime_temperature", "simulation.initial_temperature",
         "simulation.grid_xyz",
+        "simulation.transport_axis", "driving.temperature_gradient",
+        "sampling.resample_interval", "sampling.per_mode_sign",
+        "driving.warm_start_ps", "convergence.enabled", "convergence.min_time_ps",
+        "convergence.window_ps", "convergence.windows", "convergence.relative_tolerance",
+        "convergence.absolute_tolerance",
+        "scattering.model", "scattering.matrix_files", "scattering.callaway_formulation",
+        "simulation.conservative_boundaries",
         "boundary.boundary_conditions", "boundary.boundary_values",
         "boundary.boundary_position", "boundary.periodic_pair",
         "heat_source.enabled", "heat_source.min", "heat_source.max",
         "heat_source.power_density", "heat_source.power_densities",
+        "heat_source.total_power", "heat_source.spectrum", "heat_source.branches", "heat_source.branch_weights",
+        "heat_source.frequency_min", "heat_source.frequency_max",
+        "heat_source.frequency_center", "heat_source.frequency_sigma",
         "heat_source.profile", "heat_source.center", "heat_source.centers",
         "heat_source.sigma", "heat_source.half_width", "heat_source.time_profile", "heat_source.start_time",
         "heat_source.end_time", "heat_source.period", "heat_source.on_duration",
         "heat_source.duty_cycle", "heat_source.amplitude",
+        "mode_excitation.enabled", "mode_excitation.frequency_min",
+        "mode_excitation.frequency_max", "mode_excitation.occupation_multiplier",
+        "materials.folders", "materials.interface_axis", "materials.interface_positions",
+        "materials.interface_model",
+        "materials.interface_frequency_bin_thz", "materials.interface_amm_fraction",
+        "materials.interface_parallel_bin_inv_a", "materials.mass_densities_kg_m3",
         "io.material_folder", "io.output_folder"
     };
     for (const auto& [key, _] : kv) {
@@ -432,7 +481,7 @@ std::vector<std::string> flatten_boxes(const std::string& mode, const std::vecto
 
 // 函数说明：在未显式给出 enabled 时，根据 profile 与关键参数推断是否启用热源。
 bool infer_heat_source_enabled(const SimulationConfig& args) {
-    if (std::abs(args.heat_source_power_density) <= 0.0) {
+    if (!args.heat_source_total_power.has_value() && std::abs(args.heat_source_power_density) <= 0.0) {
         return false;
     }
     if (args.heat_source_profile == HeatSourceProfile::Gaussian) {
@@ -616,17 +665,69 @@ void validate_boundary_config(const SimulationConfig& args) {
     }
 }
 
-void validate_heat_source_config(const SimulationConfig& args) {
+void validate_heat_source_config_impl(const SimulationConfig& args) {
     if (!args.heat_source_enabled) {
         return;
     }
-    if (!(args.heat_source_power_density > 0.0) || !std::isfinite(args.heat_source_power_density)) {
-        throw std::runtime_error("enabled heat_source requires a finite positive power_density.");
+    if (args.heat_source_total_power.has_value()) {
+        if (!std::isfinite(*args.heat_source_total_power) || !(*args.heat_source_total_power > 0.0))
+            throw std::runtime_error("heat_source.total_power must be finite and positive (W).");
+        if (args.heat_source_power_density != 0.0 || !args.heat_source_power_densities.empty())
+            throw std::runtime_error("heat_source.total_power cannot be combined with power_density or power_densities.");
+    } else if (!(args.heat_source_power_density > 0.0) || !std::isfinite(args.heat_source_power_density)) {
+        throw std::runtime_error("enabled heat_source requires positive total_power or power_density.");
+    }
+    for (const auto* values : {&args.heat_source_min, &args.heat_source_max,
+             &args.heat_source_center, &args.heat_source_centers, &args.heat_source_sigma,
+             &args.heat_source_half_width}) {
+        for (double value : *values) {
+            if (!std::isfinite(value)) throw std::runtime_error("Heat-source spatial parameters must be finite.");
+        }
+    }
+    std::vector<int> branches = args.heat_source_branches;
+    std::sort(branches.begin(), branches.end());
+    if ((!branches.empty() && branches.front() < 0) ||
+        std::adjacent_find(branches.begin(), branches.end()) != branches.end())
+        throw std::runtime_error("heat_source.branches must contain unique nonnegative indices.");
+    if (args.heat_source_spectrum == HeatSourceSpectrum::Gaussian) {
+        if (!args.heat_source_frequency_center || !args.heat_source_frequency_sigma ||
+            !std::isfinite(*args.heat_source_frequency_center) || *args.heat_source_frequency_center < 0 ||
+            !std::isfinite(*args.heat_source_frequency_sigma) || *args.heat_source_frequency_sigma <= 0)
+            throw std::runtime_error("Gaussian spectrum requires finite frequency_center >= 0 and frequency_sigma > 0, in THz.");
+    } else if (args.heat_source_frequency_center || args.heat_source_frequency_sigma) {
+        throw std::runtime_error("frequency_center/frequency_sigma require heat_source.spectrum='gaussian'.");
+    }
+    if (args.heat_source_spectrum != HeatSourceSpectrum::Weighted) {
+        if (!args.heat_source_branch_weights.empty())
+            throw std::runtime_error("branch_weights requires heat_source.spectrum='weighted'.");
+    } else {
+        bool positive = false;
+        for (size_t branch = 0; branch < args.heat_source_branch_weights.size(); ++branch) {
+            const double weight = args.heat_source_branch_weights[branch];
+            if (!std::isfinite(weight) || weight < 0.0)
+                throw std::runtime_error("heat_source.branch_weights must be finite and nonnegative.");
+            if (branches.empty() || std::binary_search(branches.begin(), branches.end(), static_cast<int>(branch)))
+                positive = positive || weight > 0.0;
+        }
+        if (!positive) throw std::runtime_error("weighted heat_source needs positive weights on selected branches.");
     }
     for (double q : args.heat_source_power_densities) {
         if (!(q > 0.0) || !std::isfinite(q)) {
             throw std::runtime_error("heat_source.power_densities values must be finite and positive.");
         }
+    }
+    if (!(args.heat_source_frequency_min < 0.0) &&
+        !(std::isfinite(args.heat_source_frequency_min) && args.heat_source_frequency_min >= 0.0)) {
+        throw std::runtime_error("heat_source.frequency_min must be finite and non-negative if provided.");
+    }
+    if (!(args.heat_source_frequency_max < 0.0) &&
+        !(std::isfinite(args.heat_source_frequency_max) && args.heat_source_frequency_max >= 0.0)) {
+        throw std::runtime_error("heat_source.frequency_max must be finite and non-negative if provided.");
+    }
+    if (args.heat_source_frequency_min >= 0.0 &&
+        args.heat_source_frequency_max >= 0.0 &&
+        args.heat_source_frequency_max < args.heat_source_frequency_min) {
+        throw std::runtime_error("heat_source.frequency_max must be no smaller than frequency_min.");
     }
     if (args.heat_source_profile == HeatSourceProfile::Uniform) {
         if (args.heat_source_min.size() != 3 || args.heat_source_max.size() != 3) {
@@ -657,6 +758,8 @@ void validate_heat_source_config(const SimulationConfig& args) {
     if (!std::isfinite(args.heat_source_amplitude) || args.heat_source_amplitude < 0.0) {
         throw std::runtime_error("heat_source.amplitude must be finite and non-negative.");
     }
+    if (!std::isfinite(args.heat_source_on_duration))
+        throw std::runtime_error("heat_source.on_duration must be finite.");
     if (!std::isfinite(args.heat_source_time_start)) {
         throw std::runtime_error("heat_source.start_time must be finite.");
     }
@@ -675,6 +778,79 @@ void validate_heat_source_config(const SimulationConfig& args) {
             (!std::isfinite(args.heat_source_on_duration) ||
              args.heat_source_on_duration > args.heat_source_period)) {
             throw std::runtime_error("heat_source.on_duration must be finite and no larger than period.");
+        }
+    }
+}
+
+void validate_mode_excitation_config(const SimulationConfig& args) {
+    if (!args.mode_excitation_enabled) {
+        return;
+    }
+    if (!(args.mode_excitation_occupation_multiplier > 0.0) ||
+        !std::isfinite(args.mode_excitation_occupation_multiplier)) {
+        throw std::runtime_error("mode_excitation.occupation_multiplier must be finite and positive.");
+    }
+    if (!(args.mode_excitation_frequency_min < 0.0) &&
+        !(std::isfinite(args.mode_excitation_frequency_min) && args.mode_excitation_frequency_min >= 0.0)) {
+        throw std::runtime_error("mode_excitation.frequency_min must be finite and non-negative if provided.");
+    }
+    if (!(args.mode_excitation_frequency_max < 0.0) &&
+        !(std::isfinite(args.mode_excitation_frequency_max) && args.mode_excitation_frequency_max >= 0.0)) {
+        throw std::runtime_error("mode_excitation.frequency_max must be finite and non-negative if provided.");
+    }
+    if (args.mode_excitation_frequency_min >= 0.0 &&
+        args.mode_excitation_frequency_max >= 0.0 &&
+        args.mode_excitation_frequency_max < args.mode_excitation_frequency_min) {
+        throw std::runtime_error("mode_excitation.frequency_max must be no smaller than frequency_min.");
+    }
+}
+
+void validate_material_config(const SimulationConfig& args) {
+    if (args.material_folders.empty()) {
+        return;
+    }
+    if (args.material_folders.size() < 2) {
+        throw std::runtime_error(
+            "materials.folders must contain at least two folders; use io.material_folder for a single material.");
+    }
+    if (args.material_interface_positions.size() + 1 != args.material_folders.size()) {
+        throw std::runtime_error(
+            "materials.interface_positions must contain exactly folders.size()-1 values.");
+    }
+    if (!std::is_sorted(
+            args.material_interface_positions.begin(), args.material_interface_positions.end()) ||
+        std::adjacent_find(
+            args.material_interface_positions.begin(), args.material_interface_positions.end()) !=
+            args.material_interface_positions.end()) {
+        throw std::runtime_error("materials.interface_positions must be strictly increasing.");
+    }
+    const double extent = args.sizes.size() == 3
+        ? args.sizes[static_cast<size_t>(args.material_interface_axis)] : 0.0;
+    const int grid_cells = args.material_interface_axis == 0 ? args.grid.nx
+        : args.material_interface_axis == 1 ? args.grid.ny : args.grid.nz;
+    const double cell_width = extent / static_cast<double>(grid_cells);
+    const double alignment_tolerance = std::max(1e-10, 1e-10 * extent);
+    for (double position : args.material_interface_positions) {
+        if (!std::isfinite(position)) {
+            throw std::runtime_error("materials.interface_positions must be finite.");
+        }
+        // STL bounds can be translated and are only known after loading the mesh.
+        // initialize_material_layout checks physical bounds and grid alignment.
+        if (to_lower(args.model) != "box") continue;
+        if (!(position > 0.0) || !(position < extent)) {
+            throw std::runtime_error(
+                "materials.interface_positions must lie strictly inside the domain along interface_axis.");
+        }
+        const double grid_coordinate = position / cell_width;
+        if (std::abs(grid_coordinate - std::round(grid_coordinate)) >
+            alignment_tolerance / cell_width) {
+            throw std::runtime_error(
+                "materials.interface_positions must coincide with grid-cell boundaries.");
+        }
+    }
+    for (const std::string& folder : args.material_folders) {
+        if (trim(folder).empty()) {
+            throw std::runtime_error("materials.folders entries must not be empty.");
         }
     }
 }
@@ -719,6 +895,23 @@ SimulationConfig parse_toml_file(const std::string& path) {
     if (auto v = get_value(kv, "simulation.compute_kappa"); v.has_value()) {
         args.compute_kappa = parse_bool_scalar(*v);
     }
+    if (auto v = get_value(kv, "simulation.transport_axis"); v.has_value()) {
+        const auto axis = to_lower(unquote(trim(*v)));
+        if (axis != "x" && axis != "y" && axis != "z")
+            throw std::runtime_error("simulation.transport_axis must be x, y, or z.");
+        args.transport_axis = axis == "x" ? 0 : axis == "y" ? 1 : 2;
+    }
+    if (auto v = get_value(kv, "driving.temperature_gradient"); v.has_value())
+        args.temperature_gradient = parse_double_scalar(*v);
+    if (auto v = get_value(kv, "sampling.resample_interval")) args.resample_interval = parse_int_scalar(*v);
+    if (auto v = get_value(kv, "sampling.per_mode_sign")) args.resample_per_mode_sign = parse_int_scalar(*v);
+    if (auto v = get_value(kv, "driving.warm_start_ps")) args.gradient_warm_start_ps = parse_double_scalar(*v);
+    if (auto v = get_value(kv, "convergence.enabled")) args.convergence_stop = parse_bool_scalar(*v);
+    if (auto v = get_value(kv, "convergence.min_time_ps")) args.convergence_min_time_ps = parse_double_scalar(*v);
+    if (auto v = get_value(kv, "convergence.window_ps")) args.convergence_window_ps = parse_double_scalar(*v);
+    if (auto v = get_value(kv, "convergence.windows")) args.convergence_windows = parse_int_scalar(*v);
+    if (auto v = get_value(kv, "convergence.relative_tolerance")) args.convergence_relative_tolerance = parse_double_scalar(*v);
+    if (auto v = get_value(kv, "convergence.absolute_tolerance")) args.convergence_absolute_tolerance = parse_double_scalar(*v);
     if (auto v = get_value(kv, "simulation.profile_timers"); v.has_value()) {
         args.profile_timers = parse_bool_scalar(*v);
     }
@@ -740,6 +933,24 @@ SimulationConfig parse_toml_file(const std::string& path) {
         args.lifetime_temperature_is_local = is_local;
         args.lifetime_temperature = temperature;
     }
+    if (auto v = get_value(kv, "scattering.model"); v.has_value()) {
+        const auto model = to_lower(unquote(trim(*v)));
+        if (model == "rta") args.collision_model = CollisionModel::Rta;
+        else if (model == "callaway") args.collision_model = CollisionModel::Callaway;
+        else throw std::runtime_error("scattering.model must be 'rta' or 'callaway'.");
+    }
+    if (auto v = get_value(kv, "scattering.callaway_formulation")) {
+        const auto formulation = to_lower(unquote(trim(*v)));
+        if(formulation != "linearized" && formulation != "nonlinear")
+            throw std::runtime_error("callaway_formulation must be linearized or nonlinear");
+        args.callaway_nonlinear = formulation == "nonlinear";
+    }
+    if (auto v = get_value(kv, "geometry.extruded_z")) args.extruded_z = parse_bool_scalar(*v);
+    if (auto v = get_value(kv, "simulation.write_cell_heat_flux")) args.write_cell_heat_flux = parse_bool_scalar(*v);
+    if (auto v = get_value(kv, "simulation.conservative_boundaries"))
+        args.conservative_boundaries = parse_bool_scalar(*v);
+    if (auto v = get_value(kv, "scattering.matrix_files"); v.has_value())
+        args.scattering_matrix_files = parse_string_array(*v);
 
     if (auto v = get_value(kv, "simulation.initial_temperature"); v.has_value()) {
         const std::string t = trim(*v);
@@ -789,7 +1000,67 @@ SimulationConfig parse_toml_file(const std::string& path) {
     if (auto v = get_value(kv, "io.output_folder"); v.has_value()) {
         args.output_folder = unquote(*v);
     }
+    const auto material_folders_value = get_value(kv, "materials.folders");
+    const bool has_other_material_keys =
+        get_value(kv, "materials.interface_axis").has_value() ||
+        get_value(kv, "materials.interface_positions").has_value() ||
+        get_value(kv, "materials.interface_model").has_value() ||
+        get_value(kv, "materials.interface_frequency_bin_thz").has_value() ||
+        get_value(kv, "materials.interface_amm_fraction").has_value() ||
+        get_value(kv, "materials.interface_parallel_bin_inv_a").has_value() ||
+        get_value(kv, "materials.mass_densities_kg_m3").has_value();
+    if (!material_folders_value.has_value() && has_other_material_keys) {
+        throw std::runtime_error(
+            "materials.folders is required when any other [materials] key is present.");
+    }
+    if (material_folders_value.has_value()) {
+        args.material_folders = parse_string_array(*material_folders_value);
+        if (args.material_folders.empty()) {
+            throw std::runtime_error("materials.folders must not be empty.");
+        }
+    }
+    if (auto v = get_value(kv, "materials.interface_axis"); v.has_value()) {
+        args.material_interface_axis = parse_axis(*v, "materials.interface_axis");
+    }
+    if (auto v = get_value(kv, "materials.interface_positions"); v.has_value()) {
+        args.material_interface_positions = parse_number_array(*v);
+        for (double& position : args.material_interface_positions) {
+            position *= 10.0;
+        }
+    }
+    if (auto v = get_value(kv, "materials.interface_model"); v.has_value()) {
+        args.material_interface_model = parse_interface_model(*v);
+    }
+    if (auto v = get_value(kv, "materials.interface_frequency_bin_thz"); v.has_value()) {
+        args.material_interface_frequency_bin_thz = parse_double_scalar(*v);
+    }
+    if (!std::isfinite(args.material_interface_frequency_bin_thz) || args.material_interface_frequency_bin_thz<=0)
+        throw std::runtime_error("materials.interface_frequency_bin_thz must be finite and positive.");
 
+    if (auto v=get_value(kv,"materials.interface_amm_fraction");v.has_value())
+        args.material_interface_amm_fraction=parse_double_scalar(*v);
+    if (auto v=get_value(kv,"materials.interface_parallel_bin_inv_a");v.has_value())
+        args.material_interface_parallel_bin_inv_a=parse_double_scalar(*v);
+    if (auto v=get_value(kv,"materials.mass_densities_kg_m3");v.has_value())
+        args.material_mass_densities_kg_m3=parse_number_array(*v);
+    if (!std::isfinite(args.material_interface_amm_fraction)||args.material_interface_amm_fraction<0||args.material_interface_amm_fraction>1)
+        throw std::runtime_error("materials.interface_amm_fraction must be in [0,1].");
+    if (!std::isfinite(args.material_interface_parallel_bin_inv_a)||args.material_interface_parallel_bin_inv_a<=0)
+        throw std::runtime_error("materials.interface_parallel_bin_inv_a must be finite and positive.");
+    if (args.material_interface_model==InterfaceModel::MixedMismatch && !get_value(kv,"materials.interface_amm_fraction").has_value())
+        throw std::runtime_error("MMM requires explicit materials.interface_amm_fraction.");
+    if (args.material_interface_model==InterfaceModel::DiffuseMismatch && args.material_interface_amm_fraction!=0)
+        throw std::runtime_error("DMM cannot have nonzero AMM fraction.");
+    if (args.material_interface_model==InterfaceModel::AcousticMismatch &&
+        get_value(kv,"materials.interface_amm_fraction").has_value() && args.material_interface_amm_fraction!=1)
+        throw std::runtime_error("AMM explicit fraction must equal 1; use MMM for intermediate weights.");
+    if (args.material_interface_model==InterfaceModel::AcousticMismatch ||
+        (args.material_interface_model==InterfaceModel::MixedMismatch && args.material_interface_amm_fraction>0)) {
+        if(args.material_folders.size()<2 || args.material_mass_densities_kg_m3.size()!=args.material_folders.size())
+            throw std::runtime_error("AMM/MMM requires one mass density per material layer.");
+        for(double rho:args.material_mass_densities_kg_m3)
+            if(!std::isfinite(rho)||rho<=0)throw std::runtime_error("Material mass densities must be finite and positive.");
+    }
     bool heat_source_enabled_set = false;
     if (auto v = get_value(kv, "heat_source.enabled"); v.has_value()) {
         args.heat_source_enabled = parse_bool_scalar(*v);
@@ -810,11 +1081,44 @@ SimulationConfig parse_toml_file(const std::string& path) {
             x *= 10.0;
         }
     }
+    if (auto v = get_value(kv, "heat_source.total_power"); v.has_value()) {
+        if (get_value(kv, "heat_source.power_density").has_value() ||
+            get_value(kv, "heat_source.power_densities").has_value())
+            throw std::runtime_error("Specify either total_power or density inputs, not both.");
+        args.heat_source_total_power = parse_double_scalar(*v);
+    }
+    if (auto v = get_value(kv, "heat_source.spectrum"); v.has_value()) {
+        const auto value = to_lower(unquote(*v));
+        if (value == "thermal") args.heat_source_spectrum = HeatSourceSpectrum::Thermal;
+        else if (value == "weighted") args.heat_source_spectrum = HeatSourceSpectrum::Weighted;
+        else if (value == "gaussian") args.heat_source_spectrum = HeatSourceSpectrum::Gaussian;
+        else throw std::runtime_error("heat_source.spectrum must be 'thermal', 'weighted', or 'gaussian'.");
+    }
+    if (auto v = get_value(kv, "heat_source.branches"); v.has_value()) {
+        for (double branch : parse_number_array(*v)) {
+            if (!std::isfinite(branch) || branch < 0 || branch != std::floor(branch) ||
+                branch > static_cast<double>(std::numeric_limits<int>::max()))
+                throw std::runtime_error("heat_source.branches must contain nonnegative integer indices.");
+            args.heat_source_branches.push_back(static_cast<int>(branch));
+        }
+    }
+    if (auto v = get_value(kv, "heat_source.branch_weights"); v.has_value())
+        args.heat_source_branch_weights = parse_number_array(*v);
     if (auto v = get_value(kv, "heat_source.power_density"); v.has_value()) {
         args.heat_source_power_density = parse_double_scalar(*v);
     }
     if (auto v = get_value(kv, "heat_source.power_densities"); v.has_value()) {
         args.heat_source_power_densities = parse_number_array(*v);
+    }
+    if (auto v = get_value(kv, "heat_source.frequency_center"))
+        args.heat_source_frequency_center = parse_double_scalar(*v);
+    if (auto v = get_value(kv, "heat_source.frequency_sigma"))
+        args.heat_source_frequency_sigma = parse_double_scalar(*v);
+    if (auto v = get_value(kv, "heat_source.frequency_min"); v.has_value()) {
+        args.heat_source_frequency_min = parse_double_scalar(*v);
+    }
+    if (auto v = get_value(kv, "heat_source.frequency_max"); v.has_value()) {
+        args.heat_source_frequency_max = parse_double_scalar(*v);
     }
     if (auto v = get_value(kv, "heat_source.profile"); v.has_value()) {
         args.heat_source_profile = parse_heat_source_profile(*v);
@@ -868,6 +1172,18 @@ SimulationConfig parse_toml_file(const std::string& path) {
     if (auto v = get_value(kv, "heat_source.amplitude"); v.has_value()) {
         args.heat_source_amplitude = parse_double_scalar(*v);
     }
+    if (auto v = get_value(kv, "mode_excitation.enabled"); v.has_value()) {
+        args.mode_excitation_enabled = parse_bool_scalar(*v);
+    }
+    if (auto v = get_value(kv, "mode_excitation.frequency_min"); v.has_value()) {
+        args.mode_excitation_frequency_min = parse_double_scalar(*v);
+    }
+    if (auto v = get_value(kv, "mode_excitation.frequency_max"); v.has_value()) {
+        args.mode_excitation_frequency_max = parse_double_scalar(*v);
+    }
+    if (auto v = get_value(kv, "mode_excitation.occupation_multiplier"); v.has_value()) {
+        args.mode_excitation_occupation_multiplier = parse_double_scalar(*v);
+    }
     if (!heat_source_enabled_set && infer_heat_source_enabled(args)) {
         args.heat_source_enabled = true;
     }
@@ -876,6 +1192,71 @@ SimulationConfig parse_toml_file(const std::string& path) {
 }
 
 }  // namespace
+
+void validate_heat_source_config(const SimulationConfig& args) {
+    validate_heat_source_config_impl(args);
+}
+
+void validate_scattering_config(const SimulationConfig& args) {
+    if(args.callaway_nonlinear && (args.collision_model != CollisionModel::Callaway || args.temperature_gradient))
+        throw std::runtime_error("Nonlinear Callaway requires model=callaway and finite-domain thermal driving");
+    if (args.resample_interval && args.collision_model != CollisionModel::FullMatrix)
+        throw std::runtime_error("Existing-carrier collision quadrature requires sampling.resample_interval=0; merging changes quadrature weights.");
+    if (args.resample_interval < 0 || args.resample_per_mode_sign < 1 || args.resample_per_mode_sign > 1024 ||
+        !std::isfinite(args.gradient_warm_start_ps) || args.gradient_warm_start_ps < 0)
+        throw std::runtime_error("Invalid gradient sampling or warm-start settings.");
+    if ((args.resample_interval || args.gradient_warm_start_ps > 0 || args.convergence_stop) && !args.temperature_gradient)
+        throw std::runtime_error("Sampling, warm start and convergence stopping currently require gradient driving.");
+    if (!std::isfinite(args.convergence_min_time_ps) || args.convergence_min_time_ps < 0 ||
+        !std::isfinite(args.convergence_window_ps) || args.convergence_window_ps <= 0 ||
+        args.convergence_windows < 4 || args.convergence_windows > 100 ||
+        !std::isfinite(args.convergence_relative_tolerance) || args.convergence_relative_tolerance <= 0 ||
+        !std::isfinite(args.convergence_absolute_tolerance) || args.convergence_absolute_tolerance < 0)
+        throw std::runtime_error("Invalid convergence windows or tolerances (at least four windows required).");
+    if (args.convergence_stop && (!args.compute_kappa || args.convergence_window_ps < 4*args.time_step*args.convergence_write_interval))
+        throw std::runtime_error("Convergence stopping requires compute_kappa and at least four output intervals per window.");
+    if (args.transport_axis < -1 || args.transport_axis > 2)
+        throw std::runtime_error("Invalid transport_axis.");
+    if (args.temperature_gradient) {
+        if (!std::isfinite(*args.temperature_gradient) || *args.temperature_gradient == 0 || args.transport_axis < 0)
+            throw std::runtime_error("Temperature-gradient driving requires a finite nonzero gradient and explicit simulation.transport_axis.");
+        if (args.model != "box" || args.material_folders.size() > 1 || !args.material_interface_positions.empty())
+            throw std::runtime_error("Temperature-gradient driving currently requires a single-material box.");
+        if (args.collision_model == CollisionModel::FullMatrix)
+            throw std::runtime_error("Temperature-gradient driving supports RTA or Callaway.");
+        if (!(args.background_temperature > 0) || !std::isfinite(args.background_temperature) ||
+            args.lifetime_temperature_is_local || args.lifetime_temperature != args.background_temperature)
+            throw std::runtime_error("Temperature-gradient driving requires lifetime_temperature = background_temperature > 0.");
+        if (args.initial_temperature.mode != InitialTemperatureMode::Uniform ||
+            args.initial_temperature.uniform_temperature != args.background_temperature ||
+            args.mode_excitation_enabled || args.heat_source_enabled)
+            throw std::runtime_error("Temperature-gradient driving requires uniform initial_temperature = background_temperature and no heat source or mode excitation.");
+        for (auto condition : args.boundary_conditions)
+            if (condition == BoundaryCondition::ThermalReservoir)
+                throw std::runtime_error("Temperature-gradient driving cannot use thermal reservoirs.");
+    }
+    if (args.collision_model == CollisionModel::Callaway) {
+        if (!args.scattering_matrix_files.empty())
+            throw std::runtime_error("Callaway uses gamma_N/gamma_U, not scattering.matrix_files.");
+        if (!std::isfinite(args.background_temperature) || args.background_temperature<=0)
+            throw std::runtime_error("Callaway requires a positive fixed background_temperature.");
+        return;
+    }
+    if (args.collision_model == CollisionModel::Rta) {
+        if (!args.scattering_matrix_files.empty())
+            throw std::runtime_error("scattering.matrix_files is not supported by the public rta/callaway models.");
+        return;
+    }
+    if (args.collision_model != CollisionModel::FullMatrix)
+        throw std::runtime_error("Invalid collision model.");
+    if (!std::isfinite(args.background_temperature) || args.background_temperature <= 0.0)
+        throw std::runtime_error("Full-matrix scattering requires a positive fixed background_temperature.");
+    const size_t count = args.material_folders.empty() ? 1 : args.material_folders.size();
+    if (args.scattering_matrix_files.size() != count)
+        throw std::runtime_error("scattering.matrix_files must contain one matrix per material.");
+    for (const auto& file : args.scattering_matrix_files)
+        if (file.empty()) throw std::runtime_error("Scattering matrix paths must not be empty.");
+}
 
 // 函数说明：加载规范的分节 TOML 输入并完成统一校验。
 SimulationConfig load_simulation_config(const std::string& path) {
@@ -887,8 +1268,11 @@ SimulationConfig load_simulation_config(const std::string& path) {
         throw std::runtime_error("temperature_lookup_dt must be a finite positive value.");
     }
     validate_temperature_reference_config(args);
+    validate_scattering_config(args);
     validate_boundary_config(args);
     validate_heat_source_config(args);
+    validate_mode_excitation_config(args);
+    validate_material_config(args);
     if (args.convergence_write_interval <= 0) {
         throw std::runtime_error("convergence_write_interval must be a positive integer.");
     }

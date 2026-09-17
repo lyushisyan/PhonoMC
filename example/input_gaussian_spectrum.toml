@@ -1,0 +1,44 @@
+# Gaussian energy weight per existing sampled carrier, not electron-phonon data.
+# Illustrative values; not a calibrated transistor calculation.
+[geometry]
+model = "box"
+sizes = [100, 100, 100]
+
+[simulation]
+particle_count = 10000
+time_step = 0.1
+iterations = 100
+convergence_write_interval = 10
+random_seed = 12345
+initial_temperature = 300
+background_temperature = 300
+lifetime_temperature = 300
+grid_xyz = [4, 1, 1]
+compute_kappa = false
+
+[scattering]
+# Callaway additionally requires separate gamma_N/gamma_U material tables.
+model = "rta"
+
+[heat_source]
+enabled = true
+# Spatial Gaussian: nm; +/-2 sigma cutoff on each enabled spatial axis.
+profile = "gaussian"
+center = [50, 50, 50]
+sigma = [15, 0, 0]
+total_power = 1e-9
+# Frequency Gaussian: f = omega/(2*pi), in THz, no implicit spectral cutoff.
+spectrum = "gaussian"
+frequency_center = 10
+frequency_sigma = 2
+# Optional intersection with branch indices and/or frequency window:
+# branches = [3, 4, 5]
+# frequency_min = 5
+# frequency_max = 15
+time_profile = "constant"
+start_time = 0
+end_time = 5
+
+[io]
+material_folder = "../material/Si/"
+output_folder = "results/Gaussian_spectrum/"

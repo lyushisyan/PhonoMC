@@ -39,6 +39,20 @@ Enable:
 The runtime summary separates major stages such as main particle advance,
 particle removal, injection construction, collision-cache updates, injected
 particle advance, temperature update, lifetime scattering, and statistics.
+``update_temp`` includes every temperature refresh in the timestep (up to three
+with a source), but excludes initialization. ``source`` includes both source
+halves, ``boundary_checks`` covers boundary-counter merging and periodic domain
+validation, and ``energy_ledger`` covers final energy bookkeeping. ``other``
+reports remaining orchestration time; stage times are exclusive, not nested.
+Progress printing is outside ``profile_total_seconds``.
+
+``cell_index_rebuilds`` and ``temperature_refreshes`` include initialization.
+Normally the former is ``iterations + 1``: occupation-only changes reuse counts
+and stable particle buckets, while energy and temperature are still refreshed.
+Fixed-background Bose occupations and material energy weights are cached.
+There is no new duplicate angular-frequency table: material frequencies are
+already stored in a lookup array. Speedups must be measured on a representative
+production case, not inferred from regression-test durations.
 
 Scaling parameters
 ------------------
@@ -97,6 +111,12 @@ Known performance hotspots
 Surface winding repair and volume-consistency checks are initialization-only,
 linear passes over existing faces or tetrahedra. They do not add work to the
 per-particle time-stepping path.
+
+Axis-aligned ``box`` domains sample initial positions directly from three
+uniform coordinate distributions. This avoids general volume decomposition
+for high-aspect-ratio films and ribbons. The position distribution is unchanged,
+but a fixed seed produces different particle trajectories than the older
+tetrahedral sampler.
 
 Reproducibility
 ---------------

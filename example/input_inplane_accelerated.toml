@@ -1,0 +1,59 @@
+# Optional warm-start/stationarity example; validate seeds and convergence before production.
+# Infinite in-plane Si film: x/y periodic, finite z thickness with rough surfaces.
+# Run from the repository root. Supply N/U data before selecting Callaway.
+# This is a starting configuration; converge dt, z grid, duration and sampling.
+[geometry]
+model = "box"
+sizes = [100, 100, 100] # nm: x/y are repeat-cell sizes; z is physical film thickness
+
+[simulation]
+particle_count = 200000
+time_step = 0.25
+iterations = 60000
+random_seed = 12345
+compute_kappa = true
+transport_axis = "x"
+initial_temperature = 300
+background_temperature = 300
+lifetime_temperature = 300
+grid_xyz = [1, 1, 8] # match the validation case; check spatial convergence
+convergence_write_interval = 10
+progress_temperature_summary_only = true
+
+[driving]
+warm_start_ps = 0 # opt-in bulk RTA initial guess; not a steady film solution
+temperature_gradient = 100000 # signed K/m along transport_axis; q_x should be negative
+
+[scattering]
+model = "rta" # Callaway requires separate gamma_N/gamma_U material tables
+
+[boundary]
+boundary_position = [
+  [-0.01,0,0,0.01,1,1], [0.99,0,0,1.01,1,1],
+  [0,-0.01,0,1,0.01,1], [0,0.99,0,1,1.01,1],
+  [0,0,-0.01,1,1,0.01], [0,0,0.99,1,1,1.01]
+]
+boundary_conditions = ["P","P","P","P","R","R"]
+boundary_values = [0,0,0,0,1,1] # z surface RMS roughness in nm; 0 is nominally specular
+periodic_pair = [
+  [-0.01,0,0,0.01,1,1], [0.99,0,0,1.01,1,1],
+  [0,-0.01,0,1,0.01,1], [0,0.99,0,1,1.01,1]
+]
+
+[io]
+material_folder = "material/Si"
+output_folder = "results/si_inplane_accelerated_rta_300K_d100nm"
+
+# Existing-carrier RTA/Callaway requires resample_interval = 0.
+[sampling]
+resample_interval = 0
+per_mode_sign = 2
+
+# Stops only after all global/layer windows pass; iterations remains a hard cap.
+[convergence]
+enabled = true
+min_time_ps = 2000
+window_ps = 500
+windows = 4
+relative_tolerance = 0.005
+absolute_tolerance = 0.01

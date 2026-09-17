@@ -1,0 +1,33 @@
+# Runnable SYNTHETIC demonstration, not a material prediction.
+# First run: python3 tools/create_callaway_demo.py (from the repository root).
+# Use validated same-run gamma_N/gamma_U data for real materials.
+[geometry]
+model = "box"
+sizes = [20, 10, 10]
+
+[simulation]
+particle_count = 512
+time_step = 0.05
+iterations = 40
+convergence_write_interval = 10
+random_seed = 24680
+grid_xyz = [4, 1, 1]
+background_temperature = 300
+initial_temperature = 301
+compute_kappa = false
+
+[scattering]
+model = "callaway"
+
+[boundary]
+boundary_position = [
+  [-0.01, 0, 0, 0.01, 1, 1], [0.99, 0, 0, 1.01, 1, 1],
+  [0, -0.01, 0, 1, 0.01, 1], [0, 0.99, 0, 1, 1.01, 1],
+  [0, 0, -0.01, 1, 1, 0.01], [0, 0, 0.99, 1, 1, 1.01]
+]
+boundary_conditions = ["T", "T", "R", "R", "R", "R"]
+boundary_values = [302, 298, 0, 0, 0, 0]
+
+[io]
+material_folder = "../output/callaway_demo/material"
+output_folder = "results/callaway_demo"

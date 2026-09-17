@@ -392,6 +392,7 @@ void SimulationDomain::build_surface_mesh(const SimulationConfig& args) {
     std::vector<Tri> faces;
 
     is_box_geometry_ = (args.model == "box");
+    extruded_z_ = args.extruded_z;
     if (is_box_geometry_) {
         if (args.sizes.size() != 3) {
             throw std::runtime_error("Box requires 3 sizes.");
@@ -449,10 +450,51 @@ void SimulationDomain::sync_surface_mesh_properties() {
     bounds_min_ = mesh_.bounds_min();
     bounds_max_ = mesh_.bounds_max();
     volume_ = mesh_.volume();
+    prism_top_.clear();
+    if(extruded_z_) {
+        const auto& vertices=mesh_.vertices();
+        const double tol=1e-10*std::max(1.,bounds_max_[2]-bounds_min_[2]);
+        double area=0;
+        for(const auto& f:mesh_.faces()) {
+            std::array<Vec3,3> tri{vertices[f[0]],vertices[f[1]],vertices[f[2]]};
+            bool top=true,bottom=true;
+            for(const auto& p:tri){top=top && std::abs(p[2]-bounds_max_[2])<tol;bottom=bottom && std::abs(p[2]-bounds_min_[2])<tol;}
+            const double twice=(tri[1][0]-tri[0][0])*(tri[2][1]-tri[0][1])-(tri[1][1]-tri[0][1])*(tri[2][0]-tri[0][0]);
+            if(top){prism_top_.push_back(tri);area+=std::abs(twice)*.5;}
+            else if(!bottom && std::abs(twice)>tol*tol)throw std::runtime_error("extruded_z requires vertical sides and planar top/bottom");
+        }
+        if(prism_top_.empty() || std::abs(area*(bounds_max_[2]-bounds_min_[2])-volume_)>1e-8*volume_)
+            throw std::runtime_error("extruded_z top area and mesh volume disagree");
+    }
     facet_count_ = mesh_.facet_count();
     initialize_analytic_box_intersection();
     periodic_pair_.assign(static_cast<size_t>(facet_count_), -1);
     periodic_shift_.assign(static_cast<size_t>(facet_count_), {0.0, 0.0, 0.0});
+}
+
+std::vector<std::array<double, 3>> SimulationDomain::sample_volume_points(
+    int count, std::mt19937_64& rng) const {
+    if(extruded_z_) {
+        std::vector<double> weights;
+        for(const auto& t:prism_top_)weights.push_back(std::abs((t[1][0]-t[0][0])*(t[2][1]-t[0][1])-(t[1][1]-t[0][1])*(t[2][0]-t[0][0])));
+        std::discrete_distribution<size_t> choose(weights.begin(),weights.end());std::uniform_real_distribution<double> u(0,1);
+        std::vector<Vec3> points;points.reserve(std::max(0,count));
+        for(int i=0;i<count;++i){const auto& t=prism_top_[choose(rng)];const double a=std::sqrt(u(rng)),b=u(rng);Vec3 p{};
+            for(int j=0;j<2;++j)p[j]=(1-a)*t[0][j]+a*(1-b)*t[1][j]+a*b*t[2][j];
+            p[2]=bounds_min_[2]+u(rng)*(bounds_max_[2]-bounds_min_[2]);points.push_back(p);}
+        return points;
+    }
+    if (!is_box_geometry_) return mesh_.sample_volume_points(count, rng);
+    if (count <= 0) return {};
+    // Independent uniform coordinates exactly sample a rectangular volume.
+    // Avoid a general tetrahedralization whose cost grows with aspect ratio.
+    std::uniform_real_distribution<double> ux(bounds_min_[0], bounds_max_[0]);
+    std::uniform_real_distribution<double> uy(bounds_min_[1], bounds_max_[1]);
+    std::uniform_real_distribution<double> uz(bounds_min_[2], bounds_max_[2]);
+    std::vector<std::array<double, 3>> points;
+    points.reserve(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i) points.push_back({ux(rng), uy(rng), uz(rng)});
+    return points;
 }
 
 // 函数说明：为六面轴对齐 box 建立解析求交所需的平面到 facet 映射。
@@ -515,6 +557,35 @@ std::tuple<Vec3, double, int> SimulationDomain::trace_boundary_intersection(
     const Vec3& position,
     const Vec3& velocity) const {
     if (!analytic_box_intersection_enabled_) {
+        if(extruded_z_) {
+            const double speed=norm(velocity);
+            if(!(speed>0))return {position,std::numeric_limits<double>::infinity(),-1};
+            const auto direction=mul(velocity,1/speed);
+            double best=std::numeric_limits<double>::infinity();int hit=-1;Vec3 point=position;
+            for(int facet=0;facet<mesh_.facet_count();++facet) {
+                const auto& f=mesh_.facets()[facet];const auto& n=f.normal;
+                const double denominator=dot(direction,n);
+                if(denominator<=1e-16)continue;
+                const double distance=dot(sub(f.centroid,position),n)/denominator;
+                if(distance<=1e-12 || distance>=best)continue;
+                const auto candidate=add(position,mul(direction,distance));
+                int drop=0;for(int j=1;j<3;++j)if(std::abs(n[j])>std::abs(n[drop]))drop=j;
+                const int u=(drop+1)%3,v=(drop+2)%3;
+                auto cross2=[&](const Vec3& a,const Vec3& b,const Vec3& c){return
+                    (static_cast<long double>(b[u])-a[u])*(static_cast<long double>(c[v])-a[v])-
+                    (static_cast<long double>(b[v])-a[v])*(static_cast<long double>(c[u])-a[u]);};
+                for(int face:f.faces) {
+                    const auto& indices=mesh_.faces()[face];const auto& a=mesh_.vertices()[indices[0]];
+                    const auto& b=mesh_.vertices()[indices[1]];const auto& c=mesh_.vertices()[indices[2]];
+                    const auto area=cross2(a,b,c),tol=1e-12L*std::abs(area);
+                    const auto e0=cross2(a,b,candidate),e1=cross2(b,c,candidate),e2=cross2(c,a,candidate);
+                    if((area>0 && std::min({e0,e1,e2})>=-tol)||(area<0 && std::max({e0,e1,e2})<=tol)) {
+                        best=distance;hit=facet;point=candidate;break;
+                    }
+                }
+            }
+            return {point,best/speed,hit};
+        }
         return mesh_.trace_boundary_intersection(position, velocity);
     }
 
@@ -579,7 +650,6 @@ void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) 
     // Unspecified boundaries always default to rough-surface scattering (R), with eta fallback = 0.
     const char default_bc = 'R';
     facet_boundary_conditions_.assign(facet_count_, default_bc);
-    boundary_facets_.clear();
     std::vector<std::vector<int>> selector_facets;
     std::vector<char> selector_conditions;
 
@@ -591,7 +661,6 @@ void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) 
                 "boundary_position, boundary_conditions, and boundary_values must have identical lengths.");
         }
         const Vec3 ext = sub(bounds_max_, bounds_min_);
-        std::unordered_set<int> unique_boundary_facets;
         selector_facets.reserve(selectors.boxes.size());
         selector_conditions.reserve(selectors.boxes.size());
         const auto& centroids = mesh_.facet_centroids();
@@ -633,9 +702,6 @@ void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) 
                 }
                 matched.push_back(f);
                 facet_boundary_conditions_[f] = bc;
-                if (unique_boundary_facets.insert(f).second) {
-                    boundary_facets_.push_back(f);
-                }
             }
             if (matched.empty()) {
                 throw std::runtime_error(
@@ -704,7 +770,6 @@ void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) 
 
 // 函数说明：建立周期边界配对关系与平移向量。
 void SimulationDomain::build_periodic_connections(const SimulationConfig& args) {
-    connected_facets_.clear();
     if (args.periodic_pair.empty()) {
         return;
     }
@@ -798,7 +863,6 @@ void SimulationDomain::build_periodic_connections(const SimulationConfig& args) 
         for (const auto& pr : pairs) {
             const int a = pr.first;
             const int b = pr.second;
-            connected_facets_.push_back({a, b});
             if (facet_boundary_conditions_[a] != 'P' || facet_boundary_conditions_[b] != 'P') {
                 throw std::runtime_error("Connected facets must both be periodic ('P').");
             }
@@ -861,6 +925,7 @@ void SimulationDomain::initialize_grid_cells(const SimulationConfig& args) {
         (ext[2] > 0.0) ? (static_cast<double>(nz) / ext[2]) : 0.0
     };
     grid_centers_.clear();
+    grid_volumes_.clear();
     const size_t total_cells = static_cast<size_t>(nx) * static_cast<size_t>(ny) * static_cast<size_t>(nz);
     grid_centers_.reserve(total_cells);
     cell_to_grid_index_.assign(total_cells, -1);
@@ -868,15 +933,40 @@ void SimulationDomain::initialize_grid_cells(const SimulationConfig& args) {
     for (int ix = 0; ix < nx; ++ix) {
         for (int iy = 0; iy < ny; ++iy) {
             for (int iz = 0; iz < nz; ++iz) {
-                const Vec3 p {
+                Vec3 p {
                     bounds_min_[0] + (static_cast<double>(ix) + 0.5) * ext[0] / static_cast<double>(nx),
                     bounds_min_[1] + (static_cast<double>(iy) + 0.5) * ext[1] / static_cast<double>(ny),
                     bounds_min_[2] + (static_cast<double>(iz) + 0.5) * ext[2] / static_cast<double>(nz)
                 };
-                if (is_box || mesh_.contains_point(p)) {
+                double cut_volume=0;
+                if(extruded_z_) {
+                    const double x0=bounds_min_[0]+ix*ext[0]/nx,x1=x0+ext[0]/nx;
+                    const double y0=bounds_min_[1]+iy*ext[1]/ny,y1=y0+ext[1]/ny;
+                    long double total=0,cx=0,cy=0;
+                    for(const auto& tri:prism_top_) {
+                        std::vector<Vec3> polygon(tri.begin(),tri.end());
+                        for(int edge=0;edge<4;++edge) {
+                            const int axis=edge/2;const bool lower=edge%2==0;
+                            const double bound=axis==0?(lower?x0:x1):(lower?y0:y1);
+                            std::vector<Vec3> clipped;
+                            for(size_t i=0;i<polygon.size();++i){const auto& a=polygon[i];const auto& b=polygon[(i+1)%polygon.size()];
+                                const bool ina=lower?a[axis]>=bound:a[axis]<=bound,inb=lower?b[axis]>=bound:b[axis]<=bound;
+                                if(ina)clipped.push_back(a);
+                                if(ina!=inb){const double f=(bound-a[axis])/(b[axis]-a[axis]);clipped.push_back(add(a,mul(sub(b,a),f)));}}
+                            polygon=std::move(clipped);
+                        }
+                        for(size_t i=1;i+1<polygon.size();++i){const auto& a=polygon[0];const auto& b=polygon[i];const auto& c=polygon[i+1];
+                            const long double area=std::abs((b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]))*.5;
+                            total+=area;cx+=area*(a[0]+b[0]+c[0])/3;cy+=area*(a[1]+b[1]+c[1])/3;}
+                    }
+                    cut_volume=static_cast<double>(total)*ext[2]/nz;
+                    if(total>0){p[0]=static_cast<double>(cx/total);p[1]=static_cast<double>(cy/total);}
+                }
+                if (is_box || (extruded_z_ ? cut_volume>1e-12*volume_/total_cells : mesh_.contains_point(p))) {
                     const int cell = (ix * ny + iy) * nz + iz;
                     cell_to_grid_index_[static_cast<size_t>(cell)] = static_cast<int>(grid_centers_.size());
                     grid_centers_.push_back(p);
+                    if(extruded_z_)grid_volumes_.push_back(cut_volume);
                 }
             }
         }
@@ -921,7 +1011,9 @@ void SimulationDomain::initialize_grid_cells(const SimulationConfig& args) {
         }
     }
     fast_grid_index_enabled_ = true;
-    grid_volumes_.assign(static_cast<size_t>(grid_count_), volume_ / static_cast<double>(grid_count_));
+    if(!extruded_z_)grid_volumes_.assign(static_cast<size_t>(grid_count_), volume_ / static_cast<double>(grid_count_));
+    else {long double total=0;for(double v:grid_volumes_)total+=v;
+        if(std::abs(total-volume_)>1e-8*volume_)throw std::runtime_error("Prism cut-cell volumes do not close");}
 }
 
 // 函数说明：输出几何、边界、网格与输入信息摘要文件。
@@ -1005,6 +1097,15 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
     out << "random_seed = " << args.random_seed << '\n';
     out << "temperature_lookup_dt = " << args.temperature_lookup_dt << '\n';
     out << "background_temperature = " << args.background_temperature << '\n';
+    out << "callaway_formulation = " << (args.callaway_nonlinear ? "nonlinear" : "linearized") << '\n';
+    out << "conservative_boundaries = " << (uses_conservative_transport(args) ? "true" : "false") << '\n';
+    if (uses_conservative_transport(args)) {
+        out << "collision_model = " << (args.collision_model==CollisionModel::Callaway ? "callaway" : args.collision_model==CollisionModel::Rta ? "rta" : "full_matrix") << '\n';
+        out << "collision_reference_temperature = " << args.background_temperature << '\n';
+        out << "reservoir_generation = fixed_incoming_flux\n";
+        for (size_t i = 0; i < args.scattering_matrix_files.size(); ++i)
+            out << "scattering_matrix_" << i << " = " << args.scattering_matrix_files[i] << '\n';
+    }
     out << "lifetime_temperature = ";
     if (args.lifetime_temperature_is_local) {
         out << "local";
@@ -1012,6 +1113,13 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
         out << args.lifetime_temperature;
     }
     out << '\n';
+    if (args.transport_axis >= 0) out << "transport_axis = " << "xyz"[args.transport_axis] << '\n';
+    if (args.temperature_gradient) {
+        out << "temperature_gradient_K_per_m = " << *args.temperature_gradient << '\n';
+        out << "conductivity_definition = -mean_heatflux/imposed_gradient\n";
+        out << "temperature_output = T0_plus_periodic_correction\n";
+        out << "kappa_int_applicable = false\n";
+    }
     out << "compute_kappa = " << (args.compute_kappa ? "true" : "false") << '\n';
     out << "profile_timers = " << (args.profile_timers ? "true" : "false") << '\n';
     out << "progress_temperature_summary_only = "
@@ -1042,6 +1150,13 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
     out << "periodic_pair_region_count = " << region_count(args.periodic_pair) << '\n';
     out << "periodic_pair_tokens = " << join_strings(args.periodic_pair) << '\n';
     out << "material_folder = " << args.material_folder << '\n';
+    out << "material_folders = " << join_strings(args.material_folders) << '\n';
+    out << "material_interface_axis = " << "xyz"[args.material_interface_axis] << '\n';
+    out << "material_interface_positions_nm = "
+        << join_numbers(scale_numbers(args.material_interface_positions, 0.1)) << '\n';
+    out << "material_interface_model = " << to_string(args.material_interface_model) << '\n';
+    out << "material_interface_amm_fraction = " << (args.material_interface_model==InterfaceModel::AcousticMismatch ? 1.0 : args.material_interface_amm_fraction) << '\n';
+    out << "material_interface_parallel_bin_inv_a = " << args.material_interface_parallel_bin_inv_a << '\n';
     out << "output_folder = " << args.output_folder << '\n';
     out << "heat_source_enabled = " << (args.heat_source_enabled ? "true" : "false") << '\n';
     out << "heat_source_profile = " << to_string(args.heat_source_profile) << '\n';
@@ -1059,7 +1174,13 @@ void SimulationDomain::write_domain_summary(const SimulationConfig& args) const 
     out << "heat_source_half_width_angstrom = " << join_numbers(args.heat_source_half_width) << '\n';
     out << "heat_source_power_density = " << args.heat_source_power_density << '\n';
     out << "heat_source_power_densities = " << join_numbers(args.heat_source_power_densities) << '\n';
+    out << "heat_source_frequency_min_THz = " << args.heat_source_frequency_min << '\n';
+    out << "heat_source_frequency_max_THz = " << args.heat_source_frequency_max << '\n';
     out << "heat_source_time_profile = " << to_string(args.heat_source_time_profile) << '\n';
+    out << "mode_excitation_enabled = " << (args.mode_excitation_enabled ? "true" : "false") << '\n';
+    out << "mode_excitation_frequency_min_THz = " << args.mode_excitation_frequency_min << '\n';
+    out << "mode_excitation_frequency_max_THz = " << args.mode_excitation_frequency_max << '\n';
+    out << "mode_excitation_occupation_multiplier = " << args.mode_excitation_occupation_multiplier << '\n';
     out << '\n';
 
     out << "[geometry]\n";

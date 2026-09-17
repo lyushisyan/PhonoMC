@@ -291,11 +291,34 @@ void SurfaceMesh::orient_closed_surface() {
         int face = -1;
         int relation = 1;
     };
-    // Some valid CAD exports contain T-junctions: they are geometrically
-    // closed but not a strict indexed two-manifold. Keep their original STL
-    // winding rather than rejecting an existing supported model.
+    // CAD T-junctions can be geometrically closed without matching edge
+    // indices. Orient these triangles from local surface membership: a global
+    // center is not an interior-side test for a concave solid (e.g. a FinFET
+    // substrate shoulder below the bounding-box center).
     for (const auto& attached : edges_faces_) {
         if (attached.size() != 2) {
+            for (auto& f : faces_) {
+                const Vec3 a = vertices_[f[0]], b = vertices_[f[1]], c = vertices_[f[2]];
+                const Vec3 raw = cross(sub(b, a), sub(c, a));
+                const double length = norm(raw);
+                if (!(length > 0.0)) throw std::runtime_error("Degenerate triangle in CAD surface.");
+                const Vec3 normal = mul(raw, 1.0 / length);
+                const Vec3 centroid = mul(add(add(a, b), c), 1.0 / 3.0);
+                const double edge = std::min({norm(sub(b, a)), norm(sub(c, a)), norm(sub(c, b))});
+                bool resolved = false;
+                for (double factor : {1e-8, 1e-7, 1e-6}) {
+                    const double eps = std::max(1e-8, edge * factor);
+                    const bool plus = contains_point_ray_cast(add(centroid, mul(normal, eps)));
+                    const bool minus = contains_point_ray_cast(add(centroid, mul(normal, -eps)));
+                    if (plus == minus) continue;
+                    if (plus) std::swap(f[1], f[2]);
+                    resolved = true;
+                    break;
+                }
+                if (!resolved) throw std::runtime_error(
+                    "Cannot identify interior/exterior sides of CAD surface; check closure and overlapping faces.");
+            }
+            face_orientation_reliable_ = true;
             return;
         }
     }
@@ -1382,8 +1405,10 @@ std::vector<Vec3> SurfaceMesh::sample_volume_points_naive(int n, std::mt19937_64
 
     std::vector<Vec3> out;
     out.reserve(static_cast<size_t>(n));
-    const int max_trials = std::max(10000, n * 200);
-    int trials = 0;
+    // Promote before multiplication: 40 million carriers need a trial budget
+    // larger than INT_MAX, even though the accepted sample count fits in int.
+    const std::int64_t max_trials = std::max<std::int64_t>(10000, std::int64_t{n} * 200);
+    std::int64_t trials = 0;
     while (static_cast<int>(out.size()) < n && trials < max_trials) {
         ++trials;
         const Vec3 p {ux(rng), uy(rng), uz(rng)};

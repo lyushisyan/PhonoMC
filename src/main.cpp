@@ -1,6 +1,7 @@
 #include "SimulationConfig.h"
 #include "SimulationDomain.h"
 #include "PhononMaterial.h"
+#include "material/MaterialFactory.h"
 #include "MonteCarloSolver.h"
 
 #include <chrono>
@@ -8,7 +9,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <functional>
+#include <memory>
 #include <string>
+#include <stdexcept>
 #include <vector>
 
 static void print_startup_banner() {
@@ -96,14 +100,24 @@ int main(int argc, char** argv) {
         const auto start = std::chrono::steady_clock::now();
 
         SimulationDomain geo(args);
-        PhononMaterial phonons(args, 0);
-        MonteCarloSolver pop(args, geo, phonons);
+        const int material_count = args.material_folders.empty()
+            ? 1 : static_cast<int>(args.material_folders.size());
+        std::vector<std::unique_ptr<PhononMaterial>> material_storage;
+        std::vector<std::reference_wrapper<const PhononMaterial>> materials;
+        material_storage.reserve(static_cast<size_t>(material_count));
+        materials.reserve(static_cast<size_t>(material_count));
+        for (int material_index = 0; material_index < material_count; ++material_index) {
+            material_storage.push_back(std::make_unique<PhononMaterial>(phonomc::load_phonon_material(args, material_index)));
+            materials.push_back(std::cref(*material_storage.back()));
+        }
+        MonteCarloSolver pop(args, geo, materials);
 
-        while (pop.current_timestep() < args.iterations) {
+        while (pop.current_timestep() < args.iterations && !pop.converged()) {
             pop.run_timestep();
         }
 
         const auto end = std::chrono::steady_clock::now();
+        if (pop.converged()) std::cout << "Stopped after global and layer heat-flux stationarity windows passed.\n";
         const auto sec = std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
         const auto days = sec / (24 * 3600);
         const auto hours = (sec % (24 * 3600)) / 3600;
@@ -117,20 +131,21 @@ int main(int argc, char** argv) {
 
         if (!args.output_folder.empty()) {
             std::ofstream summary(fs::path(args.output_folder) / "summary.txt", std::ios::app);
-            if (summary) {
-                summary << "\n[runtime]\n";
-                summary << "total_seconds = " << sec << '\n';
-                summary << "total_days = " << days << '\n';
-                summary << "total_hours = " << hours << '\n';
-                summary << "total_minutes = " << minutes << '\n';
-                summary << "total_seconds_remainder = " << seconds << '\n';
-                summary << "total_human_readable = "
-                        << days << " days "
-                        << hours << " h "
-                        << minutes << " min "
-                        << seconds << " s\n";
-                pop.append_profile_summary(summary);
-            }
+            if (!summary) throw std::runtime_error("Cannot append runtime summary.txt.");
+            summary << "\n[runtime]\n";
+            summary << "total_seconds = " << sec << '\n';
+            summary << "total_days = " << days << '\n';
+            summary << "total_hours = " << hours << '\n';
+            summary << "total_minutes = " << minutes << '\n';
+            summary << "total_seconds_remainder = " << seconds << '\n';
+            summary << "total_human_readable = "
+                    << days << " days "
+                    << hours << " h "
+                    << minutes << " min "
+                    << seconds << " s\n";
+            pop.append_profile_summary(summary);
+            summary.close();
+            if (!summary) throw std::runtime_error("Failed flushing runtime summary.txt.");
         }
         return 0;
     } catch (const std::exception& ex) {

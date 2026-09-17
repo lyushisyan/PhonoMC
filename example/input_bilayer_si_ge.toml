@@ -1,0 +1,40 @@
+[geometry]
+model = "box"
+sizes = [100, 100, 100]
+
+[simulation]
+particle_count = 100000
+time_step = 0.1
+iterations = 10000
+convergence_write_interval = 10
+random_seed = 12345
+compute_kappa = true
+initial_temperature = "linear"
+background_temperature = 300
+lifetime_temperature = "local"
+grid_xyz = [10, 1, 1]
+
+[boundary]
+boundary_position = [
+  [-0.01, 0.0, 0.0, 0.01, 1.0, 1.0],
+  [0.99, 0.0, 0.0, 1.01, 1.0, 1.0],
+  [0.0, -0.01, 0.0, 1.0, 0.01, 1.0],
+  [0.0, 0.99, 0.0, 1.0, 1.01, 1.0],
+  [0.0, 0.0, -0.01, 1.0, 1.0, 0.01],
+  [0.0, 0.0, 0.99, 1.0, 1.0, 1.01]
+]
+boundary_conditions = ["T", "T", "P", "P", "P", "P"]
+boundary_values = [301, 299, 0, 0, 0, 0]
+periodic_pair = [
+  [0.0, -0.01, 0.0, 1.0, 0.01, 1.0], [0.0, 0.99, 0.0, 1.0, 1.01, 1.0],
+  [0.0, 0.0, -0.01, 1.0, 1.0, 0.01], [0.0, 0.0, 0.99, 1.0, 1.0, 1.01]
+]
+
+[materials]
+folders = ["../material/Si/", "../material/Ge/"]
+interface_axis = "x"
+interface_positions = [50]
+interface_model = "diffuse_mismatch"
+
+[io]
+output_folder = "results/Bilayer_Si_Ge/"

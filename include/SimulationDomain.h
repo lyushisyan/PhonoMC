@@ -4,6 +4,7 @@
 #include "SurfaceMesh.h"
 
 #include <array>
+#include <random>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -24,7 +25,9 @@ public:
     const std::vector<double>& reservoir_values() const { return reservoir_values_; }
     bool fast_grid_index_enabled() const { return fast_grid_index_enabled_; }
     bool is_box_geometry() const { return is_box_geometry_; }
+    bool contains_point(const std::array<double,3>& p) const { return extruded_z_ ? mesh_.contains_point_ray_cast(p) : mesh_.contains_point(p); }
     bool analytic_box_intersection_enabled() const { return analytic_box_intersection_enabled_; }
+    std::vector<std::array<double, 3>> sample_volume_points(int count, std::mt19937_64& rng) const;
     int fast_grid_index(const std::array<double, 3>& p) const;
     std::tuple<std::array<double, 3>, double, int> trace_boundary_intersection(
         const std::array<double, 3>& position,
@@ -56,12 +59,10 @@ private:
     double volume_ = 1.0;
 
     std::vector<char> facet_boundary_conditions_;
-    std::vector<int> boundary_facets_;
     std::vector<int> reservoir_facets_;
     std::vector<double> reservoir_values_;
     std::vector<int> rough_facets_;
     std::vector<double> roughness_values_;
-    std::vector<std::array<int, 2>> connected_facets_;
     std::vector<std::array<double, 3>> grid_centers_;
     std::vector<double> grid_volumes_;
     std::vector<int> periodic_pair_;
@@ -72,6 +73,8 @@ private:
     std::array<double, 3> fast_grid_inv_cell_ {0.0, 0.0, 0.0};
     std::vector<int> cell_to_grid_index_;
     bool is_box_geometry_ = true;
+    bool extruded_z_ = false;
+    std::vector<std::array<SurfaceMesh::Vec3,3>> prism_top_;
     bool analytic_box_intersection_enabled_ = false;
     // Plane order: xmin, xmax, ymin, ymax, zmin, zmax.
     std::array<int, 6> box_plane_facets_ {-1, -1, -1, -1, -1, -1};

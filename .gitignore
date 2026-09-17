@@ -1,26 +1,59 @@
+# Editor and operating-system files
 .DS_Store
 .vscode/
+.idea/
 
-# Build artifacts
-build/
-tmp/
+# Build and local validation products
+/build/
+/build-*/
+/tmp/
+/tests/
+/Testing/
+/docs/build/
 
-# Local calculations and analysis artifacts
-analysis/
-calculation/
+# Local campaigns, results, manuscript assets and data archives
+/calculation/
+/analysis/
+/output/
+/manuscript/
+/Supplementary_Information_revised.*
+/example/results/
+/example/*.log
+/example/*.time
+/model/finfet_array_1x6*
 
-# Input examples are tracked; other TOML files are local runs.
+# Publication-specific material calculations; bundled tutorial materials remain tracked.
+/material/Graphene/
+/material/*_ph3py_*/
+/material/3C-SiC_*/
+
+# Keep a curated set of public TOML examples.
 *.toml
 !example/
 !example/input_cross_100nm.toml
 !example/input_finfet_stl_heat1e20.toml
 !example/input_inplane_x1000nm_z100nm_r1nm.toml
-example/results/
-example/*.log
-example/*.time
-model/finfet_array_1x6*
+!example/input_inplane_gradient.toml
+!example/input_inplane_accelerated.toml
+!example/input_gaussian_spectrum.toml
+!example/input_bilayer_si_ge.toml
+!example/input_box_total_power.toml
+!example/input_callaway.toml
+!example/input_bilayer_mmm.toml
 
-# Python caches
-**/__pycache__/
+# Local developer-only validation helpers
+/tools/run_hpc_checks.sh
+/tools/validate_callaway_material.cpp
+
+# Python and LaTeX caches
+__pycache__/
 .pytest_cache/
-*.pyc
+.mplconfig/
+.mpl-cache/
+.cache/
+*.py[cod]
+*.aux
+*.log
+*.fls
+*.fdb_latexmk
+*.synctex.gz

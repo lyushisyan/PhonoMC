@@ -17,14 +17,12 @@ It supports:
 - STL and OBJ device geometries, including the provided FinFET model
 - strict POSCAR and HDF5 material loading
 - fixed deviational background temperature with fixed or local lifetime lookup
+- RTA and Callaway occupation updates on existing carriers
+- periodic-gradient driving for infinite-length in-plane conductivity
+- layered DMM, AMM and MMM material interfaces
 - uniform and Gaussian volumetric heat sources
 - temperature, heat-flux, conductivity, particle-balance, and geometry output
 - bundled plotting tools for one-dimensional and three-dimensional results
-
-.. image:: ../../example/results/FinFET_heat1e20_0/plots_3d/temperature_3d.png
-   :alt: PhonoMC FinFET temperature result
-   :width: 720px
-   :align: center
 
 .. toctree::
    :maxdepth: 1
@@ -33,6 +31,9 @@ It supports:
 
    introduction
    methodology
+   callaway
+   temperature_gradient
+   full_scattering
    materials
    geometry_boundaries
    requirements
@@ -42,5 +43,7 @@ It supports:
    tutorial
    results_analysis
    performance
+   architecture
+   repository
    reference
    troubleshooting

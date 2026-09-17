@@ -1,0 +1,39 @@
+# Illustrative prescribed lattice heating, NOT a prediction of electronic loss.
+# Input lengths are nm, time is ps, total_power is W.
+[geometry]
+model = "box"
+sizes = [100, 100, 100]
+
+[simulation]
+particle_count = 10000
+time_step = 0.1
+iterations = 1000
+convergence_write_interval = 10
+random_seed = 12345
+compute_kappa = false
+initial_temperature = 300
+background_temperature = 300
+lifetime_temperature = "local"
+grid_xyz = [10, 1, 1]
+
+# Default external boundaries are reflecting/adiabatic.
+[heat_source]
+enabled = true
+profile = "uniform"
+min = [40, 0, 0]
+max = [60, 100, 100]
+total_power = 1e-6
+spectrum = "thermal"
+time_profile = "constant"
+start_time = 0
+end_time = 50
+
+# Optional branch selection uses zero-based HDF5 branch indices:
+# branches = [0, 1, 2]
+# For weighted injection replace spectrum above with "weighted", then provide
+# one weight for EACH branch in the loaded material. Weights are relative
+# energy per sampled mode, not fractions of total power per branch.
+
+[io]
+material_folder = "../material/Si/"
+output_folder = "results/Box_total_power/"

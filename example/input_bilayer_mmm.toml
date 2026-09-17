@@ -1,0 +1,43 @@
+[geometry]
+model = "box"
+sizes = [100, 100, 100]
+
+[simulation]
+particle_count = 100000
+time_step = 0.1
+iterations = 10000
+convergence_write_interval = 10
+random_seed = 12345
+compute_kappa = true
+initial_temperature = "linear"
+background_temperature = 300
+lifetime_temperature = "local"
+grid_xyz = [10, 1, 1]
+
+[boundary]
+boundary_position = [
+  [-0.01, 0.0, 0.0, 0.01, 1.0, 1.0],
+  [0.99, 0.0, 0.0, 1.01, 1.0, 1.0],
+  [0.0, -0.01, 0.0, 1.0, 0.01, 1.0],
+  [0.0, 0.99, 0.0, 1.0, 1.01, 1.0],
+  [0.0, 0.0, -0.01, 1.0, 1.0, 0.01],
+  [0.0, 0.0, 0.99, 1.0, 1.0, 1.01]
+]
+boundary_conditions = ["T", "T", "P", "P", "P", "P"]
+boundary_values = [301, 299, 0, 0, 0, 0]
+periodic_pair = [
+  [0.0, -0.01, 0.0, 1.0, 0.01, 1.0], [0.0, 0.99, 0.0, 1.0, 1.01, 1.0],
+  [0.0, 0.0, -0.01, 1.0, 1.0, 0.01], [0.0, 0.0, 0.99, 1.0, 1.0, 1.01]
+]
+
+[materials]
+folders = ["../material/Si/", "../material/Ge/"]
+interface_axis = "x"
+interface_positions = [50]
+# Illustrative mixture, not a calibration for a specific Si/Ge interface.
+interface_model = "mmm"
+interface_amm_fraction = 0.5
+mass_densities_kg_m3 = [2329, 5323] # kg/m^3; one entry per material
+
+[io]
+output_folder = "results/Bilayer_Si_Ge_MMM/"

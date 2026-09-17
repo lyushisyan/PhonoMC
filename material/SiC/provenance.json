@@ -1,0 +1,24 @@
+{
+  "material": "3C-SiC",
+  "force_constants": "SiC-specific NEP, 5x5x5 supercells",
+  "q_mesh": [
+    31,
+    31,
+    31
+  ],
+  "temperature_range_K": [
+    100,
+    1000
+  ],
+  "temperature_step_K": 50,
+  "source_campaign": "3C-SiC-nep-specialized-fc5x5-rta-m31",
+  "transport_material_campaign": "finfet_si10_sic20_rta_power_20260914",
+  "server": "dongfang",
+  "server_hash_verification_date": "2026-09-17",
+  "retrieval": "Reused previously downloaded local copy after comparing POSCAR and HDF5 SHA256 with the server; no re-download required.",
+  "sha256": {
+    "POSCAR": "26047b12a8df2f47f75bc067fce17b955dde3f3ae8f658bb1b5f31b82a27ed6e",
+    "kappa-fbz.hdf5": "2d107ba37dc041dbfb136b62e23565371507109046a38b0351a5b84a18754d89",
+    "validation.json": "d18a573763b5f96f0a43ab1a0a2647f2f123b5e7910a9179f8945358a6c2c5f6"
+  }
+}
