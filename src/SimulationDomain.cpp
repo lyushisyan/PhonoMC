@@ -1,311 +1,50 @@
 #include "SimulationDomain.h"
 
+#include "geometry/BoundarySelectors.h"
+#include "geometry/MeshReader.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
-#include <cstdint>
 #include <deque>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <limits>
-#include <sstream>
 #include <stdexcept>
-#include <unordered_map>
 #include <unordered_set>
 
 namespace {
+using phonomc::geometry_detail::parse_boundary_selectors;
 using Vec3 = std::array<double, 3>;
 using Tri = std::array<int, 3>;
 using Box6 = std::array<double, 6>;
 
-Vec3 add(const Vec3& a, const Vec3& b) { return {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; }
-Vec3 sub(const Vec3& a, const Vec3& b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
-Vec3 mul(const Vec3& a, double s) { return {a[0] * s, a[1] * s, a[2] * s}; }
-double dot(const Vec3& a, const Vec3& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
-double norm(const Vec3& a) { return std::sqrt(dot(a, a)); }
+Vec3 add(const Vec3& a, const Vec3& b) {
+    return {a[0] + b[0], a[1] + b[1], a[2] + b[2]};
+}
+
+Vec3 sub(const Vec3& a, const Vec3& b) {
+    return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
+}
+
+Vec3 mul(const Vec3& a, double s) {
+    return {a[0] * s, a[1] * s, a[2] * s};
+}
+
+double dot(const Vec3& a, const Vec3& b) {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+double norm(const Vec3& a) {
+    return std::sqrt(dot(a, a));
+}
 
 // 函数说明：将关键字统一为小写，避免输入大小写差异影响流程。
 std::string to_lower(std::string s) {
-    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
     return s;
-}
-
-// 函数说明：清理输入文本两端空白，保证配置与数据解析的稳健性。
-std::string trim(const std::string& s) {
-    const auto b = std::find_if_not(s.begin(), s.end(), [](unsigned char c) { return std::isspace(c); });
-    if (b == s.end()) {
-        return "";
-    }
-    const auto e = std::find_if_not(s.rbegin(), s.rend(), [](unsigned char c) { return std::isspace(c); }).base();
-    return std::string(b, e);
-}
-
-// 函数说明：将几何坐标量化到容差网格，用于顶点去重键生成。
-std::array<long long, 3> quant3(const Vec3& p, double h = 1e-10) {
-    return {
-        static_cast<long long>(std::llround(p[0] / h)),
-        static_cast<long long>(std::llround(p[1] / h)),
-        static_cast<long long>(std::llround(p[2] / h))
-    };
-}
-
-// 函数说明：对顶点做量化去重并返回去重后的顶点索引。
-int add_vertex_dedup(
-    const Vec3& p,
-    std::vector<Vec3>& vertices,
-    std::unordered_map<std::string, int>& vmap,
-    double h = 1e-10) {
-    const auto q = quant3(p, h);
-    const std::string k = std::to_string(q[0]) + ":" + std::to_string(q[1]) + ":" + std::to_string(q[2]);
-    auto it = vmap.find(k);
-    if (it != vmap.end()) {
-        return it->second;
-    }
-    const int idx = static_cast<int>(vertices.size());
-    vertices.push_back(p);
-    vmap.emplace(k, idx);
-    return idx;
-}
-
-// 函数说明：读取 OBJ 三角网格并转换为统一顶点/面数据结构。
-std::pair<std::vector<Vec3>, std::vector<Tri>> load_obj_mesh(const std::filesystem::path& p) {
-    std::ifstream in(p);
-    if (!in) {
-        throw std::runtime_error("Failed to open OBJ file: " + p.string());
-    }
-    std::vector<Vec3> vertices;
-    std::vector<Tri> faces;
-    std::string line;
-    while (std::getline(in, line)) {
-        const std::string t = trim(line);
-        if (t.empty() || t[0] == '#') {
-            continue;
-        }
-        std::istringstream iss(t);
-        std::string tag;
-        iss >> tag;
-        if (tag == "v") {
-            double x = 0.0, y = 0.0, z = 0.0;
-            iss >> x >> y >> z;
-            vertices.push_back({x, y, z});
-        } else if (tag == "f") {
-            std::vector<int> poly;
-            std::string tok;
-            while (iss >> tok) {
-                const auto slash = tok.find('/');
-                const std::string idx_s = (slash == std::string::npos) ? tok : tok.substr(0, slash);
-                if (idx_s.empty()) {
-                    continue;
-                }
-                int idx = std::stoi(idx_s);
-                if (idx < 0) {
-                    idx = static_cast<int>(vertices.size()) + idx;
-                } else {
-                    idx -= 1;
-                }
-                if (idx < 0 || idx >= static_cast<int>(vertices.size())) {
-                    throw std::runtime_error("OBJ face index out of range.");
-                }
-                poly.push_back(idx);
-            }
-            if (poly.size() < 3) {
-                continue;
-            }
-            for (size_t i = 1; i + 1 < poly.size(); ++i) {
-                faces.push_back({poly[0], poly[i], poly[i + 1]});
-            }
-        }
-    }
-    if (vertices.empty() || faces.empty()) {
-        throw std::runtime_error("OBJ mesh has no vertices/faces.");
-    }
-    return {vertices, faces};
-}
-
-// 函数说明：读取 ASCII STL 并构建去重后的三角网格。
-std::pair<std::vector<Vec3>, std::vector<Tri>> load_ascii_stl_mesh(const std::filesystem::path& p) {
-    std::ifstream in(p);
-    if (!in) {
-        throw std::runtime_error("Failed to open STL file: " + p.string());
-    }
-    std::vector<Vec3> vertices;
-    std::vector<Tri> faces;
-    std::unordered_map<std::string, int> vmap;
-    std::vector<int> tri_idx;
-    tri_idx.reserve(3);
-
-    std::string line;
-    while (std::getline(in, line)) {
-        const std::string t = trim(line);
-        if (t.size() < 6) {
-            continue;
-        }
-        std::istringstream iss(t);
-        std::string tag;
-        iss >> tag;
-        if (tag != "vertex") {
-            continue;
-        }
-        double x = 0.0, y = 0.0, z = 0.0;
-        iss >> x >> y >> z;
-        tri_idx.push_back(add_vertex_dedup({x, y, z}, vertices, vmap));
-        if (tri_idx.size() == 3) {
-            faces.push_back({tri_idx[0], tri_idx[1], tri_idx[2]});
-            tri_idx.clear();
-        }
-    }
-    if (vertices.empty() || faces.empty()) {
-        throw std::runtime_error("ASCII STL mesh has no vertices/faces.");
-    }
-    return {vertices, faces};
-}
-
-template <typename T>
-// 函数说明：按二进制类型读取 STL 字段，支撑二进制网格解析。
-T read_binary(std::istream& in) {
-    T v {};
-    in.read(reinterpret_cast<char*>(&v), sizeof(T));
-    return v;
-}
-
-// 函数说明：读取 Binary STL 并转换为内部网格表示。
-std::pair<std::vector<Vec3>, std::vector<Tri>> load_binary_stl_mesh(const std::filesystem::path& p) {
-    std::ifstream in(p, std::ios::binary);
-    if (!in) {
-        throw std::runtime_error("Failed to open STL file: " + p.string());
-    }
-    char header[80];
-    in.read(header, 80);
-    const uint32_t ntri = read_binary<uint32_t>(in);
-    std::vector<Vec3> vertices;
-    std::vector<Tri> faces;
-    std::unordered_map<std::string, int> vmap;
-    vertices.reserve(static_cast<size_t>(ntri) * 3);
-    faces.reserve(ntri);
-
-    for (uint32_t i = 0; i < ntri; ++i) {
-        (void) read_binary<float>(in);
-        (void) read_binary<float>(in);
-        (void) read_binary<float>(in);
-        Vec3 p0 {read_binary<float>(in), read_binary<float>(in), read_binary<float>(in)};
-        Vec3 p1 {read_binary<float>(in), read_binary<float>(in), read_binary<float>(in)};
-        Vec3 p2 {read_binary<float>(in), read_binary<float>(in), read_binary<float>(in)};
-        (void) read_binary<uint16_t>(in);
-        const int i0 = add_vertex_dedup(p0, vertices, vmap);
-        const int i1 = add_vertex_dedup(p1, vertices, vmap);
-        const int i2 = add_vertex_dedup(p2, vertices, vmap);
-        faces.push_back({i0, i1, i2});
-    }
-    if (vertices.empty() || faces.empty()) {
-        throw std::runtime_error("Binary STL mesh has no vertices/faces.");
-    }
-    return {vertices, faces};
-}
-
-// 函数说明：依据文件尺寸规则判定 STL 是否为二进制格式。
-bool is_probably_binary_stl(const std::filesystem::path& p) {
-    std::ifstream in(p, std::ios::binary);
-    if (!in) {
-        return false;
-    }
-    std::string first5(5, '\0');
-    in.read(first5.data(), 5);
-    if (!in) {
-        return false;
-    }
-    // Binary STL may also start with "solid"; validate by expected size rule.
-    in.seekg(0, std::ios::end);
-    const auto sz = static_cast<std::uintmax_t>(in.tellg());
-    if (sz < 84) {
-        return false;
-    }
-    in.seekg(80, std::ios::beg);
-    const uint32_t ntri = read_binary<uint32_t>(in);
-    const std::uintmax_t expected = 84u + static_cast<std::uintmax_t>(ntri) * 50u;
-    if (expected == sz) {
-        return true;
-    }
-    return to_lower(first5) != "solid";
-}
-
-// 函数说明：按扩展名调度网格加载器，统一支持 OBJ/STL。
-std::pair<std::vector<Vec3>, std::vector<Tri>> load_mesh_file(const std::filesystem::path& p) {
-    const auto ext = to_lower(p.extension().string());
-    if (ext == ".obj") {
-        return load_obj_mesh(p);
-    }
-    if (ext == ".stl") {
-        if (is_probably_binary_stl(p)) {
-            return load_binary_stl_mesh(p);
-        }
-        return load_ascii_stl_mesh(p);
-    }
-    throw std::runtime_error("Unsupported mesh extension: " + ext + " (expected .stl or .obj)");
-}
-
-struct BoundarySelectors {
-    std::vector<Box6> boxes;
-};
-
-bool is_numeric_token(const std::string& token) {
-    try {
-        (void) std::stod(token);
-        return true;
-    } catch (...) {
-        return false;
-    }
-}
-
-// 函数说明：解析边界选择器，仅支持区域模式（相对坐标六元组）。
-BoundarySelectors parse_boundary_selectors(const std::vector<std::string>& tokens, const std::string& name) {
-    BoundarySelectors out;
-    if (tokens.empty()) {
-        return out;
-    }
-
-    size_t start = 0;
-    std::string mode = "points";
-    if (!is_numeric_token(tokens.front())) {
-        mode = to_lower(tokens.front());
-        start = 1;
-    }
-    if (start >= tokens.size()) {
-        return out;
-    }
-
-    const bool use_boxes =
-        mode == "box" ||
-        mode == "boxes" ||
-        mode == "region" ||
-        mode == "regions" ||
-        mode == "relative_box" ||
-        mode == "relative_boxes" ||
-        mode == "relative_region" ||
-        mode == "relative_regions";
-
-    if (!use_boxes && !is_numeric_token(tokens.front())) {
-        throw std::runtime_error(
-            name +
-            " mode must be regions/relative_box. Point mode is no longer supported.");
-    }
-    if ((tokens.size() - start) % 6 != 0) {
-        throw std::runtime_error(
-            name +
-            " regions must be declared as sextuplets [xmin,ymin,zmin,xmax,ymax,zmax].");
-    }
-    out.boxes.reserve((tokens.size() - start) / 6);
-    for (size_t i = start; i < tokens.size(); i += 6) {
-        out.boxes.push_back({
-            std::stod(tokens[i]),
-            std::stod(tokens[i + 1]),
-            std::stod(tokens[i + 2]),
-            std::stod(tokens[i + 3]),
-            std::stod(tokens[i + 4]),
-            std::stod(tokens[i + 5])
-        });
-    }
-    return out;
 }
 
 // 函数说明：提取指定 facet 的边界边长特征，用于边界匹配与诊断。
@@ -328,7 +67,7 @@ std::vector<double> facet_boundary_edge_lengths(const SurfaceMesh& mesh, int fac
     std::sort(out.begin(), out.end());
     return out;
 }
-}  // namespace
+} // namespace
 
 // 函数说明：构建仿真域：网格、边界、周期配对、控制体与摘要输出。
 SimulationDomain::SimulationDomain(const SimulationConfig& args) {
@@ -337,16 +76,16 @@ SimulationDomain::SimulationDomain(const SimulationConfig& args) {
     assign_boundary_conditions(args);
     build_periodic_connections(args);
     for (int facet = 0; facet < facet_count_; ++facet) {
-        if (facet_boundary_conditions_[static_cast<size_t>(facet)] == 'P' && !has_periodic_pair(facet)) {
-            throw std::runtime_error(
-                "Periodic boundary facet " + std::to_string(facet) + " is not assigned to a periodic pair.");
+        if (facet_boundary_conditions_[static_cast<size_t>(facet)] == 'P' &&
+            !has_periodic_pair(facet)) {
+            throw std::runtime_error("Periodic boundary facet " + std::to_string(facet) +
+                                     " is not assigned to a periodic pair.");
         }
     }
-    initialize_grids(args);
+    initialize_grid_cells(args);
     write_domain_summary(args);
 
-    std::cout << "SimulationDomain initialized: volume=" << volume_
-              << ", facets=" << facet_count_
+    std::cout << "SimulationDomain initialized: volume=" << volume_ << ", facets=" << facet_count_
               << ", grids=" << grid_count_ << '\n';
 }
 
@@ -394,24 +133,38 @@ void SimulationDomain::build_surface_mesh(const SimulationConfig& args) {
     is_box_geometry_ = (args.model == "box");
     extruded_z_ = args.extruded_z;
     if (is_box_geometry_) {
-        if (args.sizes.size() != 3) {
-            throw std::runtime_error("Box requires 3 sizes.");
+        if (args.sizes.size() != 3 ||
+            std::any_of(args.sizes.begin(), args.sizes.end(), [](double size) {
+                return !std::isfinite(size) || size <= 0.0;
+            })) {
+            throw std::runtime_error("Box requires three finite positive sizes.");
         }
-        const Vec3 d {args.sizes[0], args.sizes[1], args.sizes[2]};
-        vertices = {
-            Vec3{0, 0, 0}, Vec3{0, 0, 1}, Vec3{0, 1, 1}, Vec3{0, 1, 0},
-            Vec3{1, 0, 0}, Vec3{1, 0, 1}, Vec3{1, 1, 1}, Vec3{1, 1, 0}
-        };
+        const Vec3 d{args.sizes[0], args.sizes[1], args.sizes[2]};
+        vertices = {Vec3{0, 0, 0},
+                    Vec3{0, 0, 1},
+                    Vec3{0, 1, 1},
+                    Vec3{0, 1, 0},
+                    Vec3{1, 0, 0},
+                    Vec3{1, 0, 1},
+                    Vec3{1, 1, 1},
+                    Vec3{1, 1, 0}};
         for (auto& v : vertices) {
             v[0] *= d[0];
             v[1] *= d[1];
             v[2] *= d[2];
         }
-        faces = {
-            Tri{0, 1, 2}, Tri{0, 2, 3}, Tri{4, 5, 6}, Tri{4, 6, 7},
-            Tri{0, 4, 5}, Tri{0, 5, 1}, Tri{3, 7, 6}, Tri{3, 6, 2},
-            Tri{0, 4, 7}, Tri{0, 7, 3}, Tri{1, 5, 6}, Tri{1, 6, 2}
-        };
+        faces = {Tri{0, 1, 2},
+                 Tri{0, 2, 3},
+                 Tri{4, 5, 6},
+                 Tri{4, 6, 7},
+                 Tri{0, 4, 5},
+                 Tri{0, 5, 1},
+                 Tri{3, 7, 6},
+                 Tri{3, 6, 2},
+                 Tri{0, 4, 7},
+                 Tri{0, 7, 3},
+                 Tri{1, 5, 6},
+                 Tri{1, 6, 2}};
     } else {
         std::filesystem::path mesh_path(args.model);
         if (!mesh_path.is_absolute()) {
@@ -427,9 +180,9 @@ void SimulationDomain::build_surface_mesh(const SimulationConfig& args) {
         if (!std::filesystem::exists(mesh_path)) {
             throw std::runtime_error("Model file does not exist: " + mesh_path.string());
         }
-        auto loaded = load_mesh_file(mesh_path);
-        vertices = std::move(loaded.first);
-        faces = std::move(loaded.second);
+        auto loaded = phonomc::read_surface_mesh(mesh_path);
+        vertices = std::move(loaded.vertices);
+        faces = std::move(loaded.faces);
         // STL geometry is provided in nm; convert to internal Angstrom.
         if (to_lower(mesh_path.extension().string()) == ".stl") {
             for (auto& v : vertices) {
@@ -451,20 +204,31 @@ void SimulationDomain::sync_surface_mesh_properties() {
     bounds_max_ = mesh_.bounds_max();
     volume_ = mesh_.volume();
     prism_top_.clear();
-    if(extruded_z_) {
-        const auto& vertices=mesh_.vertices();
-        const double tol=1e-10*std::max(1.,bounds_max_[2]-bounds_min_[2]);
-        double area=0;
-        for(const auto& f:mesh_.faces()) {
-            std::array<Vec3,3> tri{vertices[f[0]],vertices[f[1]],vertices[f[2]]};
-            bool top=true,bottom=true;
-            for(const auto& p:tri){top=top && std::abs(p[2]-bounds_max_[2])<tol;bottom=bottom && std::abs(p[2]-bounds_min_[2])<tol;}
-            const double twice=(tri[1][0]-tri[0][0])*(tri[2][1]-tri[0][1])-(tri[1][1]-tri[0][1])*(tri[2][0]-tri[0][0]);
-            if(top){prism_top_.push_back(tri);area+=std::abs(twice)*.5;}
-            else if(!bottom && std::abs(twice)>tol*tol)throw std::runtime_error("extruded_z requires vertical sides and planar top/bottom");
+    if (extruded_z_) {
+        const auto& vertices = mesh_.vertices();
+        const double tol = 1e-10 * std::max(1., bounds_max_[2] - bounds_min_[2]);
+        double area = 0;
+        for (const auto& f : mesh_.faces()) {
+            std::array<Vec3, 3> tri{vertices[f[0]], vertices[f[1]], vertices[f[2]]};
+            bool top = true, bottom = true;
+            for (const auto& p : tri) {
+                top = top && std::abs(p[2] - bounds_max_[2]) < tol;
+                bottom = bottom && std::abs(p[2] - bounds_min_[2]) < tol;
+            }
+            const double twice = (tri[1][0] - tri[0][0]) * (tri[2][1] - tri[0][1]) -
+                                 (tri[1][1] - tri[0][1]) * (tri[2][0] - tri[0][0]);
+            if (top) {
+                prism_top_.push_back(tri);
+                area += std::abs(twice) * .5;
+            } else if (!bottom && std::abs(twice) > tol * tol) {
+                throw std::runtime_error(
+                    "extruded_z requires vertical sides and planar top/bottom");
+            }
         }
-        if(prism_top_.empty() || std::abs(area*(bounds_max_[2]-bounds_min_[2])-volume_)>1e-8*volume_)
+        if (prism_top_.empty() ||
+            std::abs(area * (bounds_max_[2] - bounds_min_[2]) - volume_) > 1e-8 * volume_) {
             throw std::runtime_error("extruded_z top area and mesh volume disagree");
+        }
     }
     facet_count_ = mesh_.facet_count();
     initialize_analytic_box_intersection();
@@ -472,20 +236,36 @@ void SimulationDomain::sync_surface_mesh_properties() {
     periodic_shift_.assign(static_cast<size_t>(facet_count_), {0.0, 0.0, 0.0});
 }
 
-std::vector<std::array<double, 3>> SimulationDomain::sample_volume_points(
-    int count, std::mt19937_64& rng) const {
-    if(extruded_z_) {
+std::vector<std::array<double, 3>>
+SimulationDomain::sample_volume_points(int count, std::mt19937_64& rng) const {
+    if (extruded_z_) {
         std::vector<double> weights;
-        for(const auto& t:prism_top_)weights.push_back(std::abs((t[1][0]-t[0][0])*(t[2][1]-t[0][1])-(t[1][1]-t[0][1])*(t[2][0]-t[0][0])));
-        std::discrete_distribution<size_t> choose(weights.begin(),weights.end());std::uniform_real_distribution<double> u(0,1);
-        std::vector<Vec3> points;points.reserve(std::max(0,count));
-        for(int i=0;i<count;++i){const auto& t=prism_top_[choose(rng)];const double a=std::sqrt(u(rng)),b=u(rng);Vec3 p{};
-            for(int j=0;j<2;++j)p[j]=(1-a)*t[0][j]+a*(1-b)*t[1][j]+a*b*t[2][j];
-            p[2]=bounds_min_[2]+u(rng)*(bounds_max_[2]-bounds_min_[2]);points.push_back(p);}
+        for (const auto& t : prism_top_) {
+            weights.push_back(std::abs((t[1][0] - t[0][0]) * (t[2][1] - t[0][1]) -
+                                       (t[1][1] - t[0][1]) * (t[2][0] - t[0][0])));
+        }
+        std::discrete_distribution<size_t> choose(weights.begin(), weights.end());
+        std::uniform_real_distribution<double> u(0, 1);
+        std::vector<Vec3> points;
+        points.reserve(std::max(0, count));
+        for (int i = 0; i < count; ++i) {
+            const auto& t = prism_top_[choose(rng)];
+            const double a = std::sqrt(u(rng)), b = u(rng);
+            Vec3 p{};
+            for (int j = 0; j < 2; ++j) {
+                p[j] = (1 - a) * t[0][j] + a * (1 - b) * t[1][j] + a * b * t[2][j];
+            }
+            p[2] = bounds_min_[2] + u(rng) * (bounds_max_[2] - bounds_min_[2]);
+            points.push_back(p);
+        }
         return points;
     }
-    if (!is_box_geometry_) return mesh_.sample_volume_points(count, rng);
-    if (count <= 0) return {};
+    if (!is_box_geometry_) {
+        return mesh_.sample_volume_points(count, rng);
+    }
+    if (count <= 0) {
+        return {};
+    }
     // Independent uniform coordinates exactly sample a rectangular volume.
     // Avoid a general tetrahedralization whose cost grows with aspect ratio.
     std::uniform_real_distribution<double> ux(bounds_min_[0], bounds_max_[0]);
@@ -493,7 +273,9 @@ std::vector<std::array<double, 3>> SimulationDomain::sample_volume_points(
     std::uniform_real_distribution<double> uz(bounds_min_[2], bounds_max_[2]);
     std::vector<std::array<double, 3>> points;
     points.reserve(static_cast<size_t>(count));
-    for (int i = 0; i < count; ++i) points.push_back({ux(rng), uy(rng), uz(rng)});
+    for (int i = 0; i < count; ++i) {
+        points.push_back({ux(rng), uy(rng), uz(rng)});
+    }
     return points;
 }
 
@@ -528,7 +310,8 @@ void SimulationDomain::initialize_analytic_box_intersection() {
                 }
                 bool other_components_zero = true;
                 for (int other = 0; other < 3; ++other) {
-                    if (other != axis && std::abs(normals[static_cast<size_t>(facet)][other]) > 1e-10) {
+                    if (other != axis &&
+                        std::abs(normals[static_cast<size_t>(facet)][other]) > 1e-10) {
                         other_components_zero = false;
                     }
                 }
@@ -548,43 +331,68 @@ void SimulationDomain::initialize_analytic_box_intersection() {
         box_plane_facets_[static_cast<size_t>(plane)] = facet;
     }
 
-    analytic_box_intersection_enabled_ = std::all_of(
-        box_plane_facets_.begin(), box_plane_facets_.end(), [](int facet) { return facet >= 0; });
+    analytic_box_intersection_enabled_ =
+        std::all_of(box_plane_facets_.begin(), box_plane_facets_.end(), [](int facet) {
+            return facet >= 0;
+        });
 }
 
 // 函数说明：轴对齐 box 使用解析平面求交，其余几何保留三角面/BVH 求交。
-std::tuple<Vec3, double, int> SimulationDomain::trace_boundary_intersection(
-    const Vec3& position,
-    const Vec3& velocity) const {
+std::tuple<Vec3, double, int>
+SimulationDomain::trace_boundary_intersection(const Vec3& position, const Vec3& velocity) const {
     if (!analytic_box_intersection_enabled_) {
-        if(extruded_z_) {
-            const double speed=norm(velocity);
-            if(!(speed>0))return {position,std::numeric_limits<double>::infinity(),-1};
-            const auto direction=mul(velocity,1/speed);
-            double best=std::numeric_limits<double>::infinity();int hit=-1;Vec3 point=position;
-            for(int facet=0;facet<mesh_.facet_count();++facet) {
-                const auto& f=mesh_.facets()[facet];const auto& n=f.normal;
-                const double denominator=dot(direction,n);
-                if(denominator<=1e-16)continue;
-                const double distance=dot(sub(f.centroid,position),n)/denominator;
-                if(distance<=1e-12 || distance>=best)continue;
-                const auto candidate=add(position,mul(direction,distance));
-                int drop=0;for(int j=1;j<3;++j)if(std::abs(n[j])>std::abs(n[drop]))drop=j;
-                const int u=(drop+1)%3,v=(drop+2)%3;
-                auto cross2=[&](const Vec3& a,const Vec3& b,const Vec3& c){return
-                    (static_cast<long double>(b[u])-a[u])*(static_cast<long double>(c[v])-a[v])-
-                    (static_cast<long double>(b[v])-a[v])*(static_cast<long double>(c[u])-a[u]);};
-                for(int face:f.faces) {
-                    const auto& indices=mesh_.faces()[face];const auto& a=mesh_.vertices()[indices[0]];
-                    const auto& b=mesh_.vertices()[indices[1]];const auto& c=mesh_.vertices()[indices[2]];
-                    const auto area=cross2(a,b,c),tol=1e-12L*std::abs(area);
-                    const auto e0=cross2(a,b,candidate),e1=cross2(b,c,candidate),e2=cross2(c,a,candidate);
-                    if((area>0 && std::min({e0,e1,e2})>=-tol)||(area<0 && std::max({e0,e1,e2})<=tol)) {
-                        best=distance;hit=facet;point=candidate;break;
+        if (extruded_z_) {
+            const double speed = norm(velocity);
+            if (!(speed > 0)) {
+                return {position, std::numeric_limits<double>::infinity(), -1};
+            }
+            const auto direction = mul(velocity, 1 / speed);
+            double best = std::numeric_limits<double>::infinity();
+            int hit = -1;
+            Vec3 point = position;
+            for (int facet = 0; facet < mesh_.facet_count(); ++facet) {
+                const auto& f = mesh_.facets()[facet];
+                const auto& n = f.normal;
+                const double denominator = dot(direction, n);
+                if (denominator <= 1e-16) {
+                    continue;
+                }
+                const double distance = dot(sub(f.centroid, position), n) / denominator;
+                if (distance <= 1e-12 || distance >= best) {
+                    continue;
+                }
+                const auto candidate = add(position, mul(direction, distance));
+                int drop = 0;
+                for (int j = 1; j < 3; ++j) {
+                    if (std::abs(n[j]) > std::abs(n[drop])) {
+                        drop = j;
+                    }
+                }
+                const int u = (drop + 1) % 3, v = (drop + 2) % 3;
+                auto cross2 = [&](const Vec3& a, const Vec3& b, const Vec3& c) {
+                    return (static_cast<long double>(b[u]) - a[u]) *
+                               (static_cast<long double>(c[v]) - a[v]) -
+                           (static_cast<long double>(b[v]) - a[v]) *
+                               (static_cast<long double>(c[u]) - a[u]);
+                };
+                for (int face : f.faces) {
+                    const auto& indices = mesh_.faces()[face];
+                    const auto& a = mesh_.vertices()[indices[0]];
+                    const auto& b = mesh_.vertices()[indices[1]];
+                    const auto& c = mesh_.vertices()[indices[2]];
+                    const auto area = cross2(a, b, c), tol = 1e-12L * std::abs(area);
+                    const auto e0 = cross2(a, b, candidate), e1 = cross2(b, c, candidate),
+                               e2 = cross2(c, a, candidate);
+                    if ((area > 0 && std::min({e0, e1, e2}) >= -tol) ||
+                        (area < 0 && std::max({e0, e1, e2}) <= tol)) {
+                        best = distance;
+                        hit = facet;
+                        point = candidate;
+                        break;
                     }
                 }
             }
-            return {point,best/speed,hit};
+            return {point, best / speed, hit};
         }
         return mesh_.trace_boundary_intersection(position, velocity);
     }
@@ -593,10 +401,10 @@ std::tuple<Vec3, double, int> SimulationDomain::trace_boundary_intersection(
     constexpr double time_eps = 1e-14;
     const Vec3 ext = sub(bounds_max_, bounds_min_);
     const double scale = std::max({1.0, std::abs(ext[0]), std::abs(ext[1]), std::abs(ext[2])});
-    const double position_tol = std::max(1e-9, 64.0 * std::numeric_limits<double>::epsilon() * scale);
+    const double position_tol =
+        std::max(1e-9, 64.0 * std::numeric_limits<double>::epsilon() * scale);
     for (int axis = 0; axis < 3; ++axis) {
-        if (!std::isfinite(position[axis]) ||
-            position[axis] < bounds_min_[axis] - position_tol ||
+        if (!std::isfinite(position[axis]) || position[axis] < bounds_min_[axis] - position_tol ||
             position[axis] > bounds_max_[axis] + position_tol) {
             return {position, std::numeric_limits<double>::infinity(), -1};
         }
@@ -632,8 +440,7 @@ std::tuple<Vec3, double, int> SimulationDomain::trace_boundary_intersection(
     // excursion remains a hard geometry failure instead of being hidden by
     // clamping.
     for (int axis = 0; axis < 3; ++axis) {
-        if (!std::isfinite(collision[axis]) ||
-            collision[axis] < bounds_min_[axis] - position_tol ||
+        if (!std::isfinite(collision[axis]) || collision[axis] < bounds_min_[axis] - position_tol ||
             collision[axis] > bounds_max_[axis] + position_tol) {
             return {position, std::numeric_limits<double>::infinity(), -1};
         }
@@ -642,128 +449,67 @@ std::tuple<Vec3, double, int> SimulationDomain::trace_boundary_intersection(
     return {collision, best_time, box_plane_facets_[static_cast<size_t>(best_plane)]};
 }
 
-// 函数说明：将输入边界条件映射到 facet，并识别热库/粗糙边界。
+std::vector<int> SimulationDomain::facets_in_region(const Box6& box) const {
+    const Vec3 extent = sub(bounds_max_, bounds_min_);
+    const double tolerance =
+        1e-12 * std::max({1.0, std::abs(extent[0]), std::abs(extent[1]), std::abs(extent[2])});
+    Vec3 lo, hi;
+    for (int axis = 0; axis < 3; ++axis) {
+        lo[axis] = bounds_min_[axis] + std::min(box[axis], box[axis + 3]) * extent[axis];
+        hi[axis] = bounds_min_[axis] + std::max(box[axis], box[axis + 3]) * extent[axis];
+    }
+    std::vector<int> matched;
+    for (int facet = 0; facet < facet_count_; ++facet) {
+        const auto& center = mesh_.facet_centroids()[facet];
+        bool inside = true;
+        for (int axis = 0; axis < 3; ++axis) {
+            inside = inside && center[axis] >= lo[axis] - tolerance &&
+                     center[axis] <= hi[axis] + tolerance;
+        }
+        if (inside) matched.push_back(facet);
+    }
+    return matched;
+}
+
 void SimulationDomain::assign_boundary_conditions(const SimulationConfig& args) {
-    if (facet_count_ == 0) {
-        return;
+    const auto selectors = parse_boundary_selectors(args.boundary_position, "boundary_position");
+    if (args.boundary_conditions.size() != selectors.boxes.size() ||
+        args.boundary_values.size() != selectors.boxes.size()) {
+        throw std::runtime_error("boundary_position, boundary_conditions, and boundary_values "
+                                 "must have identical lengths.");
     }
-    // Unspecified boundaries always default to rough-surface scattering (R), with eta fallback = 0.
-    const char default_bc = 'R';
-    facet_boundary_conditions_.assign(facet_count_, default_bc);
-    std::vector<std::vector<int>> selector_facets;
-    std::vector<char> selector_conditions;
-
-    if (!args.boundary_position.empty()) {
-        const auto selectors = parse_boundary_selectors(args.boundary_position, "boundary_position");
-        if (args.boundary_conditions.size() != selectors.boxes.size() ||
-            args.boundary_values.size() != selectors.boxes.size()) {
-            throw std::runtime_error(
-                "boundary_position, boundary_conditions, and boundary_values must have identical lengths.");
+    // Unselected walls are smooth rough boundaries (eta=0). Later selectors
+    // override both the condition and its value on overlapping regions.
+    facet_boundary_conditions_.assign(facet_count_, 'R');
+    std::vector<double> values(facet_count_, 0.0);
+    for (size_t i = 0; i < selectors.boxes.size(); ++i) {
+        const char condition = boundary_condition_code(args.boundary_conditions[i]);
+        // Input roughness is nm; internal lengths are Angstrom.
+        const double value = condition == 'R' ? args.boundary_values[i] * 10.0 : args.boundary_values[i];
+        if (!std::isfinite(value) || value < 0 || (condition == 'P' && value != 0)) {
+            throw std::runtime_error("Boundary values must be finite, nonnegative, and zero for periodic boundaries.");
         }
-        const Vec3 ext = sub(bounds_max_, bounds_min_);
-        selector_facets.reserve(selectors.boxes.size());
-        selector_conditions.reserve(selectors.boxes.size());
-        const auto& centroids = mesh_.facet_centroids();
-        const double eps = 1e-12 * std::max({1.0, std::abs(ext[0]), std::abs(ext[1]), std::abs(ext[2])});
-
-        for (size_t i = 0; i < selectors.boxes.size(); ++i) {
-            const auto& b = selectors.boxes[i];
-            const double xr0 = std::min(b[0], b[3]);
-            const double yr0 = std::min(b[1], b[4]);
-            const double zr0 = std::min(b[2], b[5]);
-            const double xr1 = std::max(b[0], b[3]);
-            const double yr1 = std::max(b[1], b[4]);
-            const double zr1 = std::max(b[2], b[5]);
-
-            const Vec3 lo {
-                bounds_min_[0] + xr0 * ext[0],
-                bounds_min_[1] + yr0 * ext[1],
-                bounds_min_[2] + zr0 * ext[2]
-            };
-            const Vec3 hi {
-                bounds_min_[0] + xr1 * ext[0],
-                bounds_min_[1] + yr1 * ext[1],
-                bounds_min_[2] + zr1 * ext[2]
-            };
-
-            const char bc = (i < args.boundary_conditions.size())
-                ? boundary_condition_code(args.boundary_conditions[i])
-                : default_bc;
-            selector_conditions.push_back(bc);
-
-            std::vector<int> matched;
-            for (int f = 0; f < facet_count_; ++f) {
-                const Vec3& c = centroids[static_cast<size_t>(f)];
-                const bool in_x = (c[0] >= lo[0] - eps && c[0] <= hi[0] + eps);
-                const bool in_y = (c[1] >= lo[1] - eps && c[1] <= hi[1] + eps);
-                const bool in_z = (c[2] >= lo[2] - eps && c[2] <= hi[2] + eps);
-                if (!in_x || !in_y || !in_z) {
-                    continue;
-                }
-                matched.push_back(f);
-                facet_boundary_conditions_[f] = bc;
-            }
-            if (matched.empty()) {
-                throw std::runtime_error(
-                    "boundary_position region " + std::to_string(i) + " did not match any mesh facet.");
-            }
-            selector_facets.push_back(std::move(matched));
+        const auto matched = facets_in_region(selectors.boxes[i]);
+        if (matched.empty()) {
+            throw std::runtime_error("boundary_position region " + std::to_string(i) +
+                                     " did not match any mesh facet.");
+        }
+        for (int facet : matched) {
+            facet_boundary_conditions_[facet] = condition;
+            values[facet] = value;
         }
     }
-
     reservoir_facets_.clear();
+    reservoir_values_.clear();
     rough_facets_.clear();
-    for (int f = 0; f < facet_count_; ++f) {
-        if (facet_boundary_conditions_[f] == 'T') {
-            reservoir_facets_.push_back(f);
-        } else if (facet_boundary_conditions_[f] == 'R') {
-            rough_facets_.push_back(f);
-        }
-    }
-
-    reservoir_values_.assign(reservoir_facets_.size(), std::numeric_limits<double>::quiet_NaN());
-    roughness_values_.assign(rough_facets_.size(), std::numeric_limits<double>::quiet_NaN());
-
-    // boundary_values follows selector-level mapping: one value controls one selected point/region.
-    std::unordered_map<int, double> reservoir_values_by_facet;
-    std::unordered_map<int, double> roughness_values_by_facet;
-    for (size_t i = 0; i < selector_facets.size(); ++i) {
-        if (i >= args.boundary_values.size()) {
-            break;
-        }
-        const char bc = (i < selector_conditions.size()) ? selector_conditions[i] : default_bc;
-        if (bc == 'T') {
-            for (const int f : selector_facets[i]) {
-                reservoir_values_by_facet[f] = args.boundary_values[i];
-            }
-        } else if (bc == 'R') {
-            for (const int f : selector_facets[i]) {
-                // Roughness is provided in nm in input; convert to Angstrom internally.
-                roughness_values_by_facet[f] = args.boundary_values[i] * 10.0;
-            }
-        }
-    }
-    for (size_t j = 0; j < reservoir_facets_.size(); ++j) {
-        const int f = reservoir_facets_[j];
-        if (const auto it = reservoir_values_by_facet.find(f); it != reservoir_values_by_facet.end()) {
-            reservoir_values_[j] = it->second;
-        }
-        if (!std::isfinite(reservoir_values_[j])) {
-            throw std::runtime_error(
-                "Thermal reservoir facet " + std::to_string(f) + " has no finite temperature value.");
-        }
-    }
-    for (size_t j = 0; j < rough_facets_.size(); ++j) {
-        const int f = rough_facets_[j];
-        if (const auto it = roughness_values_by_facet.find(f); it != roughness_values_by_facet.end()) {
-            roughness_values_[j] = it->second;
-        } else {
-            // Facets not selected by any region keep the documented smooth-rough default eta=0.
-            roughness_values_[j] = 0.0;
-        }
-        if (!std::isfinite(roughness_values_[j]) || roughness_values_[j] < 0.0) {
-            throw std::runtime_error(
-                "Rough boundary facet " + std::to_string(f) + " has no valid roughness value.");
+    roughness_values_.clear();
+    for (int facet = 0; facet < facet_count_; ++facet) {
+        if (facet_boundary_conditions_[facet] == 'T') {
+            reservoir_facets_.push_back(facet);
+            reservoir_values_.push_back(values[facet]);
+        } else if (facet_boundary_conditions_[facet] == 'R') {
+            rough_facets_.push_back(facet);
+            roughness_values_.push_back(values[facet]);
         }
     }
 }
@@ -774,51 +520,20 @@ void SimulationDomain::build_periodic_connections(const SimulationConfig& args) 
         return;
     }
     const auto selectors = parse_boundary_selectors(args.periodic_pair, "periodic_pair");
-    const Vec3 ext = sub(bounds_max_, bounds_min_);
     const auto& centroids = mesh_.facet_centroids();
-    const double eps = 1e-12 * std::max({1.0, std::abs(ext[0]), std::abs(ext[1]), std::abs(ext[2])});
     if (selectors.boxes.size() % 2 != 0) {
         throw std::runtime_error("periodic_pair must have even number of regions.");
     }
 
-    auto match_facets_by_region = [&](const Box6& b) {
-        std::vector<int> matched;
-        const double xr0 = std::min(b[0], b[3]);
-        const double yr0 = std::min(b[1], b[4]);
-        const double zr0 = std::min(b[2], b[5]);
-        const double xr1 = std::max(b[0], b[3]);
-        const double yr1 = std::max(b[1], b[4]);
-        const double zr1 = std::max(b[2], b[5]);
-        const Vec3 lo {
-            bounds_min_[0] + xr0 * ext[0],
-            bounds_min_[1] + yr0 * ext[1],
-            bounds_min_[2] + zr0 * ext[2]
-        };
-        const Vec3 hi {
-            bounds_min_[0] + xr1 * ext[0],
-            bounds_min_[1] + yr1 * ext[1],
-            bounds_min_[2] + zr1 * ext[2]
-        };
-        for (int f = 0; f < facet_count_; ++f) {
-            const Vec3& c = centroids[static_cast<size_t>(f)];
-            const bool in_x = (c[0] >= lo[0] - eps && c[0] <= hi[0] + eps);
-            const bool in_y = (c[1] >= lo[1] - eps && c[1] <= hi[1] + eps);
-            const bool in_z = (c[2] >= lo[2] - eps && c[2] <= hi[2] + eps);
-            if (in_x && in_y && in_z) {
-                matched.push_back(f);
-            }
-        }
-        return matched;
-    };
-
     for (size_t i = 0; i < selectors.boxes.size(); i += 2) {
-        const auto matched_a = match_facets_by_region(selectors.boxes[i]);
-        const auto matched_b = match_facets_by_region(selectors.boxes[i + 1]);
+        const auto matched_a = facets_in_region(selectors.boxes[i]);
+        const auto matched_b = facets_in_region(selectors.boxes[i + 1]);
         if (matched_a.empty() || matched_b.empty()) {
             throw std::runtime_error("Connected facet mapping failed for periodic_pair regions.");
         }
         if (matched_a.size() != matched_b.size()) {
-            throw std::runtime_error("periodic_pair region pair must match the same number of facets.");
+            throw std::runtime_error(
+                "periodic_pair region pair must match the same number of facets.");
         }
 
         std::vector<std::pair<int, int>> pairs;
@@ -826,8 +541,8 @@ void SimulationDomain::build_periodic_connections(const SimulationConfig& args) 
         if (matched_a.size() == 1) {
             pairs.push_back({matched_a.front(), matched_b.front()});
         } else {
-            Vec3 mean_a {0.0, 0.0, 0.0};
-            Vec3 mean_b {0.0, 0.0, 0.0};
+            Vec3 mean_a{0.0, 0.0, 0.0};
+            Vec3 mean_b{0.0, 0.0, 0.0};
             for (const int fa : matched_a) {
                 mean_a = add(mean_a, centroids[static_cast<size_t>(fa)]);
             }
@@ -853,7 +568,8 @@ void SimulationDomain::build_periodic_connections(const SimulationConfig& args) 
                     }
                 }
                 if (best_j < 0) {
-                    throw std::runtime_error("Failed to build one-to-one mapping for periodic_pair facets.");
+                    throw std::runtime_error(
+                        "Failed to build one-to-one mapping for periodic_pair facets.");
                 }
                 pairs.push_back({fa, unmatched_b[static_cast<size_t>(best_j)]});
                 unmatched_b.erase(unmatched_b.begin() + best_j);
@@ -868,11 +584,13 @@ void SimulationDomain::build_periodic_connections(const SimulationConfig& args) 
             }
             if ((periodic_pair_[a] >= 0 && periodic_pair_[a] != b) ||
                 (periodic_pair_[b] >= 0 && periodic_pair_[b] != a)) {
-                throw std::runtime_error("Facet already paired with a different periodic connection.");
+                throw std::runtime_error(
+                    "Facet already paired with a different periodic connection.");
             }
             const double ndot = dot(mesh_.facet_normals()[a], mesh_.facet_normals()[b]);
             if (ndot > -0.98) {
-                throw std::runtime_error("Connected facets normals do not match opposite direction.");
+                throw std::runtime_error(
+                    "Connected facets normals do not match opposite direction.");
             }
             const double aa = mesh_.facet_areas()[a];
             const double ab = mesh_.facet_areas()[b];
@@ -888,7 +606,8 @@ void SimulationDomain::build_periodic_connections(const SimulationConfig& args) 
             for (size_t k = 0; k < la.size(); ++k) {
                 const double rel = std::abs(la[k] - lb[k]) / std::max({1.0, la[k], lb[k]});
                 if (rel > 1e-3) {
-                    throw std::runtime_error("Connected facets boundary edge-length spectrum mismatch.");
+                    throw std::runtime_error(
+                        "Connected facets boundary edge-length spectrum mismatch.");
                 }
             }
 
@@ -903,11 +622,6 @@ void SimulationDomain::build_periodic_connections(const SimulationConfig& args) 
     }
 }
 
-// 函数说明：初始化控制体网格布局入口（当前为规则网格模式）。
-void SimulationDomain::initialize_grids(const SimulationConfig& args) {
-    initialize_grid_cells(args);
-}
-
 // 函数说明：在几何域内生成有效网格中心与体积权重。
 void SimulationDomain::initialize_grid_cells(const SimulationConfig& args) {
     const int nx = args.grid.nx;
@@ -919,54 +633,79 @@ void SimulationDomain::initialize_grid_cells(const SimulationConfig& args) {
     const Vec3 ext = sub(bounds_max_, bounds_min_);
     fast_grid_index_enabled_ = false;
     fast_grid_shape_ = {nx, ny, nz};
-    fast_grid_inv_cell_ = {
-        (ext[0] > 0.0) ? (static_cast<double>(nx) / ext[0]) : 0.0,
-        (ext[1] > 0.0) ? (static_cast<double>(ny) / ext[1]) : 0.0,
-        (ext[2] > 0.0) ? (static_cast<double>(nz) / ext[2]) : 0.0
-    };
+    fast_grid_inv_cell_ = {(ext[0] > 0.0) ? (static_cast<double>(nx) / ext[0]) : 0.0,
+                           (ext[1] > 0.0) ? (static_cast<double>(ny) / ext[1]) : 0.0,
+                           (ext[2] > 0.0) ? (static_cast<double>(nz) / ext[2]) : 0.0};
     grid_centers_.clear();
     grid_volumes_.clear();
-    const size_t total_cells = static_cast<size_t>(nx) * static_cast<size_t>(ny) * static_cast<size_t>(nz);
+    const size_t total_cells =
+        static_cast<size_t>(nx) * static_cast<size_t>(ny) * static_cast<size_t>(nz);
     grid_centers_.reserve(total_cells);
     cell_to_grid_index_.assign(total_cells, -1);
     const bool is_box = is_box_geometry_;
     for (int ix = 0; ix < nx; ++ix) {
         for (int iy = 0; iy < ny; ++iy) {
             for (int iz = 0; iz < nz; ++iz) {
-                Vec3 p {
-                    bounds_min_[0] + (static_cast<double>(ix) + 0.5) * ext[0] / static_cast<double>(nx),
-                    bounds_min_[1] + (static_cast<double>(iy) + 0.5) * ext[1] / static_cast<double>(ny),
-                    bounds_min_[2] + (static_cast<double>(iz) + 0.5) * ext[2] / static_cast<double>(nz)
-                };
-                double cut_volume=0;
-                if(extruded_z_) {
-                    const double x0=bounds_min_[0]+ix*ext[0]/nx,x1=x0+ext[0]/nx;
-                    const double y0=bounds_min_[1]+iy*ext[1]/ny,y1=y0+ext[1]/ny;
-                    long double total=0,cx=0,cy=0;
-                    for(const auto& tri:prism_top_) {
-                        std::vector<Vec3> polygon(tri.begin(),tri.end());
-                        for(int edge=0;edge<4;++edge) {
-                            const int axis=edge/2;const bool lower=edge%2==0;
-                            const double bound=axis==0?(lower?x0:x1):(lower?y0:y1);
+                Vec3 p{bounds_min_[0] +
+                           (static_cast<double>(ix) + 0.5) * ext[0] / static_cast<double>(nx),
+                       bounds_min_[1] +
+                           (static_cast<double>(iy) + 0.5) * ext[1] / static_cast<double>(ny),
+                       bounds_min_[2] +
+                           (static_cast<double>(iz) + 0.5) * ext[2] / static_cast<double>(nz)};
+                double cut_volume = 0;
+                if (extruded_z_) {
+                    const double x0 = bounds_min_[0] + ix * ext[0] / nx, x1 = x0 + ext[0] / nx;
+                    const double y0 = bounds_min_[1] + iy * ext[1] / ny, y1 = y0 + ext[1] / ny;
+                    long double total = 0, cx = 0, cy = 0;
+                    for (const auto& tri : prism_top_) {
+                        std::vector<Vec3> polygon(tri.begin(), tri.end());
+                        for (int edge = 0; edge < 4; ++edge) {
+                            const int axis = edge / 2;
+                            const bool lower = edge % 2 == 0;
+                            const double bound = axis == 0 ? (lower ? x0 : x1) : (lower ? y0 : y1);
                             std::vector<Vec3> clipped;
-                            for(size_t i=0;i<polygon.size();++i){const auto& a=polygon[i];const auto& b=polygon[(i+1)%polygon.size()];
-                                const bool ina=lower?a[axis]>=bound:a[axis]<=bound,inb=lower?b[axis]>=bound:b[axis]<=bound;
-                                if(ina)clipped.push_back(a);
-                                if(ina!=inb){const double f=(bound-a[axis])/(b[axis]-a[axis]);clipped.push_back(add(a,mul(sub(b,a),f)));}}
-                            polygon=std::move(clipped);
+                            for (size_t i = 0; i < polygon.size(); ++i) {
+                                const auto& a = polygon[i];
+                                const auto& b = polygon[(i + 1) % polygon.size()];
+                                const bool ina = lower ? a[axis] >= bound : a[axis] <= bound,
+                                           inb = lower ? b[axis] >= bound : b[axis] <= bound;
+                                if (ina) {
+                                    clipped.push_back(a);
+                                }
+                                if (ina != inb) {
+                                    const double f = (bound - a[axis]) / (b[axis] - a[axis]);
+                                    clipped.push_back(add(a, mul(sub(b, a), f)));
+                                }
+                            }
+                            polygon = std::move(clipped);
                         }
-                        for(size_t i=1;i+1<polygon.size();++i){const auto& a=polygon[0];const auto& b=polygon[i];const auto& c=polygon[i+1];
-                            const long double area=std::abs((b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]))*.5;
-                            total+=area;cx+=area*(a[0]+b[0]+c[0])/3;cy+=area*(a[1]+b[1]+c[1])/3;}
+                        for (size_t i = 1; i + 1 < polygon.size(); ++i) {
+                            const auto& a = polygon[0];
+                            const auto& b = polygon[i];
+                            const auto& c = polygon[i + 1];
+                            const long double area = std::abs((b[0] - a[0]) * (c[1] - a[1]) -
+                                                              (b[1] - a[1]) * (c[0] - a[0])) *
+                                                     .5;
+                            total += area;
+                            cx += area * (a[0] + b[0] + c[0]) / 3;
+                            cy += area * (a[1] + b[1] + c[1]) / 3;
+                        }
                     }
-                    cut_volume=static_cast<double>(total)*ext[2]/nz;
-                    if(total>0){p[0]=static_cast<double>(cx/total);p[1]=static_cast<double>(cy/total);}
+                    cut_volume = static_cast<double>(total) * ext[2] / nz;
+                    if (total > 0) {
+                        p[0] = static_cast<double>(cx / total);
+                        p[1] = static_cast<double>(cy / total);
+                    }
                 }
-                if (is_box || (extruded_z_ ? cut_volume>1e-12*volume_/total_cells : mesh_.contains_point(p))) {
+                if (is_box || (extruded_z_ ? cut_volume > 1e-12 * volume_ / total_cells
+                                           : mesh_.contains_point(p))) {
                     const int cell = (ix * ny + iy) * nz + iz;
-                    cell_to_grid_index_[static_cast<size_t>(cell)] = static_cast<int>(grid_centers_.size());
+                    cell_to_grid_index_[static_cast<size_t>(cell)] =
+                        static_cast<int>(grid_centers_.size());
                     grid_centers_.push_back(p);
-                    if(extruded_z_)grid_volumes_.push_back(cut_volume);
+                    if (extruded_z_) {
+                        grid_volumes_.push_back(cut_volume);
+                    }
                 }
             }
         }
@@ -993,11 +732,12 @@ void SimulationDomain::initialize_grid_cells(const SimulationConfig& args) {
         const int iy = rem / nz;
         const int iz = rem % nz;
         const int source_grid = cell_to_grid_index_[static_cast<size_t>(cell)];
-        const std::array<std::array<int, 3>, 6> neighbors {{
-            {{ix - 1, iy, iz}}, {{ix + 1, iy, iz}},
-            {{ix, iy - 1, iz}}, {{ix, iy + 1, iz}},
-            {{ix, iy, iz - 1}}, {{ix, iy, iz + 1}}
-        }};
+        const std::array<std::array<int, 3>, 6> neighbors{{{{ix - 1, iy, iz}},
+                                                           {{ix + 1, iy, iz}},
+                                                           {{ix, iy - 1, iz}},
+                                                           {{ix, iy + 1, iz}},
+                                                           {{ix, iy, iz - 1}},
+                                                           {{ix, iy, iz + 1}}}};
         for (const auto& n : neighbors) {
             if (n[0] < 0 || n[0] >= nx || n[1] < 0 || n[1] >= ny || n[2] < 0 || n[2] >= nz) {
                 continue;
@@ -1011,213 +751,17 @@ void SimulationDomain::initialize_grid_cells(const SimulationConfig& args) {
         }
     }
     fast_grid_index_enabled_ = true;
-    if(!extruded_z_)grid_volumes_.assign(static_cast<size_t>(grid_count_), volume_ / static_cast<double>(grid_count_));
-    else {long double total=0;for(double v:grid_volumes_)total+=v;
-        if(std::abs(total-volume_)>1e-8*volume_)throw std::runtime_error("Prism cut-cell volumes do not close");}
-}
-
-// 函数说明：输出几何、边界、网格与输入信息摘要文件。
-void SimulationDomain::write_domain_summary(const SimulationConfig& args) const {
-    if (args.output_folder.empty()) {
-        return;
-    }
-    namespace fs = std::filesystem;
-    fs::create_directories(args.output_folder);
-    std::ofstream out(fs::path(args.output_folder) / "summary.txt");
-    auto join_strings = [](const std::vector<std::string>& v) -> std::string {
-        if (v.empty()) {
-            return "[]";
-        }
-        std::ostringstream oss;
-        oss << "[";
-        for (size_t i = 0; i < v.size(); ++i) {
-            if (i > 0) {
-                oss << ", ";
-            }
-            oss << v[i];
-        }
-        oss << "]";
-        return oss.str();
-    };
-    auto join_numbers = [](const std::vector<double>& v) -> std::string {
-        if (v.empty()) {
-            return "[]";
-        }
-        std::ostringstream oss;
-        oss << "[";
-        for (size_t i = 0; i < v.size(); ++i) {
-            if (i > 0) {
-                oss << ", ";
-            }
-            oss << v[i];
-        }
-        oss << "]";
-        return oss.str();
-    };
-    auto scale_numbers = [](const std::vector<double>& v, double scale) -> std::vector<double> {
-        std::vector<double> out = v;
-        for (double& x : out) {
-            x *= scale;
-        }
-        return out;
-    };
-    auto region_count = [](const std::vector<std::string>& v) -> int {
-        if (v.empty()) {
-            return 0;
-        }
-        return static_cast<int>(parse_boundary_selectors(v, "summary_selector").boxes.size());
-    };
-    auto boundary_selector_info = [](const std::vector<std::string>& v) -> std::pair<std::string, int> {
-        if (v.empty()) {
-            return {"none", 0};
-        }
-        const auto parsed = parse_boundary_selectors(v, "boundary_position");
-        return {"region", static_cast<int>(parsed.boxes.size())};
-    };
-
-    int npairs = 0;
-    for (int i = 0; i < facet_count_; ++i) {
-        if (periodic_pair_[i] > i) {
-            ++npairs;
-        }
-    }
-
-    out << "[input]\n";
-    out << "model = " << args.model << '\n';
-    out << "sizes_nm = [" << (args.sizes.size() > 0 ? args.sizes[0] / 10.0 : 0.0)
-        << ", " << (args.sizes.size() > 1 ? args.sizes[1] / 10.0 : 0.0)
-        << ", " << (args.sizes.size() > 2 ? args.sizes[2] / 10.0 : 0.0) << "]\n";
-    out << "sizes_angstrom = [" << (args.sizes.size() > 0 ? args.sizes[0] : 0.0)
-        << ", " << (args.sizes.size() > 1 ? args.sizes[1] : 0.0)
-        << ", " << (args.sizes.size() > 2 ? args.sizes[2] : 0.0) << "]\n";
-    out << "particle_count = " << args.particle_count << '\n';
-    out << "time_step = " << args.time_step << '\n';
-    out << "iterations = " << args.iterations << '\n';
-    out << "convergence_write_interval = " << args.convergence_write_interval << '\n';
-    out << "random_seed = " << args.random_seed << '\n';
-    out << "temperature_lookup_dt = " << args.temperature_lookup_dt << '\n';
-    out << "background_temperature = " << args.background_temperature << '\n';
-    out << "callaway_formulation = " << (args.callaway_nonlinear ? "nonlinear" : "linearized") << '\n';
-    out << "conservative_boundaries = " << (uses_conservative_transport(args) ? "true" : "false") << '\n';
-    if (uses_conservative_transport(args)) {
-        out << "collision_model = " << (args.collision_model==CollisionModel::Callaway ? "callaway" : args.collision_model==CollisionModel::Rta ? "rta" : "full_matrix") << '\n';
-        out << "collision_reference_temperature = " << args.background_temperature << '\n';
-        out << "reservoir_generation = fixed_incoming_flux\n";
-        for (size_t i = 0; i < args.scattering_matrix_files.size(); ++i)
-            out << "scattering_matrix_" << i << " = " << args.scattering_matrix_files[i] << '\n';
-    }
-    out << "lifetime_temperature = ";
-    if (args.lifetime_temperature_is_local) {
-        out << "local";
+    if (!extruded_z_) {
+        grid_volumes_.assign(static_cast<size_t>(grid_count_),
+                             volume_ / static_cast<double>(grid_count_));
     } else {
-        out << args.lifetime_temperature;
-    }
-    out << '\n';
-    if (args.transport_axis >= 0) out << "transport_axis = " << "xyz"[args.transport_axis] << '\n';
-    if (args.temperature_gradient) {
-        out << "temperature_gradient_K_per_m = " << *args.temperature_gradient << '\n';
-        out << "conductivity_definition = -mean_heatflux/imposed_gradient\n";
-        out << "temperature_output = T0_plus_periodic_correction\n";
-        out << "kappa_int_applicable = false\n";
-    }
-    out << "compute_kappa = " << (args.compute_kappa ? "true" : "false") << '\n';
-    out << "profile_timers = " << (args.profile_timers ? "true" : "false") << '\n';
-    out << "progress_temperature_summary_only = "
-        << (args.progress_temperature_summary_only ? "true" : "false") << '\n';
-    out << "merge_coplanar_facets = "
-        << (args.merge_coplanar_facets ? "true" : "false") << '\n';
-    out << "initial_temperature = ";
-    if (args.initial_temperature.mode == InitialTemperatureMode::Uniform) {
-        out << args.initial_temperature.uniform_temperature;
-    } else {
-        out << to_string(args.initial_temperature.mode);
-    }
-    out << '\n';
-    out << "grid_xyz = [" << args.grid.nx << ", " << args.grid.ny << ", " << args.grid.nz << "]\n";
-    out << "boundary_conditions = ";
-    for (size_t i = 0; i < args.boundary_conditions.size(); ++i) {
-        if (i > 0) {
-            out << " ";
+        long double total = 0;
+        for (double v : grid_volumes_) {
+            total += v;
         }
-        out << to_string(args.boundary_conditions[i]);
-    }
-    out << '\n';
-    out << "boundary_values = " << join_numbers(args.boundary_values) << '\n';
-    const auto [boundary_selector_mode, boundary_selector_count] = boundary_selector_info(args.boundary_position);
-    out << "boundary_position_selector_mode = " << boundary_selector_mode << '\n';
-    out << "boundary_position_selector_count = " << boundary_selector_count << '\n';
-    out << "boundary_position_tokens = " << join_strings(args.boundary_position) << '\n';
-    out << "periodic_pair_region_count = " << region_count(args.periodic_pair) << '\n';
-    out << "periodic_pair_tokens = " << join_strings(args.periodic_pair) << '\n';
-    out << "material_folder = " << args.material_folder << '\n';
-    out << "material_folders = " << join_strings(args.material_folders) << '\n';
-    out << "material_interface_axis = " << "xyz"[args.material_interface_axis] << '\n';
-    out << "material_interface_positions_nm = "
-        << join_numbers(scale_numbers(args.material_interface_positions, 0.1)) << '\n';
-    out << "material_interface_model = " << to_string(args.material_interface_model) << '\n';
-    out << "material_interface_amm_fraction = " << (args.material_interface_model==InterfaceModel::AcousticMismatch ? 1.0 : args.material_interface_amm_fraction) << '\n';
-    out << "material_interface_parallel_bin_inv_a = " << args.material_interface_parallel_bin_inv_a << '\n';
-    out << "output_folder = " << args.output_folder << '\n';
-    out << "heat_source_enabled = " << (args.heat_source_enabled ? "true" : "false") << '\n';
-    out << "heat_source_profile = " << to_string(args.heat_source_profile) << '\n';
-    out << "heat_source_min_nm = " << join_numbers(scale_numbers(args.heat_source_min, 0.1)) << '\n';
-    out << "heat_source_max_nm = " << join_numbers(scale_numbers(args.heat_source_max, 0.1)) << '\n';
-    out << "heat_source_center_nm = " << join_numbers(scale_numbers(args.heat_source_center, 0.1)) << '\n';
-    out << "heat_source_centers_nm = " << join_numbers(scale_numbers(args.heat_source_centers, 0.1)) << '\n';
-    out << "heat_source_sigma_nm = " << join_numbers(scale_numbers(args.heat_source_sigma, 0.1)) << '\n';
-    out << "heat_source_half_width_nm = " << join_numbers(scale_numbers(args.heat_source_half_width, 0.1)) << '\n';
-    out << "heat_source_min_angstrom = " << join_numbers(args.heat_source_min) << '\n';
-    out << "heat_source_max_angstrom = " << join_numbers(args.heat_source_max) << '\n';
-    out << "heat_source_center_angstrom = " << join_numbers(args.heat_source_center) << '\n';
-    out << "heat_source_centers_angstrom = " << join_numbers(args.heat_source_centers) << '\n';
-    out << "heat_source_sigma_angstrom = " << join_numbers(args.heat_source_sigma) << '\n';
-    out << "heat_source_half_width_angstrom = " << join_numbers(args.heat_source_half_width) << '\n';
-    out << "heat_source_power_density = " << args.heat_source_power_density << '\n';
-    out << "heat_source_power_densities = " << join_numbers(args.heat_source_power_densities) << '\n';
-    out << "heat_source_frequency_min_THz = " << args.heat_source_frequency_min << '\n';
-    out << "heat_source_frequency_max_THz = " << args.heat_source_frequency_max << '\n';
-    out << "heat_source_time_profile = " << to_string(args.heat_source_time_profile) << '\n';
-    out << "mode_excitation_enabled = " << (args.mode_excitation_enabled ? "true" : "false") << '\n';
-    out << "mode_excitation_frequency_min_THz = " << args.mode_excitation_frequency_min << '\n';
-    out << "mode_excitation_frequency_max_THz = " << args.mode_excitation_frequency_max << '\n';
-    out << "mode_excitation_occupation_multiplier = " << args.mode_excitation_occupation_multiplier << '\n';
-    out << '\n';
-
-    out << "[geometry]\n";
-    out << "volume = " << volume_ << '\n';
-    out << "bounds_min = [" << bounds_min_[0] << ", " << bounds_min_[1] << ", " << bounds_min_[2] << "]\n";
-    out << "bounds_max = [" << bounds_max_[0] << ", " << bounds_max_[1] << ", " << bounds_max_[2] << "]\n";
-    out << "n_faces = " << mesh_.face_count() << '\n';
-    out << "n_facets = " << facet_count_ << '\n';
-    out << "n_simplices = " << mesh_.simplex_count() << '\n';
-    out << '\n';
-
-    out << "[grid]\n";
-    out << "count = " << grid_count_ << '\n';
-    out << "lookup = voxel_to_active_grid_o1\n";
-    out << '\n';
-
-    out << "[boundary]\n";
-    out << "reservoir_facets = " << reservoir_facets_.size() << '\n';
-    out << "rough_facets = " << rough_facets_.size() << '\n';
-    out << "periodic_pairs = " << npairs << '\n';
-    out << '\n';
-
-    out << "[files]\n";
-    out << "grid_centers_csv = " << (fs::path(args.output_folder) / "grid_centers.csv").string() << '\n';
-
-    std::ofstream centers_out(fs::path(args.output_folder) / "grid_centers.csv");
-    centers_out << "index,x_nm,y_nm,z_nm,volume_nm3\n";
-    const size_t n = grid_centers_.size();
-    for (size_t i = 0; i < n; ++i) {
-        const auto& c = grid_centers_[i];
-        const double v = (i < grid_volumes_.size()) ? grid_volumes_[i] : 0.0;
-        // Internal length unit is Angstrom; export centers in nm for user-facing outputs.
-        centers_out << i << ","
-                    << (c[0] / 10.0) << ","
-                    << (c[1] / 10.0) << ","
-                    << (c[2] / 10.0) << ","
-                    << (v / 1000.0) << "\n";
+        if (std::abs(total - volume_) > 1e-8 * volume_) {
+            throw std::runtime_error("Prism cut-cell volumes do not close");
+        }
     }
 }
 
@@ -1244,7 +788,8 @@ double SimulationDomain::reservoir_value_for_facet(int facet, double fallback) c
 
 // 函数说明：判断 facet 是否存在周期配对面。
 bool SimulationDomain::has_periodic_pair(int facet) const {
-    return facet >= 0 && facet < static_cast<int>(periodic_pair_.size()) && periodic_pair_[facet] >= 0;
+    return facet >= 0 && facet < static_cast<int>(periodic_pair_.size()) &&
+           periodic_pair_[facet] >= 0;
 }
 
 // 函数说明：返回 facet 对应的周期配对面索引。

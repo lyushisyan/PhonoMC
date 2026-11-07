@@ -16,9 +16,14 @@ struct CallawayData {
 class CallawayOperator {
 public:
     explicit CallawayOperator(const CallawayData& data);
+    // Generator action L * energy = d(energy)/dt, in eV/ps for energy in eV.
+    // Energy is the modal deviation from the fixed-reference equilibrium.
     std::vector<double> apply(const std::vector<double>& energy) const;
+    // Finite-time evolution exp(dt_ps * L) * energy, in eV.
     std::vector<double> evolve(const std::vector<double>& energy, double dt_ps) const;
+
     size_t normal_constraint_rank() const { return normal_gain_.size(); }
+
 private:
     // In x_lambda = energy_lambda / sqrt(capacity_lambda),
     // S_N = R_N - U_N U_N^T, U_N=sqrt(R_N)*orth(sqrt(R_N)*B).

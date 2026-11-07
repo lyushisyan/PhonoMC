@@ -1,7 +1,7 @@
 #pragma once
 
-#include "material/ScatteringMatrix.h"
 #include "material/CallawayOperator.h"
+#include "material/ScatteringMatrix.h"
 #include "solver/RtaCollisionOperator.h"
 
 #include <random>
@@ -26,28 +26,36 @@ struct FullMatrixCollisionResult {
 class FullMatrixCollisionOperator {
 public:
     void configure(std::vector<ScatteringMatrix> matrices,
-        const std::vector<const PhononMaterial*>& materials, double reference_temperature);
+                   const std::vector<const PhononMaterial*>& materials,
+                   double reference_temperature);
     // Reuse the modal gather/scatter path with a matrix-free Callaway kernel.
     void configure_callaway(const std::vector<const PhononMaterial*>& materials,
                             double reference_temperature);
     void configure_linearized_rta(const std::vector<const PhononMaterial*>& materials,
-                                 double reference_temperature);
+                                  double reference_temperature);
 
     // resolve_carrier_decay additionally attenuates within-mode carrier
     // variation using the relaxation diagonal. Used by periodic gradient runs;
     // the default retains the legacy cell-modal increment convention.
     FullMatrixCollisionResult apply(ParticleStorage& particles,
-        const std::vector<const PhononMaterial*>& materials,
-        const CollisionGridView& grid, double time_step_ps, double particle_volume_a3,
-        double background_temperature, std::mt19937_64& rng, bool resolve_carrier_decay = false);
+                                    const std::vector<const PhononMaterial*>& materials,
+                                    const CollisionGridView& grid,
+                                    double time_step_ps,
+                                    double particle_volume_a3,
+                                    double background_temperature,
+                                    std::mt19937_64& rng,
+                                    bool resolve_carrier_decay = false);
 
 private:
     void configure_relaxation(const std::vector<const PhononMaterial*>& materials,
-                              double reference_temperature, bool rta);
+                              double reference_temperature,
+                              bool rta);
+
     struct ModalCache {
         std::vector<int> flat_to_matrix;
         std::vector<double> hw, background, relaxation_rate;
     };
+
     std::vector<ScatteringMatrix> matrices_;
     std::vector<CallawayOperator> callaway_;
     std::vector<const PhononMaterial*> materials_;

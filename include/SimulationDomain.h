@@ -9,29 +9,47 @@
 #include <tuple>
 #include <vector>
 
+// Adapts configuration to physical geometry, boundary assignments and grid cells.
+// MeshReader returns raw file coordinates; this layer owns units and placement.
 class SimulationDomain {
 public:
     explicit SimulationDomain(const SimulationConfig& args);
 
     const SurfaceMesh& mesh() const { return mesh_; }
+
     int grid_count() const { return grid_count_; }
+
     double volume() const { return volume_; }
+
     const std::array<double, 3>& bounds_min() const { return bounds_min_; }
+
     const std::array<double, 3>& bounds_max() const { return bounds_max_; }
+
     const std::vector<std::array<double, 3>>& grid_centers() const { return grid_centers_; }
+
     const std::vector<double>& grid_volumes() const { return grid_volumes_; }
+
     const std::vector<char>& boundary_conditions() const { return facet_boundary_conditions_; }
+
     const std::vector<int>& reservoir_facets() const { return reservoir_facets_; }
+
     const std::vector<double>& reservoir_values() const { return reservoir_values_; }
+
     bool fast_grid_index_enabled() const { return fast_grid_index_enabled_; }
+
     bool is_box_geometry() const { return is_box_geometry_; }
-    bool contains_point(const std::array<double,3>& p) const { return extruded_z_ ? mesh_.contains_point_ray_cast(p) : mesh_.contains_point(p); }
+
+    bool contains_point(const std::array<double, 3>& p) const {
+        return extruded_z_ ? mesh_.contains_point_ray_cast(p) : mesh_.contains_point(p);
+    }
+
     bool analytic_box_intersection_enabled() const { return analytic_box_intersection_enabled_; }
+
     std::vector<std::array<double, 3>> sample_volume_points(int count, std::mt19937_64& rng) const;
     int fast_grid_index(const std::array<double, 3>& p) const;
-    std::tuple<std::array<double, 3>, double, int> trace_boundary_intersection(
-        const std::array<double, 3>& position,
-        const std::array<double, 3>& velocity) const;
+    std::tuple<std::array<double, 3>, double, int>
+    trace_boundary_intersection(const std::array<double, 3>& position,
+                                const std::array<double, 3>& velocity) const;
     char facet_boundary_condition(int facet) const;
     double reservoir_value_for_facet(int facet, double fallback = 300.0) const;
     bool has_periodic_pair(int facet) const;
@@ -44,15 +62,15 @@ private:
     void build_surface_mesh(const SimulationConfig& args);
     void sync_surface_mesh_properties();
     void initialize_analytic_box_intersection();
+    std::vector<int> facets_in_region(const std::array<double, 6>& box) const;
     void assign_boundary_conditions(const SimulationConfig& args);
     void build_periodic_connections(const SimulationConfig& args);
-    void initialize_grids(const SimulationConfig& args);
     void initialize_grid_cells(const SimulationConfig& args);
     void write_domain_summary(const SimulationConfig& args) const;
 
     SurfaceMesh mesh_;
-    std::array<double, 3> bounds_min_ {0.0, 0.0, 0.0};
-    std::array<double, 3> bounds_max_ {1.0, 1.0, 1.0};
+    std::array<double, 3> bounds_min_{0.0, 0.0, 0.0};
+    std::array<double, 3> bounds_max_{1.0, 1.0, 1.0};
 
     int facet_count_ = 0;
     int grid_count_ = 1;
@@ -69,13 +87,13 @@ private:
     std::vector<std::array<double, 3>> periodic_shift_;
 
     bool fast_grid_index_enabled_ = false;
-    std::array<int, 3> fast_grid_shape_ {1, 1, 1};
-    std::array<double, 3> fast_grid_inv_cell_ {0.0, 0.0, 0.0};
+    std::array<int, 3> fast_grid_shape_{1, 1, 1};
+    std::array<double, 3> fast_grid_inv_cell_{0.0, 0.0, 0.0};
     std::vector<int> cell_to_grid_index_;
     bool is_box_geometry_ = true;
     bool extruded_z_ = false;
-    std::vector<std::array<SurfaceMesh::Vec3,3>> prism_top_;
+    std::vector<std::array<SurfaceMesh::Vec3, 3>> prism_top_;
     bool analytic_box_intersection_enabled_ = false;
     // Plane order: xmin, xmax, ymin, ymax, zmin, zmax.
-    std::array<int, 6> box_plane_facets_ {-1, -1, -1, -1, -1, -1};
+    std::array<int, 6> box_plane_facets_{-1, -1, -1, -1, -1, -1};
 };

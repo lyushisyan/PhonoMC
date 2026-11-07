@@ -14,21 +14,39 @@ set(THREADS_PREFER_PTHREAD_FLAG TRUE)
 find_package(Threads REQUIRED)
 
 # File/schema parsing has no solver, SimulationConfig or OpenMP dependency.
-add_library(phonomc_material_data STATIC src/material/MaterialData.cpp src/material/ScatteringMatrix.cpp src/material/CallawayOperator.cpp)
+add_library(phonomc_material_data STATIC
+    src/material/BzQuadrature.cpp
+    src/material/MaterialData.cpp
+    src/material/ScatteringMatrix.cpp
+    src/material/CallawayOperator.cpp
+)
 target_include_directories(phonomc_material_data PUBLIC include)
-add_library(phonomc_material_io STATIC src/material/MaterialDataReader.cpp src/material/ScatteringMatrixReader.cpp)
+add_library(phonomc_material_io STATIC
+    src/material/MaterialDataReader.cpp
+    src/material/ScatteringMatrixReader.cpp
+)
 target_include_directories(phonomc_material_io PUBLIC include PRIVATE ${HDF5_INCLUDE_DIRS})
 target_link_libraries(phonomc_material_io PUBLIC phonomc_material_data ${HDF5_CXX_LIBRARIES})
 
 # In-memory physics model: no HDF5, filesystem, configuration or loading policy.
-add_library(phonomc_material STATIC src/PhononMaterial.cpp src/material/CallawayMaterial.cpp)
+add_library(phonomc_material STATIC
+    src/PhononMaterial.cpp
+    src/material/Thermodynamics.cpp
+    src/material/PhononMaterialCollisionData.cpp
+)
 target_include_directories(phonomc_material PUBLIC include)
 target_link_libraries(phonomc_material PUBLIC phonomc_material_data)
 
 # Compile the core once; all consumers inherit the same dependency configuration.
 add_library(phonomc_core STATIC
     src/SimulationConfig.cpp
+    src/config/ConfigParsing.cpp
+    src/config/ConfigValidation.cpp
+    src/config/OutputDirectory.cpp
     src/SurfaceMesh.cpp
+    src/geometry/DomainOutput.cpp
+    src/geometry/MeshReader.cpp
+    src/geometry/SurfaceSampling.cpp
     src/SimulationDomain.cpp
     src/material/MaterialFactory.cpp
     src/MonteCarloSolver.cpp
@@ -38,19 +56,23 @@ add_library(phonomc_core STATIC
     src/solver/CarrierCollisionOperator.cpp
     src/solver/NonlinearCallawayCollision.cpp
     src/solver/FullMatrixCollisionOperator.cpp
-    src/solver/FullMatrixSource.cpp
+    src/solver/PhononSourceOperatorFullMatrix.cpp
     src/solver/TemperatureGradientDrive.cpp
     src/solver/Initialization.cpp
-    src/solver/Transport.cpp
-    src/solver/Interfaces.cpp
+    src/solver/TransportOperator.cpp
+    src/solver/InterfaceInitialization.cpp
+    src/solver/LayeredMaterialLayout.cpp
+    src/solver/BoundaryInteraction.cpp
+    src/solver/InterfaceInteraction.cpp
     src/solver/InterfaceModeSampler.cpp
     src/solver/AcousticInterfaceSampler.cpp
     src/solver/ChannelCell.cpp
+    src/solver/ReservoirInjector.cpp
     src/solver/ReservoirSampler.cpp
-    src/solver/Reservoirs.cpp
-    src/solver/RoughBoundaries.cpp
+    src/solver/ReservoirInitialization.cpp
+    src/solver/RoughBoundaryInitialization.cpp
     src/solver/RoughBoundarySampler.cpp
-    src/solver/HeatSource.cpp
+    src/solver/HeatSourceDriving.cpp
     src/solver/PrescribedHeatSource.cpp
     src/solver/PhononSourceOperator.cpp
     src/solver/Diagnostics.cpp

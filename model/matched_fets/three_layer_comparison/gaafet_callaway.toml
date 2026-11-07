@@ -1,0 +1,47 @@
+# Prepared baseline, not a converged production result.
+# Same physical boundary and total device power for both devices/models.
+# Keep facets unmerged so substrate sides and upper pad sides stay separate.
+[geometry]
+model = "gaafet.stl"
+merge_coplanar_facets = false
+
+[simulation]
+particle_count = 10000000
+time_step = 0.05
+iterations = 40000
+random_seed = 12345
+grid_xyz = [52, 24, 100]
+initial_temperature = 300
+background_temperature = 300
+lifetime_temperature = "local"
+conservative_boundaries = true
+compute_kappa = false
+write_cell_heat_flux = true
+convergence_write_interval = 100
+progress_temperature_summary_only = true
+
+[scattering]
+model = "callaway"
+callaway_formulation = "nonlinear"
+
+[boundary]
+boundary_position = [[-1e-06, -1e-06, -1e-06, 1.000001, 1.000001, 1.000001], [-1e-06, -1e-06, -1e-06, 1e-06, 1.000001, 0.39999900000000005], [0.999999, -1e-06, -1e-06, 1.000001, 1.000001, 0.39999900000000005], [-1e-06, -1e-06, -1e-06, 1.000001, 1e-06, 0.39999900000000005], [-1e-06, 0.999999, -1e-06, 1.000001, 1.000001, 0.39999900000000005], [-1e-06, -1e-06, -1e-06, 1.000001, 1.000001, 1e-06], [-1e-06, -1e-06, 0.999999, 0.19230869230769232, 1.000001, 1.000001], [0.8076913076923077, -1e-06, 0.999999, 1.000001, 1.000001, 1.000001]]
+boundary_conditions = ["R", "P", "P", "P", "P", "T", "T", "T"]
+boundary_values = [1.0, 0.0, 0.0, 0.0, 0.0, 300.0, 300.0, 300.0]
+periodic_pair = [[-1e-06, -1e-06, -1e-06, 1e-06, 1.000001, 0.39999900000000005], [0.999999, -1e-06, -1e-06, 1.000001, 1.000001, 0.39999900000000005], [-1e-06, -1e-06, -1e-06, 1.000001, 1e-06, 0.39999900000000005], [-1e-06, 0.999999, -1e-06, 1.000001, 1.000001, 0.39999900000000005]]
+
+[heat_source]
+enabled = true
+profile = "gaussian"
+min = [36, 7, 24.5]
+max = [42, 17, 45.5]
+center = [39, 12, 35.0]
+sigma = [1.5, 0.0, 0.0]
+total_power = 1e-06
+spectrum = "thermal"
+time_profile = "constant"
+start_time = 0
+
+[io]
+material_folder = "../../../material/Si_ph3py_m252525_T50-800"
+output_folder = "results/gaafet_callaway"

@@ -1,7 +1,8 @@
 #pragma once
 
-#include <vector>
 #include "solver/CellParticleIndex.h"
+
+#include <vector>
 
 class PhononMaterial;
 
@@ -22,7 +23,7 @@ struct CollisionStep {
     double time_step_ps;
     double particle_volume_a3;
     bool local_lifetime_temperature;
-    double lifetime_temperature_kelvin;
+    double lifetime_temperature_kelvin; // finite, >= 0 K; local values obey the same contract
 };
 
 // Finite-step energy-conserving RTA. Owns reusable scratch, but no geometry,
@@ -31,15 +32,14 @@ struct CollisionStep {
 // reentrant: one instance per solver. Internal cell loops may use OpenMP.
 class RtaCollisionOperator {
 public:
-    double apply(
-        ParticleStorage& particles,
-        const std::vector<const PhononMaterial*>& materials,
-        const CollisionGridView& grid,
-        const CollisionStep& step);
+    double apply(ParticleStorage& particles,
+                 const std::vector<const PhononMaterial*>& materials,
+                 const CollisionGridView& grid,
+                 const CollisionStep& step);
 
 private:
     CellParticleIndex fallback_cells_;
     std::vector<double> weights_;
 };
 
-}  // namespace phonomc
+} // namespace phonomc

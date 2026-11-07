@@ -13,8 +13,8 @@
 #include <numeric>
 #include <queue>
 #include <random>
-#include <sstream>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -23,19 +23,31 @@
 namespace {
 using Vec3 = SurfaceMesh::Vec3;
 
-Vec3 add(const Vec3& a, const Vec3& b) { return {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; }
-Vec3 sub(const Vec3& a, const Vec3& b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
-Vec3 mul(const Vec3& a, double s) { return {a[0] * s, a[1] * s, a[2] * s}; }
-double dot(const Vec3& a, const Vec3& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+Vec3 add(const Vec3& a, const Vec3& b) {
+    return {a[0] + b[0], a[1] + b[1], a[2] + b[2]};
+}
+
+Vec3 sub(const Vec3& a, const Vec3& b) {
+    return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
+}
+
+Vec3 mul(const Vec3& a, double s) {
+    return {a[0] * s, a[1] * s, a[2] * s};
+}
+
+double dot(const Vec3& a, const Vec3& b) {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
 // 函数说明：计算三维叉乘，用于法向与面积方向计算。
 Vec3 cross(const Vec3& a, const Vec3& b) {
-    return {
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0]
-    };
+    return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
 }
-double norm(const Vec3& a) { return std::sqrt(dot(a, a)); }
+
+double norm(const Vec3& a) {
+    return std::sqrt(dot(a, a));
+}
+
 // 函数说明：单位化向量，服务于法向和方向几何计算。
 Vec3 normalize(const Vec3& a) {
     const double n = norm(a);
@@ -44,17 +56,20 @@ Vec3 normalize(const Vec3& a) {
     }
     return mul(a, 1.0 / n);
 }
+
 // 函数说明：逐分量最小值，用于包围盒收缩。
 Vec3 min_vec(const Vec3& a, const Vec3& b) {
     return {std::min(a[0], b[0]), std::min(a[1], b[1]), std::min(a[2], b[2])};
 }
+
 // 函数说明：逐分量最大值，用于包围盒扩展。
 Vec3 max_vec(const Vec3& a, const Vec3& b) {
     return {std::max(a[0], b[0]), std::max(a[1], b[1]), std::max(a[2], b[2])};
 }
 
 // 函数说明：计算 3x3 矩阵逆，用于晶格变换或四面体坐标变换。
-std::array<std::array<double, 3>, 3> inverse3x3(const std::array<std::array<double, 3>, 3>& m, bool& ok) {
+std::array<std::array<double, 3>, 3> inverse3x3(const std::array<std::array<double, 3>, 3>& m,
+                                                bool& ok) {
     const double a = m[0][0], b = m[0][1], c = m[0][2];
     const double d = m[1][0], e = m[1][1], f = m[1][2];
     const double g = m[2][0], h = m[2][1], i = m[2][2];
@@ -74,20 +89,14 @@ std::array<std::array<double, 3>, 3> inverse3x3(const std::array<std::array<doub
     }
     const double id = 1.0 / det;
     ok = true;
-    return {{
-        {{A * id, D * id, G * id}},
-        {{B * id, E * id, H * id}},
-        {{C * id, F * id, I * id}}
-    }};
+    return {{{{A * id, D * id, G * id}}, {{B * id, E * id, H * id}}, {{C * id, F * id, I * id}}}};
 }
 
 // 函数说明：执行 3x3 矩阵与向量乘法。
 Vec3 matvec3(const std::array<std::array<double, 3>, 3>& m, const Vec3& v) {
-    return {
-        m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
-        m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
-        m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2]
-    };
+    return {m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+            m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+            m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2]};
 }
 
 // 函数说明：将坐标量化为字符串键，支持顶点去重。
@@ -150,7 +159,8 @@ Vec3 closest_point_on_triangle(const Vec3& p, const Vec3& a, const Vec3& b, cons
 }
 
 // 函数说明：执行射线-三角形相交测试。
-bool ray_intersects_triangle(const Vec3& orig, const Vec3& dir, const Vec3& a, const Vec3& b, const Vec3& c, double& t) {
+bool ray_intersects_triangle(
+    const Vec3& orig, const Vec3& dir, const Vec3& a, const Vec3& b, const Vec3& c, double& t) {
     constexpr double eps = 1e-10;
     const Vec3 e1 = sub(b, a);
     const Vec3 e2 = sub(c, a);
@@ -175,13 +185,12 @@ bool ray_intersects_triangle(const Vec3& orig, const Vec3& dir, const Vec3& a, c
 }
 
 // 函数说明：执行射线与轴对齐包围盒相交测试，并返回近端参数。
-bool ray_intersects_aabb(
-    const Vec3& orig,
-    const Vec3& dir,
-    const Vec3& bmin,
-    const Vec3& bmax,
-    double t_max_limit,
-    double& t_near_out) {
+bool ray_intersects_aabb(const Vec3& orig,
+                         const Vec3& dir,
+                         const Vec3& bmin,
+                         const Vec3& bmax,
+                         double t_max_limit,
+                         double& t_near_out) {
     constexpr double eps = 1e-14;
     double t_near = 0.0;
     double t_far = t_max_limit;
@@ -212,7 +221,7 @@ bool ray_intersects_aabb(
     t_near_out = std::max(0.0, t_near);
     return t_near_out <= t_max_limit;
 }
-}  // namespace
+} // namespace
 
 // 函数说明：创建表面网格对象并触发几何缓存构建。
 SurfaceMesh::SurfaceMesh(std::vector<Vec3> vertices, std::vector<Tri> faces) {
@@ -261,13 +270,11 @@ void SurfaceMesh::rebuild_cached_properties() {
     compute_face_neighbors();
     compute_facet_groups();
     compute_facet_neighbors();
-    compute_interface_faces();
     compute_enclosed_volume();
 }
 
 // 函数说明：对拓扑封闭的表面以线性复杂度统一三角面绕向。
 void SurfaceMesh::orient_closed_surface() {
-    face_orientation_reliable_ = false;
     if (faces_.empty()) {
         throw std::runtime_error("Surface mesh has no faces.");
     }
@@ -291,6 +298,7 @@ void SurfaceMesh::orient_closed_surface() {
         int face = -1;
         int relation = 1;
     };
+
     // CAD T-junctions can be geometrically closed without matching edge
     // indices. Orient these triangles from local surface membership: a global
     // center is not an interior-side test for a concave solid (e.g. a FinFET
@@ -301,7 +309,9 @@ void SurfaceMesh::orient_closed_surface() {
                 const Vec3 a = vertices_[f[0]], b = vertices_[f[1]], c = vertices_[f[2]];
                 const Vec3 raw = cross(sub(b, a), sub(c, a));
                 const double length = norm(raw);
-                if (!(length > 0.0)) throw std::runtime_error("Degenerate triangle in CAD surface.");
+                if (!(length > 0.0)) {
+                    throw std::runtime_error("Degenerate triangle in CAD surface.");
+                }
                 const Vec3 normal = mul(raw, 1.0 / length);
                 const Vec3 centroid = mul(add(add(a, b), c), 1.0 / 3.0);
                 const double edge = std::min({norm(sub(b, a)), norm(sub(c, a)), norm(sub(c, b))});
@@ -310,15 +320,20 @@ void SurfaceMesh::orient_closed_surface() {
                     const double eps = std::max(1e-8, edge * factor);
                     const bool plus = contains_point_ray_cast(add(centroid, mul(normal, eps)));
                     const bool minus = contains_point_ray_cast(add(centroid, mul(normal, -eps)));
-                    if (plus == minus) continue;
-                    if (plus) std::swap(f[1], f[2]);
+                    if (plus == minus) {
+                        continue;
+                    }
+                    if (plus) {
+                        std::swap(f[1], f[2]);
+                    }
                     resolved = true;
                     break;
                 }
-                if (!resolved) throw std::runtime_error(
-                    "Cannot identify interior/exterior sides of CAD surface; check closure and overlapping faces.");
+                if (!resolved) {
+                    throw std::runtime_error("Cannot identify interior/exterior sides of CAD "
+                                             "surface; check closure and overlapping faces.");
+                }
             }
-            face_orientation_reliable_ = true;
             return;
         }
     }
@@ -355,13 +370,15 @@ void SurfaceMesh::orient_closed_surface() {
             queue.pop();
             components.back().push_back(current);
             for (const NeighborConstraint& constraint : adjacency[static_cast<size_t>(current)]) {
-                const int required = orientation[static_cast<size_t>(current)] * constraint.relation;
+                const int required =
+                    orientation[static_cast<size_t>(current)] * constraint.relation;
                 int& assigned = orientation[static_cast<size_t>(constraint.face)];
                 if (assigned == 0) {
                     assigned = required;
                     queue.push(constraint.face);
                 } else if (assigned != required) {
-                    throw std::runtime_error("Surface mesh is non-orientable or has inconsistent face winding.");
+                    throw std::runtime_error(
+                        "Surface mesh is non-orientable or has inconsistent face winding.");
                 }
             }
         }
@@ -376,7 +393,8 @@ void SurfaceMesh::orient_closed_surface() {
             const Vec3& a = vertices_[static_cast<size_t>(f[0])];
             const Vec3& b = vertices_[static_cast<size_t>(f[1])];
             const Vec3& c = vertices_[static_cast<size_t>(f[2])];
-            signed_volume6 += static_cast<long double>(orientation[static_cast<size_t>(face_index)]) *
+            signed_volume6 +=
+                static_cast<long double>(orientation[static_cast<size_t>(face_index)]) *
                 static_cast<long double>(dot(a, cross(b, c)));
         }
         if (signed_volume6 < 0.0L) {
@@ -391,7 +409,6 @@ void SurfaceMesh::orient_closed_surface() {
             std::swap(faces_[i][1], faces_[i][2]);
         }
     }
-    face_orientation_reliable_ = true;
 }
 
 // 函数说明：清理体积分解缓存，避免陈旧几何数据。
@@ -413,45 +430,34 @@ void SurfaceMesh::compute_bounding_box() {
 // 函数说明：从三角面拓扑构建边列表与面-边关系。
 void SurfaceMesh::compute_edge_list() {
     std::map<std::pair<int, int>, int> edge_map;
-    for (const auto& f : faces_) {
-        const std::array<std::array<int, 2>, 3> e {
-            std::array<int, 2> {std::min(f[0], f[1]), std::max(f[0], f[1])},
-            std::array<int, 2> {std::min(f[0], f[2]), std::max(f[0], f[2])},
-            std::array<int, 2> {std::min(f[1], f[2]), std::max(f[1], f[2])}
-        };
-        for (const auto& seg : e) {
-            edge_map.emplace(std::make_pair(seg[0], seg[1]), static_cast<int>(edge_map.size()));
-        }
-    }
-    edges_.assign(edge_map.size(), {0, 0});
-    for (const auto& [k, idx] : edge_map) {
-        edges_[idx] = {k.first, k.second};
-    }
-
-    face_edges_.assign(faces_.size(), {0, 0, 0});
-    edges_faces_.assign(edges_.size(), {});
-    for (size_t i = 0; i < faces_.size(); ++i) {
-        const auto& f = faces_[i];
-        const std::array<std::pair<int, int>, 3> e {
-            std::make_pair(std::min(f[0], f[1]), std::max(f[0], f[1])),
-            std::make_pair(std::min(f[0], f[2]), std::max(f[0], f[2])),
-            std::make_pair(std::min(f[1], f[2]), std::max(f[1], f[2]))
-        };
+    edges_.clear();
+    edges_faces_.clear();
+    face_edges_.resize(faces_.size());
+    for (size_t face = 0; face < faces_.size(); ++face) {
+        const auto& f = faces_[face];
+        // Keep first-encounter edge IDs and the original per-face edge order.
+        const std::array<std::pair<int, int>, 3> pairs{
+            std::minmax(f[0], f[1]), std::minmax(f[0], f[2]), std::minmax(f[1], f[2])};
         for (int j = 0; j < 3; ++j) {
-            const int ei = edge_map.at(e[j]);
-            face_edges_[i][j] = ei;
-            edges_faces_[ei].push_back(static_cast<int>(i));
+            const auto [it, inserted] = edge_map.emplace(pairs[j], static_cast<int>(edges_.size()));
+            if (inserted) {
+                edges_.push_back({pairs[j].first, pairs[j].second});
+                edges_faces_.emplace_back();
+            }
+            const int edge = it->second;
+            face_edges_[face][j] = edge;
+            edges_faces_[edge].push_back(static_cast<int>(face));
         }
     }
 }
 
 // 函数说明：计算每个面的法向、质心、面积与平面参数。
 void SurfaceMesh::compute_face_metrics() {
-    face_normals_.assign(faces_.size(), Vec3 {0.0, 0.0, 0.0});
-    face_centroids_.assign(faces_.size(), Vec3 {0.0, 0.0, 0.0});
+    face_normals_.assign(faces_.size(), Vec3{0.0, 0.0, 0.0});
+    face_centroids_.assign(faces_.size(), Vec3{0.0, 0.0, 0.0});
     face_areas_.assign(faces_.size(), 0.0);
     face_k_.assign(faces_.size(), 0.0);
-    face_bounds_.assign(faces_.size(), {Vec3 {0, 0, 0}, Vec3 {0, 0, 0}});
+    face_bounds_.assign(faces_.size(), {Vec3{0, 0, 0}, Vec3{0, 0, 0}});
 
     for (size_t i = 0; i < faces_.size(); ++i) {
         const auto& f = faces_[i];
@@ -460,9 +466,10 @@ void SurfaceMesh::compute_face_metrics() {
         const Vec3& c = vertices_[f[2]];
         const Vec3 n = cross(sub(b, a), sub(c, a));
         const double area2 = norm(n);
-        face_normals_[i] = (area2 > 0.0) ? mul(n, 1.0 / area2) : Vec3 {0, 0, 0};
+        face_normals_[i] = (area2 > 0.0) ? mul(n, 1.0 / area2) : Vec3{0, 0, 0};
         face_areas_[i] = area2 * 0.5;
-        face_centroids_[i] = {(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0, (a[2] + b[2] + c[2]) / 3.0};
+        face_centroids_[i] = {
+            (a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0, (a[2] + b[2] + c[2]) / 3.0};
         face_k_[i] = -dot(face_normals_[i], a);
         face_bounds_[i] = {min_vec(min_vec(a, b), c), max_vec(max_vec(a, b), c)};
     }
@@ -487,14 +494,17 @@ void SurfaceMesh::build_face_bvh() {
     constexpr int leaf_size = 8;
     std::function<int(int, int)> build = [&](int begin, int end) -> int {
         const int node_idx = static_cast<int>(face_bvh_nodes_.size());
-        face_bvh_nodes_.push_back(FaceBvhNode {});
+        face_bvh_nodes_.push_back(FaceBvhNode{});
         auto& node = face_bvh_nodes_.back();
         node.begin = begin;
         node.end = end;
 
-        Vec3 bb_min = face_bounds_[static_cast<size_t>(face_bvh_indices_[static_cast<size_t>(begin)])][0];
-        Vec3 bb_max = face_bounds_[static_cast<size_t>(face_bvh_indices_[static_cast<size_t>(begin)])][1];
-        Vec3 c_min = face_centroids_[static_cast<size_t>(face_bvh_indices_[static_cast<size_t>(begin)])];
+        Vec3 bb_min =
+            face_bounds_[static_cast<size_t>(face_bvh_indices_[static_cast<size_t>(begin)])][0];
+        Vec3 bb_max =
+            face_bounds_[static_cast<size_t>(face_bvh_indices_[static_cast<size_t>(begin)])][1];
+        Vec3 c_min =
+            face_centroids_[static_cast<size_t>(face_bvh_indices_[static_cast<size_t>(begin)])];
         Vec3 c_max = c_min;
         for (int i = begin + 1; i < end; ++i) {
             const int fi = face_bvh_indices_[static_cast<size_t>(i)];
@@ -524,14 +534,13 @@ void SurfaceMesh::build_face_bvh() {
         }
 
         const int mid = begin + count / 2;
-        std::nth_element(
-            face_bvh_indices_.begin() + begin,
-            face_bvh_indices_.begin() + mid,
-            face_bvh_indices_.begin() + end,
-            [&](int a, int b) {
-                return face_centroids_[static_cast<size_t>(a)][axis] <
-                    face_centroids_[static_cast<size_t>(b)][axis];
-            });
+        std::nth_element(face_bvh_indices_.begin() + begin,
+                         face_bvh_indices_.begin() + mid,
+                         face_bvh_indices_.begin() + end,
+                         [&](int a, int b) {
+                             return face_centroids_[static_cast<size_t>(a)][axis] <
+                                    face_centroids_[static_cast<size_t>(b)][axis];
+                         });
 
         const int left = build(begin, mid);
         const int right = build(mid, end);
@@ -564,7 +573,8 @@ void SurfaceMesh::compute_face_neighbors() {
         }
         return a[1] < b[1];
     });
-    face_adjacency_.erase(std::unique(face_adjacency_.begin(), face_adjacency_.end()), face_adjacency_.end());
+    face_adjacency_.erase(std::unique(face_adjacency_.begin(), face_adjacency_.end()),
+                          face_adjacency_.end());
 }
 
 // 函数说明：将共面面片聚类为 facet，形成边界物理面。
@@ -573,25 +583,23 @@ void SurfaceMesh::compute_facet_groups() {
     facets_.clear();
 
     auto key_of = [](const Vec3& n, double d) {
-        auto q = [](double x) { return static_cast<long long>(std::llround(x * 1e6)); };
-        return std::to_string(q(n[0])) + ":" + std::to_string(q(n[1])) + ":" + std::to_string(q(n[2])) + ":" + std::to_string(q(d));
+        auto q = [](double x) {
+            return static_cast<long long>(std::llround(x * 1e6));
+        };
+        return std::to_string(q(n[0])) + ":" + std::to_string(q(n[1])) + ":" +
+               std::to_string(q(n[2])) + ":" + std::to_string(q(d));
     };
 
-    const Vec3 center = mul(add(bounds_min_, bounds_max_), 0.5);
-    std::vector<Vec3> outward_normals(faces_.size(), Vec3 {0.0, 0.0, 0.0});
     std::unordered_map<std::string, int> key_to_bucket;
     std::vector<std::vector<int>> plane_buckets;
     plane_buckets.reserve(faces_.size());
 
     for (size_t i = 0; i < faces_.size(); ++i) {
-        Vec3 n = face_normals_[i];
-        if (!face_orientation_reliable_ && dot(n, sub(face_centroids_[i], center)) < 0.0) {
-            n = mul(n, -1.0);
-        }
-        outward_normals[i] = n;
+        const Vec3& n = face_normals_[i];
         const double d = dot(n, vertices_[faces_[i][0]]);
         const std::string key = key_of(n, d);
-        const auto [it, inserted] = key_to_bucket.emplace(key, static_cast<int>(plane_buckets.size()));
+        const auto [it, inserted] =
+            key_to_bucket.emplace(key, static_cast<int>(plane_buckets.size()));
         if (inserted) {
             plane_buckets.emplace_back();
         }
@@ -600,13 +608,15 @@ void SurfaceMesh::compute_facet_groups() {
 
     auto emit_facet_from_faces = [&](const std::vector<int>& face_indices) {
         Facet f;
-        Vec3 nsum {0.0, 0.0, 0.0};
-        Vec3 csum {0.0, 0.0, 0.0};
+        Vec3 nsum{0.0, 0.0, 0.0};
+        Vec3 csum{0.0, 0.0, 0.0};
         double area_sum = 0.0;
         f.faces = face_indices;
         for (const int fi : face_indices) {
-            nsum = add(nsum, outward_normals[static_cast<size_t>(fi)]);
-            csum = add(csum, mul(face_centroids_[static_cast<size_t>(fi)], face_areas_[static_cast<size_t>(fi)]));
+            nsum = add(nsum, face_normals_[static_cast<size_t>(fi)]);
+            csum = add(csum,
+                       mul(face_centroids_[static_cast<size_t>(fi)],
+                           face_areas_[static_cast<size_t>(fi)]));
             area_sum += face_areas_[static_cast<size_t>(fi)];
         }
         f.normal = normalize(nsum);
@@ -622,7 +632,7 @@ void SurfaceMesh::compute_facet_groups() {
     if (!merge_coplanar_facets_) {
         facets_.reserve(faces_.size());
         for (int fi = 0; fi < static_cast<int>(faces_.size()); ++fi) {
-            emit_facet_from_faces(std::vector<int> {fi});
+            emit_facet_from_faces(std::vector<int>{fi});
         }
     } else {
         std::vector<std::vector<int>> face_neighbors(faces_.size());
@@ -630,7 +640,8 @@ void SurfaceMesh::compute_facet_groups() {
         for (const auto& adj : face_adjacency_) {
             const int a = adj[0];
             const int b = adj[1];
-            if (a < 0 || b < 0 || a >= static_cast<int>(faces_.size()) || b >= static_cast<int>(faces_.size())) {
+            if (a < 0 || b < 0 || a >= static_cast<int>(faces_.size()) ||
+                b >= static_cast<int>(faces_.size())) {
                 continue;
             }
             face_neighbors[static_cast<size_t>(a)].push_back(b);
@@ -640,7 +651,8 @@ void SurfaceMesh::compute_facet_groups() {
         for (const auto& bucket : plane_buckets) {
             std::unordered_set<int> in_bucket(bucket.begin(), bucket.end());
             for (const int seed : bucket) {
-                if (seed < 0 || seed >= static_cast<int>(visited.size()) || visited[static_cast<size_t>(seed)] != 0) {
+                if (seed < 0 || seed >= static_cast<int>(visited.size()) ||
+                    visited[static_cast<size_t>(seed)] != 0) {
                     continue;
                 }
                 std::vector<int> component;
@@ -728,45 +740,11 @@ void SurfaceMesh::compute_facet_neighbors() {
         }
         return a[1] < b[1];
     });
-    facets_adjacency_.erase(std::unique(facets_adjacency_.begin(), facets_adjacency_.end()), facets_adjacency_.end());
+    facets_adjacency_.erase(std::unique(facets_adjacency_.begin(), facets_adjacency_.end()),
+                            facets_adjacency_.end());
 }
 
-// 函数说明：识别内部接口相关面集合。
-void SurfaceMesh::compute_interface_faces() {
-    interfaces_.clear();
-    interfacets_.clear();
 
-    std::vector<int> interfacet_boundary_edges;
-    for (size_t ei = 0; ei < edges_faces_.size(); ++ei) {
-        if (edges_faces_[ei].size() > 2) {
-            interfacet_boundary_edges.push_back(static_cast<int>(ei));
-        }
-    }
-
-    for (size_t fi = 0; fi < facets_boundary_edges_.size(); ++fi) {
-        const auto& b = facets_boundary_edges_[fi];
-        if (b.empty()) {
-            continue;
-        }
-        bool all_internal_boundary = true;
-        for (const int e : b) {
-            if (std::find(interfacet_boundary_edges.begin(), interfacet_boundary_edges.end(), e) == interfacet_boundary_edges.end()) {
-                all_internal_boundary = false;
-                break;
-            }
-        }
-        if (all_internal_boundary) {
-            interfacets_.push_back(static_cast<int>(fi));
-            for (const int face : facets_[fi].faces) {
-                interfaces_.push_back(face);
-            }
-        }
-    }
-    std::sort(interfaces_.begin(), interfaces_.end());
-    interfaces_.erase(std::unique(interfaces_.begin(), interfaces_.end()), interfaces_.end());
-}
-
-// 函数说明：通过封闭表面计算几何体积。
 void SurfaceMesh::compute_enclosed_volume() {
     long double signed_volume6 = 0.0L;
     for (const auto& f : faces_) {
@@ -794,15 +772,16 @@ void SurfaceMesh::build_volume_tetrahedra() {
     simplices_.clear();
     auto discard_inconsistent_decomposition = [this]() {
         const double simplex_volume = std::accumulate(
-            simplices_.begin(), simplices_.end(), 0.0,
-            [](double sum, const Simplex& simplex) { return sum + simplex.volume; });
+            simplices_.begin(), simplices_.end(), 0.0, [](double sum, const Simplex& simplex) {
+                return sum + simplex.volume;
+            });
         const double relative_error = std::abs(simplex_volume - volume_) / std::max(volume_, 1e-18);
         if (!std::isfinite(relative_error) || relative_error > 1e-3) {
             simplices_.clear();
         }
     };
     auto build_star_fallback = [this]() {
-        Vec3 center {0.0, 0.0, 0.0};
+        Vec3 center{0.0, 0.0, 0.0};
         for (const auto& v : vertices_) {
             center = add(center, v);
         }
@@ -814,19 +793,20 @@ void SurfaceMesh::build_volume_tetrahedra() {
             const Vec3 a = vertices_[f[0]];
             const Vec3 b = vertices_[f[1]];
             const Vec3 c = vertices_[f[2]];
-            const double vol = std::abs(dot(sub(a, center), cross(sub(b, center), sub(c, center)))) / 6.0;
+            const double vol =
+                std::abs(dot(sub(a, center), cross(sub(b, center), sub(c, center)))) / 6.0;
             if (vol <= 1e-16) {
                 continue;
             }
             Simplex s;
             s.v = {center, a, b, c};
             s.volume = vol;
-            s.bounds = {min_vec(min_vec(center, a), min_vec(b, c)), max_vec(max_vec(center, a), max_vec(b, c))};
-            const std::array<std::array<double, 3>, 3> A {{
-                {{a[0] - center[0], b[0] - center[0], c[0] - center[0]}},
-                {{a[1] - center[1], b[1] - center[1], c[1] - center[1]}},
-                {{a[2] - center[2], b[2] - center[2], c[2] - center[2]}}
-            }};
+            s.bounds = {min_vec(min_vec(center, a), min_vec(b, c)),
+                        max_vec(max_vec(center, a), max_vec(b, c))};
+            const std::array<std::array<double, 3>, 3> A{
+                {{{a[0] - center[0], b[0] - center[0], c[0] - center[0]}},
+                 {{a[1] - center[1], b[1] - center[1], c[1] - center[1]}},
+                 {{a[2] - center[2], b[2] - center[2], c[2] - center[2]}}}};
             bool ok = false;
             s.invA = inverse3x3(A, ok);
             if (!ok) {
@@ -861,11 +841,12 @@ void SurfaceMesh::build_volume_tetrahedra() {
     for (int ix = 0; ix < nx; ++ix) {
         for (int iy = 0; iy < ny; ++iy) {
             for (int iz = 0; iz < nz; ++iz) {
-                const Vec3 p {
-                    bounds_min_[0] + (static_cast<double>(ix) + 0.5) * ext[0] / static_cast<double>(nx),
-                    bounds_min_[1] + (static_cast<double>(iy) + 0.5) * ext[1] / static_cast<double>(ny),
-                    bounds_min_[2] + (static_cast<double>(iz) + 0.5) * ext[2] / static_cast<double>(nz)
-                };
+                const Vec3 p{bounds_min_[0] +
+                                 (static_cast<double>(ix) + 0.5) * ext[0] / static_cast<double>(nx),
+                             bounds_min_[1] +
+                                 (static_cast<double>(iy) + 0.5) * ext[1] / static_cast<double>(ny),
+                             bounds_min_[2] + (static_cast<double>(iz) + 0.5) * ext[2] /
+                                                  static_cast<double>(nz)};
                 if (!contains_point_ray_cast(p)) {
                     continue;
                 }
@@ -889,11 +870,13 @@ void SurfaceMesh::build_volume_tetrahedra() {
         ray_v.reserve(static_cast<size_t>(na * nb));
         for (int ia = 0; ia < na; ++ia) {
             for (int ib = 0; ib < nb; ++ib) {
-                Vec3 p {0.0, 0.0, 0.0};
+                Vec3 p{0.0, 0.0, 0.0};
                 p[d] = bounds_min_[d] - 1e-8 * std::max(1.0, ext[d]);
-                p[a] = bounds_min_[a] + (static_cast<double>(ia) + 0.5) * ext[a] / static_cast<double>(na);
-                p[b] = bounds_min_[b] + (static_cast<double>(ib) + 0.5) * ext[b] / static_cast<double>(nb);
-                Vec3 v {0.0, 0.0, 0.0};
+                p[a] = bounds_min_[a] +
+                       (static_cast<double>(ia) + 0.5) * ext[a] / static_cast<double>(na);
+                p[b] = bounds_min_[b] +
+                       (static_cast<double>(ib) + 0.5) * ext[b] / static_cast<double>(nb);
+                Vec3 v{0.0, 0.0, 0.0};
                 v[d] = 1.0;
                 ray_o.push_back(p);
                 ray_v.push_back(v);
@@ -968,8 +951,7 @@ void SurfaceMesh::build_volume_tetrahedra() {
         if (!iss) {
             break;
         }
-        if (i0 < 0 || i1 < 0 || i2 < 0 || i3 < 0 ||
-            i0 >= static_cast<int>(uniq_points.size()) ||
+        if (i0 < 0 || i1 < 0 || i2 < 0 || i3 < 0 || i0 >= static_cast<int>(uniq_points.size()) ||
             i1 >= static_cast<int>(uniq_points.size()) ||
             i2 >= static_cast<int>(uniq_points.size()) ||
             i3 >= static_cast<int>(uniq_points.size())) {
@@ -992,11 +974,9 @@ void SurfaceMesh::build_volume_tetrahedra() {
         s.v = {a, b, c, d};
         s.volume = vol;
         s.bounds = {min_vec(min_vec(a, b), min_vec(c, d)), max_vec(max_vec(a, b), max_vec(c, d))};
-        const std::array<std::array<double, 3>, 3> A {{
-            {{b[0] - a[0], c[0] - a[0], d[0] - a[0]}},
-            {{b[1] - a[1], c[1] - a[1], d[1] - a[1]}},
-            {{b[2] - a[2], c[2] - a[2], d[2] - a[2]}}
-        }};
+        const std::array<std::array<double, 3>, 3> A{{{{b[0] - a[0], c[0] - a[0], d[0] - a[0]}},
+                                                      {{b[1] - a[1], c[1] - a[1], d[1] - a[1]}},
+                                                      {{b[2] - a[2], c[2] - a[2], d[2] - a[2]}}}};
         bool ok = false;
         s.invA = inverse3x3(A, ok);
         if (!ok) {
@@ -1029,7 +1009,8 @@ SurfaceMesh::FaceQuery SurfaceMesh::nearest_face(const Vec3& p) const {
     q.closest = p;
     for (size_t i = 0; i < faces_.size(); ++i) {
         const auto& f = faces_[i];
-        const Vec3 cp = closest_point_on_triangle(p, vertices_[f[0]], vertices_[f[1]], vertices_[f[2]]);
+        const Vec3 cp =
+            closest_point_on_triangle(p, vertices_[f[0]], vertices_[f[1]], vertices_[f[2]]);
         const double d = norm(sub(p, cp));
         if (d < q.distance) {
             q.distance = d;
@@ -1118,7 +1099,7 @@ std::vector<SurfaceMesh::PointQuery> SurfaceMesh::nearest_point(const std::vecto
 // 函数说明：用射线法判断点是否在封闭体内部。
 bool SurfaceMesh::contains_point_ray_cast(const Vec3& p) const {
     // Ray casting in +x direction.
-    const Vec3 dir {1.0, 0.0, 0.0};
+    const Vec3 dir{1.0, 0.0, 0.0};
     std::vector<double> hits_t;
     hits_t.reserve(faces_.size());
     for (const auto& f : faces_) {
@@ -1149,8 +1130,9 @@ bool SurfaceMesh::contains_point(const Vec3& p) const {
     }
     constexpr double tol = 1e-10;
     for (const auto& s : simplices_) {
-        if (p[0] < s.bounds[0][0] - tol || p[1] < s.bounds[0][1] - tol || p[2] < s.bounds[0][2] - tol ||
-            p[0] > s.bounds[1][0] + tol || p[1] > s.bounds[1][1] + tol || p[2] > s.bounds[1][2] + tol) {
+        if (p[0] < s.bounds[0][0] - tol || p[1] < s.bounds[0][1] - tol ||
+            p[2] < s.bounds[0][2] - tol || p[0] > s.bounds[1][0] + tol ||
+            p[1] > s.bounds[1][1] + tol || p[2] > s.bounds[1][2] + tol) {
             continue;
         }
         const Vec3 b = matvec3(s.invA, sub(p, s.v[0]));
@@ -1158,8 +1140,8 @@ bool SurfaceMesh::contains_point(const Vec3& p) const {
         const double l2 = b[1];
         const double l3 = b[2];
         const double l0 = 1.0 - l1 - l2 - l3;
-        if (l0 >= -tol && l1 >= -tol && l2 >= -tol && l3 >= -tol &&
-            l0 <= 1.0 + tol && l1 <= 1.0 + tol && l2 <= 1.0 + tol && l3 <= 1.0 + tol) {
+        if (l0 >= -tol && l1 >= -tol && l2 >= -tol && l3 >= -tol && l0 <= 1.0 + tol &&
+            l1 <= 1.0 + tol && l2 <= 1.0 + tol && l3 <= 1.0 + tol) {
             return true;
         }
     }
@@ -1179,11 +1161,12 @@ std::vector<bool> SurfaceMesh::contains_point(const std::vector<Vec3>& p) const 
 }
 
 // 函数说明：沿速度方向追踪粒子到下一次边界碰撞点。
-std::tuple<Vec3, double, int> SurfaceMesh::trace_boundary_intersection(const Vec3& x, const Vec3& v) const {
+std::tuple<Vec3, double, int> SurfaceMesh::trace_boundary_intersection(const Vec3& x,
+                                                                       const Vec3& v) const {
     constexpr double eps = 1e-10;
     double best_t = std::numeric_limits<double>::infinity();
     int best_face = -1;
-    Vec3 best_p {0.0, 0.0, 0.0};
+    Vec3 best_p{0.0, 0.0, 0.0};
 
     auto try_face = [&](int face_idx) {
         const size_t i = static_cast<size_t>(face_idx);
@@ -1202,7 +1185,8 @@ std::tuple<Vec3, double, int> SurfaceMesh::trace_boundary_intersection(const Vec
             return;
         }
         const auto& f = faces_[i];
-        const Vec3 cp = closest_point_on_triangle(p, vertices_[f[0]], vertices_[f[1]], vertices_[f[2]]);
+        const Vec3 cp =
+            closest_point_on_triangle(p, vertices_[f[0]], vertices_[f[1]], vertices_[f[2]]);
         if (norm(sub(cp, p)) > 1e-7) {
             return;
         }
@@ -1249,7 +1233,8 @@ std::tuple<Vec3, double, int> SurfaceMesh::trace_boundary_intersection(const Vec
                 }
                 double t_near = 0.0;
                 const auto& cnode = face_bvh_nodes_[static_cast<size_t>(child)];
-                if (!ray_intersects_aabb(x, v, cnode.bounds_min, cnode.bounds_max, best_t, t_near)) {
+                if (!ray_intersects_aabb(
+                        x, v, cnode.bounds_min, cnode.bounds_max, best_t, t_near)) {
                     return;
                 }
                 if (t_near < near_t) {
@@ -1284,9 +1269,9 @@ std::tuple<Vec3, double, int> SurfaceMesh::trace_boundary_intersection(const Vec
 }
 
 // 函数说明：对一批射线重复追踪并收集所有边界交点事件。
-std::tuple<std::vector<Vec3>, std::vector<double>, std::vector<int>, std::vector<int>> SurfaceMesh::trace_boundary_intersections(
-    const std::vector<Vec3>& x,
-    const std::vector<Vec3>& v) const {
+std::tuple<std::vector<Vec3>, std::vector<double>, std::vector<int>, std::vector<int>>
+SurfaceMesh::trace_boundary_intersections(const std::vector<Vec3>& x,
+                                          const std::vector<Vec3>& v) const {
     if (x.size() != v.size()) {
         throw std::runtime_error("trace_boundary_intersections requires x.size()==v.size().");
     }
@@ -1323,154 +1308,6 @@ std::tuple<std::vector<Vec3>, std::vector<double>, std::vector<int>, std::vector
         }
     }
     return {xc, tc, fc, ic};
-}
-
-// 函数说明：按面面积加权在边界表面采样粒子注入点。
-std::vector<Vec3> SurfaceMesh::sample_surface_points(int n, const std::vector<int>& facets) const {
-    std::mt19937_64 rng(std::random_device{}());
-    return sample_surface_points(n, facets, rng);
-}
-
-std::vector<Vec3> SurfaceMesh::sample_surface_points(
-    int n,
-    const std::vector<int>& facets,
-    std::mt19937_64& rng) const {
-    if (n <= 0) {
-        return {};
-    }
-    std::vector<int> face_pool;
-    if (facets.empty()) {
-        face_pool.resize(faces_.size());
-        for (size_t i = 0; i < faces_.size(); ++i) {
-            face_pool[i] = static_cast<int>(i);
-        }
-    } else {
-        for (const int fct : facets) {
-            if (fct < 0 || fct >= static_cast<int>(facets_.size())) {
-                continue;
-            }
-            for (const int fi : facets_[fct].faces) {
-                face_pool.push_back(fi);
-            }
-        }
-    }
-    if (face_pool.empty()) {
-        throw std::runtime_error("No faces available for surface sampling.");
-    }
-
-    std::vector<double> w;
-    w.reserve(face_pool.size());
-    for (const int fi : face_pool) {
-        w.push_back(std::max(face_areas_[fi], 0.0));
-    }
-    std::discrete_distribution<int> face_pick(w.begin(), w.end());
-    std::uniform_real_distribution<double> uni(0.0, 1.0);
-
-    std::vector<Vec3> out;
-    out.reserve(static_cast<size_t>(n));
-    for (int i = 0; i < n; ++i) {
-        const int pick = face_pool[face_pick(rng)];
-        const auto& tri = faces_[pick];
-        const Vec3 a = vertices_[tri[0]];
-        const Vec3 b = vertices_[tri[1]];
-        const Vec3 c = vertices_[tri[2]];
-        const double r1 = uni(rng);
-        const double r2 = uni(rng);
-        const double sr1 = std::sqrt(r1);
-        const double w0 = 1.0 - sr1;
-        const double w1 = sr1 * (1.0 - r2);
-        const double w2 = sr1 * r2;
-        out.push_back({
-            w0 * a[0] + w1 * b[0] + w2 * c[0],
-            w0 * a[1] + w1 * b[1] + w2 * c[1],
-            w0 * a[2] + w1 * b[2] + w2 * c[2]
-        });
-    }
-    return out;
-}
-
-// 函数说明：用拒绝采样在体域内生成粒子初始位置。
-std::vector<Vec3> SurfaceMesh::sample_volume_points_naive(int n) const {
-    std::mt19937_64 rng(std::random_device{}());
-    return sample_volume_points_naive(n, rng);
-}
-
-std::vector<Vec3> SurfaceMesh::sample_volume_points_naive(int n, std::mt19937_64& rng) const {
-    if (n <= 0) {
-        return {};
-    }
-    std::uniform_real_distribution<double> ux(bounds_min_[0], bounds_max_[0]);
-    std::uniform_real_distribution<double> uy(bounds_min_[1], bounds_max_[1]);
-    std::uniform_real_distribution<double> uz(bounds_min_[2], bounds_max_[2]);
-
-    std::vector<Vec3> out;
-    out.reserve(static_cast<size_t>(n));
-    // Promote before multiplication: 40 million carriers need a trial budget
-    // larger than INT_MAX, even though the accepted sample count fits in int.
-    const std::int64_t max_trials = std::max<std::int64_t>(10000, std::int64_t{n} * 200);
-    std::int64_t trials = 0;
-    while (static_cast<int>(out.size()) < n && trials < max_trials) {
-        ++trials;
-        const Vec3 p {ux(rng), uy(rng), uz(rng)};
-        if (contains_point_ray_cast(p)) {
-            out.push_back(p);
-        }
-    }
-    if (static_cast<int>(out.size()) < n) {
-        throw std::runtime_error("sample_volume_points_naive: insufficient accepted samples.");
-    }
-    return out;
-}
-
-// 函数说明：优先基于四面体体积分布进行体内高效采样。
-std::vector<Vec3> SurfaceMesh::sample_volume_points(int n) const {
-    std::mt19937_64 rng(std::random_device{}());
-    return sample_volume_points(n, rng);
-}
-
-std::vector<Vec3> SurfaceMesh::sample_volume_points(int n, std::mt19937_64& rng) const {
-    if (n <= 0) {
-        return {};
-    }
-    ensure_volume_tetrahedra();
-    if (simplices_.empty()) {
-        return sample_volume_points_naive(n, rng);
-    }
-
-    std::vector<double> w;
-    w.reserve(simplices_.size());
-    for (const auto& s : simplices_) {
-        w.push_back(std::max(s.volume, 0.0));
-    }
-    const double wsum = std::accumulate(w.begin(), w.end(), 0.0);
-    if (wsum <= 0.0) {
-        return sample_volume_points_naive(n, rng);
-    }
-
-    std::discrete_distribution<int> simplex_pick(w.begin(), w.end());
-    std::uniform_real_distribution<double> uni(0.0, 1.0);
-
-    std::vector<Vec3> out;
-    out.reserve(static_cast<size_t>(n));
-    for (int i = 0; i < n; ++i) {
-        const auto& s = simplices_[simplex_pick(rng)];
-        // Dirichlet(1,1,1,1) via normalized exponential.
-        double a0 = -std::log(std::max(uni(rng), 1e-15));
-        double a1 = -std::log(std::max(uni(rng), 1e-15));
-        double a2 = -std::log(std::max(uni(rng), 1e-15));
-        double a3 = -std::log(std::max(uni(rng), 1e-15));
-        const double sum = a0 + a1 + a2 + a3;
-        a0 /= sum;
-        a1 /= sum;
-        a2 /= sum;
-        a3 /= sum;
-        out.push_back({
-            a0 * s.v[0][0] + a1 * s.v[1][0] + a2 * s.v[2][0] + a3 * s.v[3][0],
-            a0 * s.v[0][1] + a1 * s.v[1][1] + a2 * s.v[2][1] + a3 * s.v[3][1],
-            a0 * s.v[0][2] + a1 * s.v[1][2] + a2 * s.v[2][2] + a3 * s.v[3][2]
-        });
-    }
-    return out;
 }
 
 // 函数说明：将三角面索引映射到所属 facet。
@@ -1576,7 +1413,8 @@ void SurfaceMesh::merge_duplicate_vertices(double tol) {
     new_vertices.reserve(vertices_.size());
     for (size_t i = 0; i < vertices_.size(); ++i) {
         const auto& v = vertices_[i];
-        const std::string key = std::to_string(q(v[0])) + ":" + std::to_string(q(v[1])) + ":" + std::to_string(q(v[2]));
+        const std::string key =
+            std::to_string(q(v[0])) + ":" + std::to_string(q(v[1])) + ":" + std::to_string(q(v[2]));
         auto it = vmap.find(key);
         if (it == vmap.end()) {
             const int idx = static_cast<int>(new_vertices.size());
@@ -1590,7 +1428,7 @@ void SurfaceMesh::merge_duplicate_vertices(double tol) {
     std::vector<Tri> reindexed_faces;
     reindexed_faces.reserve(faces_.size());
     for (const auto& f : faces_) {
-        Tri r {old_to_new[f[0]], old_to_new[f[1]], old_to_new[f[2]]};
+        Tri r{old_to_new[f[0]], old_to_new[f[1]], old_to_new[f[2]]};
         if (r[0] == r[1] || r[0] == r[2] || r[1] == r[2]) {
             continue;
         }
@@ -1630,11 +1468,15 @@ void SurfaceMesh::write_stl(const std::string& path, const std::string& name) co
     out.precision(6);
     for (size_t i = 0; i < faces_.size(); ++i) {
         const auto& f = faces_[i];
-        out << "facet normal " << face_normals_[i][0] << " " << face_normals_[i][1] << " " << face_normals_[i][2] << '\n';
+        out << "facet normal " << face_normals_[i][0] << " " << face_normals_[i][1] << " "
+            << face_normals_[i][2] << '\n';
         out << "    outer loop\n";
-        out << "        vertex " << vertices_[f[0]][0] << " " << vertices_[f[0]][1] << " " << vertices_[f[0]][2] << '\n';
-        out << "        vertex " << vertices_[f[1]][0] << " " << vertices_[f[1]][1] << " " << vertices_[f[1]][2] << '\n';
-        out << "        vertex " << vertices_[f[2]][0] << " " << vertices_[f[2]][1] << " " << vertices_[f[2]][2] << '\n';
+        out << "        vertex " << vertices_[f[0]][0] << " " << vertices_[f[0]][1] << " "
+            << vertices_[f[0]][2] << '\n';
+        out << "        vertex " << vertices_[f[1]][0] << " " << vertices_[f[1]][1] << " "
+            << vertices_[f[1]][2] << '\n';
+        out << "        vertex " << vertices_[f[2]][0] << " " << vertices_[f[2]][1] << " "
+            << vertices_[f[2]][2] << '\n';
         out << "    endloop\n";
         out << "endfacet\n";
     }

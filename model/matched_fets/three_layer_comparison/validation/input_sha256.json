@@ -1,0 +1,10 @@
+{
+  "model/matched_fets/three_layer_comparison/gaafet_rta.toml": "690514637fab499c19c8a8cee1c4b933e97d94bc30571967838d6aeacc40d2a2",
+  "model/matched_fets/three_layer_comparison/finfet_rta.toml": "f961da23a11d2dc0ca645aa10c03e8a414ebddfda70d277b74735a806b428f1c",
+  "model/matched_fets/three_layer_comparison/finfet_callaway.toml": "897e1b91211544256e52ba10b509d07aca9b07c183e73486aba7e78ed23d5e49",
+  "model/matched_fets/three_layer_comparison/gaafet_callaway.toml": "1a31930d028d671725944e7dd92f28505d3f3809b52a315201fb8900df8524aa",
+  "model/matched_fets/three_layer_comparison/finfet.stl": "ee119a97002d415ea405fc4c552211a244968d60dada2818badae94d8e9a19ab",
+  "model/matched_fets/three_layer_comparison/gaafet.stl": "f6ce50542589771ec24cf38633e9ac25f88d79d5fb191d2cae17887ff39f9def",
+  "tools/prepare_three_layer_fets.py": "7c7fe4bb682943147750894b89867a49ec856cc5b6cf8356a3e53493105ef144",
+  "tools/validate_three_layer_fets.cpp": "bcd26aab9d0ed1ddcc060951dd764422b081c0c6930c02b54690fd2f314f9c4a"
+}

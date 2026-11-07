@@ -1,0 +1,78 @@
+{
+  "selected_profile": "gaussian",
+  "transverse_profile": "uniform",
+  "solver_axis_cutoff_sigma": 2,
+  "transport_simulated": false,
+  "power_is_reference_value": true,
+  "devices": {
+    "FinFET": {
+      "configuration": {
+        "enabled": true,
+        "profile": "gaussian",
+        "center": [
+          39.0,
+          12.0,
+          30.0
+        ],
+        "sigma": [
+          1.5,
+          0.0,
+          0.0
+        ],
+        "min": [
+          36.0,
+          9.0,
+          20.0
+        ],
+        "max": [
+          42.0,
+          15.0,
+          40.0
+        ],
+        "total_power": 1e-06,
+        "spectrum": "thermal",
+        "time_profile": "constant",
+        "start_time": 0
+      },
+      "sampled_layer_power_fractions": [
+        1.0
+      ],
+      "spatial_weighted_volume_nm3": 432.4421609752068
+    },
+    "GAAFET": {
+      "configuration": {
+        "enabled": true,
+        "profile": "gaussian",
+        "center": [
+          39.0,
+          12.0,
+          35.0
+        ],
+        "sigma": [
+          1.5,
+          0.0,
+          0.0
+        ],
+        "min": [
+          36.0,
+          7.0,
+          26.0
+        ],
+        "max": [
+          42.0,
+          17.0,
+          44.0
+        ],
+        "total_power": 1e-06,
+        "spectrum": "thermal",
+        "time_profile": "constant",
+        "start_time": 0
+      },
+      "sampled_layer_power_fractions": [
+        0.5,
+        0.5
+      ],
+      "spatial_weighted_volume_nm3": 432.4421609752068
+    }
+  }
+}

@@ -1,0 +1,457 @@
+{
+  "units": "nm",
+  "box_order": [
+    "xmin",
+    "xmax",
+    "ymin",
+    "ymax",
+    "zmin",
+    "zmax"
+  ],
+  "parameters": {
+    "channel_length": 32.0,
+    "pad_length": 10.0,
+    "pad_width": 24.0,
+    "pad_height": 30.0,
+    "fin_width": 6.0,
+    "fin_height": 20.0,
+    "sheet_width": 10.0,
+    "sheet_height": 6.0,
+    "substrate_thickness": 20.0,
+    "margin_x": 0.0,
+    "margin_y": 0.0,
+    "sheet_count": 2,
+    "substrate_size_nm": [
+      52.0,
+      24.0,
+      20.0
+    ]
+  },
+  "sheet_gap_nm": 6.0,
+  "devices": {
+    "FinFET": {
+      "boxes": {
+        "substrate": [
+          [
+            0,
+            52.0,
+            0,
+            24.0,
+            0,
+            20.0
+          ]
+        ],
+        "source": [
+          [
+            0.0,
+            10.0,
+            0.0,
+            24.0,
+            20.0,
+            50.0
+          ]
+        ],
+        "drain": [
+          [
+            42.0,
+            52.0,
+            0.0,
+            24.0,
+            20.0,
+            50.0
+          ]
+        ],
+        "channel": [
+          [
+            10.0,
+            42.0,
+            9.0,
+            15.0,
+            20.0,
+            40.0
+          ]
+        ]
+      },
+      "validation": {
+        "finfet_with_substrate.stl": {
+          "triangles": 124,
+          "vertices": 64,
+          "closed_manifold": true,
+          "consistent_outward_winding": true,
+          "connected": true,
+          "volume_nm3": 43200.0,
+          "expected_volume_nm3": 43200.0,
+          "bounds_nm": [
+            [
+              0.0,
+              52.0
+            ],
+            [
+              0.0,
+              24.0
+            ],
+            [
+              0.0,
+              50.0
+            ]
+          ]
+        },
+        "finfet_parts/substrate_1.stl": {
+          "triangles": 12,
+          "vertices": 8,
+          "closed_manifold": true,
+          "consistent_outward_winding": true,
+          "connected": true,
+          "volume_nm3": 24960.0,
+          "expected_volume_nm3": 24960.0,
+          "bounds_nm": [
+            [
+              0.0,
+              52.0
+            ],
+            [
+              0.0,
+              24.0
+            ],
+            [
+              0.0,
+              20.0
+            ]
+          ]
+        },
+        "finfet_parts/source_1.stl": {
+          "triangles": 12,
+          "vertices": 8,
+          "closed_manifold": true,
+          "consistent_outward_winding": true,
+          "connected": true,
+          "volume_nm3": 7200.0,
+          "expected_volume_nm3": 7200.0,
+          "bounds_nm": [
+            [
+              0.0,
+              10.0
+            ],
+            [
+              0.0,
+              24.0
+            ],
+            [
+              20.0,
+              50.0
+            ]
+          ]
+        },
+        "finfet_parts/drain_1.stl": {
+          "triangles": 12,
+          "vertices": 8,
+          "closed_manifold": true,
+          "consistent_outward_winding": true,
+          "connected": true,
+          "volume_nm3": 7200.0,
+          "expected_volume_nm3": 7200.0,
+          "bounds_nm": [
+            [
+              42.0,
+              52.0
+            ],
+            [
+              0.0,
+              24.0
+            ],
+            [
+              20.0,
+              50.0
+            ]
+          ]
+        },
+        "finfet_parts/channel_1.stl": {
+          "triangles": 12,
+          "vertices": 8,
+          "closed_manifold": true,
+          "consistent_outward_winding": true,
+          "connected": true,
+          "volume_nm3": 3840.0,
+          "expected_volume_nm3": 3840.0,
+          "bounds_nm": [
+            [
+              10.0,
+              42.0
+            ],
+            [
+              9.0,
+              15.0
+            ],
+            [
+              20.0,
+              40.0
+            ]
+          ]
+        }
+      },
+      "periodic_geometry": {
+        "x": {
+          "translation_nm": [
+            52.0,
+            0.0,
+            0.0
+          ],
+          "area_each_nm2": 1200.0,
+          "triangle_counts": [
+            18,
+            18
+          ],
+          "projected_boundaries_identical": true,
+          "opposite_normals": true,
+          "solver_pairing_verified": false
+        },
+        "y": {
+          "translation_nm": [
+            0.0,
+            24.0,
+            0.0
+          ],
+          "area_each_nm2": 1640.0,
+          "triangle_counts": [
+            14,
+            14
+          ],
+          "projected_boundaries_identical": true,
+          "opposite_normals": true,
+          "solver_pairing_verified": false
+        }
+      },
+      "total_channel_area_nm2": 120.0,
+      "channel_volume_nm3": 3840.0
+    },
+    "GAAFET": {
+      "boxes": {
+        "substrate": [
+          [
+            0,
+            52.0,
+            0,
+            24.0,
+            0,
+            20.0
+          ]
+        ],
+        "source": [
+          [
+            0.0,
+            10.0,
+            0.0,
+            24.0,
+            20.0,
+            50.0
+          ]
+        ],
+        "drain": [
+          [
+            42.0,
+            52.0,
+            0.0,
+            24.0,
+            20.0,
+            50.0
+          ]
+        ],
+        "channel": [
+          [
+            10.0,
+            42.0,
+            7.0,
+            17.0,
+            26.0,
+            32.0
+          ],
+          [
+            10.0,
+            42.0,
+            7.0,
+            17.0,
+            38.0,
+            44.0
+          ]
+        ]
+      },
+      "validation": {
+        "gaafet_with_substrate.stl": {
+          "triangles": 228,
+          "vertices": 112,
+          "closed_manifold": true,
+          "consistent_outward_winding": true,
+          "connected": true,
+          "volume_nm3": 43200.00000000001,
+          "expected_volume_nm3": 43200.0,
+          "bounds_nm": [
+            [
+              0.0,
+              52.0
+            ],
+            [
+              0.0,
+              24.0
+            ],
+            [
+              0.0,
+              50.0
+            ]
+          ]
+        },
+        "gaafet_parts/substrate_1.stl": {
+          "triangles": 12,
+          "vertices": 8,
+          "closed_manifold": true,
+          "consistent_outward_winding": true,
+          "connected": true,
+          "volume_nm3": 24960.0,
+          "expected_volume_nm3": 24960.0,
+          "bounds_nm": [
+            [
+              0.0,
+              52.0
+            ],
+            [
+              0.0,
+              24.0
+            ],
+            [
+              0.0,
+              20.0
+            ]
+          ]
+        },
+        "gaafet_parts/source_1.stl": {
+          "triangles": 12,
+          "vertices": 8,
+          "closed_manifold": true,
+          "consistent_outward_winding": true,
+          "connected": true,
+          "volume_nm3": 7200.0,
+          "expected_volume_nm3": 7200.0,
+          "bounds_nm": [
+            [
+              0.0,
+              10.0
+            ],
+            [
+              0.0,
+              24.0
+            ],
+            [
+              20.0,
+              50.0
+            ]
+          ]
+        },
+        "gaafet_parts/drain_1.stl": {
+          "triangles": 12,
+          "vertices": 8,
+          "closed_manifold": true,
+          "consistent_outward_winding": true,
+          "connected": true,
+          "volume_nm3": 7200.0,
+          "expected_volume_nm3": 7200.0,
+          "bounds_nm": [
+            [
+              42.0,
+              52.0
+            ],
+            [
+              0.0,
+              24.0
+            ],
+            [
+              20.0,
+              50.0
+            ]
+          ]
+        },
+        "gaafet_parts/channel_1.stl": {
+          "triangles": 12,
+          "vertices": 8,
+          "closed_manifold": true,
+          "consistent_outward_winding": true,
+          "connected": true,
+          "volume_nm3": 1920.0,
+          "expected_volume_nm3": 1920.0,
+          "bounds_nm": [
+            [
+              10.0,
+              42.0
+            ],
+            [
+              7.0,
+              17.0
+            ],
+            [
+              26.0,
+              32.0
+            ]
+          ]
+        },
+        "gaafet_parts/channel_2.stl": {
+          "triangles": 12,
+          "vertices": 8,
+          "closed_manifold": true,
+          "consistent_outward_winding": true,
+          "connected": true,
+          "volume_nm3": 1919.9999999999995,
+          "expected_volume_nm3": 1920.0,
+          "bounds_nm": [
+            [
+              10.0,
+              42.0
+            ],
+            [
+              7.0,
+              17.0
+            ],
+            [
+              38.0,
+              44.0
+            ]
+          ]
+        }
+      },
+      "periodic_geometry": {
+        "x": {
+          "translation_nm": [
+            52.0,
+            0.0,
+            0.0
+          ],
+          "area_each_nm2": 1200.0,
+          "triangle_counts": [
+            36,
+            36
+          ],
+          "projected_boundaries_identical": true,
+          "opposite_normals": true,
+          "solver_pairing_verified": false
+        },
+        "y": {
+          "translation_nm": [
+            0.0,
+            24.0,
+            0.0
+          ],
+          "area_each_nm2": 1640.0,
+          "triangle_counts": [
+            26,
+            26
+          ],
+          "projected_boundaries_identical": true,
+          "opposite_normals": true,
+          "solver_pairing_verified": false
+        }
+      },
+      "total_channel_area_nm2": 120.0,
+      "channel_volume_nm3": 3840.0
+    }
+  },
+  "transport_simulated": false,
+  "material_assignment": null,
+  "gate_and_oxide_included": false
+}

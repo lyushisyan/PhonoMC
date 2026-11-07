@@ -1,0 +1,419 @@
+{
+  "units": "nm",
+  "box_order": [
+    "xmin",
+    "xmax",
+    "ymin",
+    "ymax",
+    "zmin",
+    "zmax"
+  ],
+  "source_geometry_sha256": "58563c1f90e7b8e9beb20b69f567ede1c18d8673c8b0dcf3f664c15cd1599a36",
+  "sheet_count": 3,
+  "sheet_gap_nm": 4.5,
+  "bounds_size_nm": [
+    52,
+    24,
+    50
+  ],
+  "grid_xyz": [
+    52,
+    24,
+    100
+  ],
+  "grid_spacing_nm": [
+    1,
+    1,
+    0.5
+  ],
+  "material": {
+    "directory": "../../../material/Si_ph3py_m252525_T50-800",
+    "temperature_K": [
+      50.0,
+      100.0,
+      150.0,
+      200.0,
+      250.0,
+      300.0,
+      350.0,
+      400.0,
+      450.0,
+      500.0,
+      550.0,
+      600.0,
+      650.0,
+      700.0,
+      750.0,
+      800.0
+    ],
+    "rate_shape": [
+      16,
+      15625,
+      6
+    ],
+    "NU_sum_verified": true,
+    "sha256": {
+      "POSCAR": "c3b768cc80b5a9e03abe887f4b545cd20089563b9975754a5d32ec084121105f",
+      "kappa-fbz.hdf5": "f3b3803d7fbb8b65a485fc163add092692badae76efced0022aa318e53aa13d1"
+    }
+  },
+  "total_power_per_device_W": 1e-06,
+  "boundary": {
+    "selectors": [
+      [
+        -1e-06,
+        -1e-06,
+        -1e-06,
+        1.000001,
+        1.000001,
+        1.000001
+      ],
+      [
+        -1e-06,
+        -1e-06,
+        -1e-06,
+        1e-06,
+        1.000001,
+        0.39999900000000005
+      ],
+      [
+        0.999999,
+        -1e-06,
+        -1e-06,
+        1.000001,
+        1.000001,
+        0.39999900000000005
+      ],
+      [
+        -1e-06,
+        -1e-06,
+        -1e-06,
+        1.000001,
+        1e-06,
+        0.39999900000000005
+      ],
+      [
+        -1e-06,
+        0.999999,
+        -1e-06,
+        1.000001,
+        1.000001,
+        0.39999900000000005
+      ],
+      [
+        -1e-06,
+        -1e-06,
+        -1e-06,
+        1.000001,
+        1.000001,
+        1e-06
+      ],
+      [
+        -1e-06,
+        -1e-06,
+        0.999999,
+        0.19230869230769232,
+        1.000001,
+        1.000001
+      ],
+      [
+        0.8076913076923077,
+        -1e-06,
+        0.999999,
+        1.000001,
+        1.000001,
+        1.000001
+      ]
+    ],
+    "conditions": [
+      "R",
+      "P",
+      "P",
+      "P",
+      "P",
+      "T",
+      "T",
+      "T"
+    ],
+    "values": [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      300.0,
+      300.0,
+      300.0
+    ],
+    "periodic_pair": [
+      [
+        -1e-06,
+        -1e-06,
+        -1e-06,
+        1e-06,
+        1.000001,
+        0.39999900000000005
+      ],
+      [
+        0.999999,
+        -1e-06,
+        -1e-06,
+        1.000001,
+        1.000001,
+        0.39999900000000005
+      ],
+      [
+        -1e-06,
+        -1e-06,
+        -1e-06,
+        1.000001,
+        1e-06,
+        0.39999900000000005
+      ],
+      [
+        -1e-06,
+        0.999999,
+        -1e-06,
+        1.000001,
+        1.000001,
+        0.39999900000000005
+      ]
+    ],
+    "period_nm": [
+      52,
+      24
+    ],
+    "periodic_height_nm": [
+      0,
+      20
+    ],
+    "merge_coplanar_facets": false,
+    "conservative_boundaries": true,
+    "roughness_is_not_fully_diffuse": true
+  },
+  "devices": {
+    "FinFET": {
+      "boxes": {
+        "substrate": [
+          [
+            0,
+            52.0,
+            0,
+            24.0,
+            0,
+            20.0
+          ]
+        ],
+        "source": [
+          [
+            0.0,
+            10.0,
+            0.0,
+            24.0,
+            20.0,
+            50.0
+          ]
+        ],
+        "drain": [
+          [
+            42.0,
+            52.0,
+            0.0,
+            24.0,
+            20.0,
+            50.0
+          ]
+        ],
+        "channel": [
+          [
+            10.0,
+            42.0,
+            9.0,
+            15.0,
+            20.0,
+            40.0
+          ]
+        ]
+      },
+      "mesh": {
+        "triangles": 124,
+        "vertices": 64,
+        "closed_manifold": true,
+        "consistent_outward_winding": true,
+        "connected": true,
+        "volume_nm3": 43200.0,
+        "expected_volume_nm3": 43200.0,
+        "bounds_nm": [
+          [
+            0.0,
+            52.0
+          ],
+          [
+            0.0,
+            24.0
+          ],
+          [
+            0.0,
+            50.0
+          ]
+        ]
+      },
+      "mesh_sha256": "ee119a97002d415ea405fc4c552211a244968d60dada2818badae94d8e9a19ab",
+      "channel_area_nm2": 120.0,
+      "channel_volume_nm3": 3840.0,
+      "layer_power_W": [
+        1e-06
+      ],
+      "source": {
+        "enabled": true,
+        "profile": "gaussian",
+        "min": [
+          36,
+          9.0,
+          20.0
+        ],
+        "max": [
+          42,
+          15.0,
+          40.0
+        ],
+        "center": [
+          39,
+          12,
+          30.0
+        ],
+        "sigma": [
+          1.5,
+          0.0,
+          0.0
+        ],
+        "total_power": 1e-06,
+        "spectrum": "thermal",
+        "time_profile": "constant",
+        "start_time": 0
+      }
+    },
+    "GAAFET": {
+      "boxes": {
+        "substrate": [
+          [
+            0,
+            52.0,
+            0,
+            24.0,
+            0,
+            20.0
+          ]
+        ],
+        "source": [
+          [
+            0.0,
+            10.0,
+            0.0,
+            24.0,
+            20.0,
+            50.0
+          ]
+        ],
+        "drain": [
+          [
+            42.0,
+            52.0,
+            0.0,
+            24.0,
+            20.0,
+            50.0
+          ]
+        ],
+        "channel": [
+          [
+            10,
+            42,
+            7,
+            17,
+            24.5,
+            28.5
+          ],
+          [
+            10,
+            42,
+            7,
+            17,
+            33.0,
+            37.0
+          ],
+          [
+            10,
+            42,
+            7,
+            17,
+            41.5,
+            45.5
+          ]
+        ]
+      },
+      "mesh": {
+        "triangles": 296,
+        "vertices": 144,
+        "closed_manifold": true,
+        "consistent_outward_winding": true,
+        "connected": true,
+        "volume_nm3": 43200.0,
+        "expected_volume_nm3": 43200.0,
+        "bounds_nm": [
+          [
+            0.0,
+            52.0
+          ],
+          [
+            0.0,
+            24.0
+          ],
+          [
+            0.0,
+            50.0
+          ]
+        ]
+      },
+      "mesh_sha256": "f6ce50542589771ec24cf38633e9ac25f88d79d5fb191d2cae17887ff39f9def",
+      "channel_area_nm2": 120.0,
+      "channel_volume_nm3": 3840.0,
+      "layer_power_W": [
+        3.333333333333333e-07,
+        3.333333333333333e-07,
+        3.333333333333333e-07
+      ],
+      "source": {
+        "enabled": true,
+        "profile": "gaussian",
+        "min": [
+          36,
+          7,
+          24.5
+        ],
+        "max": [
+          42,
+          17,
+          45.5
+        ],
+        "center": [
+          39,
+          12,
+          35.0
+        ],
+        "sigma": [
+          1.5,
+          0.0,
+          0.0
+        ],
+        "total_power": 1e-06,
+        "spectrum": "thermal",
+        "time_profile": "constant",
+        "start_time": 0
+      }
+    }
+  },
+  "transport_simulated": false,
+  "solver_audit_path": "validation/solver_audit.json",
+  "solver_audit_must_be_rerun_after_generation": true
+}

@@ -1,10 +1,11 @@
 #pragma once
 
 #include "SimulationConfig.h"
-#include <array>
-#include <vector>
-#include <random>
 #include "solver/CellParticleIndex.h"
+
+#include <array>
+#include <random>
+#include <vector>
 
 class PhononMaterial;
 
@@ -33,22 +34,28 @@ public:
                    const std::vector<const PhononMaterial*>& materials);
     SourceDeposit apply(ParticleStorage& particles,
                         const std::vector<const PhononMaterial*>& materials,
-                        const SourceGridView& grid, PrescribedHeatSource& source,
-                        double particle_volume_a3, double background_temperature);
+                        const SourceGridView& grid,
+                        PrescribedHeatSource& source,
+                        double particle_volume_a3,
+                        double background_temperature);
     SourceDeposit apply_full_matrix(ParticleStorage& particles,
-                        const std::vector<const PhononMaterial*>& materials,
-                        const SourceGridView& grid, PrescribedHeatSource& source,
-                        double particle_volume_a3, double background_temperature,
-                        std::mt19937_64& rng);
+                                    const std::vector<const PhononMaterial*>& materials,
+                                    const SourceGridView& grid,
+                                    PrescribedHeatSource& source,
+                                    double particle_volume_a3,
+                                    double background_temperature,
+                                    std::mt19937_64& rng);
 
 private:
     double mode_weight(const PhononMaterial& material, const std::array<int, 2>& mode) const;
     HeatSourceSpectrum spectrum_ = HeatSourceSpectrum::Thermal;
-    double frequency_min_ = -1.0, frequency_max_ = -1.0;
+    double frequency_min_ = -1.0;
+    double frequency_max_ = -1.0;
     std::vector<int> branches_;
     std::vector<double> weights_;
     bool linearized_thermal_ = false;
-    double gaussian_center_ = 0, gaussian_sigma_ = 1;
+    double gaussian_center_ = 0;
+    double gaussian_sigma_ = 1;
     // Complete-bank Gaussian energy fractions, indexed by material then active mode.
     // Independent of the number or distribution of Monte Carlo carriers.
     std::vector<std::vector<double>> gaussian_fractions_;
@@ -57,4 +64,4 @@ private:
     std::vector<double> increments_;
 };
 
-}  // namespace phonomc
+} // namespace phonomc

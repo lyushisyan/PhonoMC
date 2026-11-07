@@ -13,4 +13,4 @@ struct GridState {
     std::vector<Vec3> heat_flux;
     CellParticleIndex cells;
 };
-}  // namespace phonomc
+} // namespace phonomc

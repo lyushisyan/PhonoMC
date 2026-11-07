@@ -172,7 +172,7 @@ The following settings are opt-in. Omitting them preserves the original
 initialization, carrier population policy and fixed iteration count::
 
    [sampling]
-   resample_interval = 0  # required for existing-carrier RTA/Callaway
+   resample_interval = 0  # solver resampling is unsupported
 
    [driving]
    temperature_gradient = 100000
@@ -186,8 +186,8 @@ initialization, carrier population policy and fixed iteration count::
    relative_tolerance = 0.005
    absolute_tolerance = 0.01  # W/(m K)
 
-Nonzero ``resample_interval`` is rejected for the existing-carrier collision
-scheme. The former modal merging operation preserves signed energy but changes
+Nonzero ``resample_interval`` is rejected by every solver execution path.
+The standalone modal resampler remains an experimental C++ utility. The former modal merging operation preserves signed energy but changes
 its quadrature weights, hence its relaxation target. Retaining it would require
 explicit statistical-weight tracking, beyond a simple population cap. No
 near-zero carriers are deleted. In closed periodic/reflecting domains the
@@ -216,7 +216,7 @@ on the remaining long-time tail, an independent-sample confidence interval,
 or a substitute for timestep, spatial, modal and population convergence.
 
 ``summary.txt`` records whether this screen passed, the final time, the checked
-window means (global followed by cells), thresholds, warm-start age, removed
-carrier count, resampling wall time and its energy residual. An early stop is a
+window means (global followed by cells), thresholds and warm-start age.
+It does not emit the obsolete resampling counts, timing or energy-residual fields. An early stop is a
 normal successful process exit; consumers must inspect the recorded final time
 and termination reason rather than assume ``iterations*time_step`` was reached.

@@ -1,0 +1,53 @@
+{
+  "description": "Illustrative X-Z half disks extruded uniformly across channel width",
+  "simulation_enabled": false,
+  "units": "nm",
+  "devices": {
+    "FinFET": [
+      {
+        "center_xz_nm": [
+          39.0,
+          40.0
+        ],
+        "radius_nm": 3.0,
+        "y_range_nm": [
+          9.0,
+          15.0
+        ],
+        "z_half": "below_center",
+        "volume_nm3": 84.82300164692441,
+        "fraction_of_device_power": 1.0
+      }
+    ],
+    "GAAFET": [
+      {
+        "center_xz_nm": [
+          39.0,
+          32.0
+        ],
+        "radius_nm": 3.0,
+        "y_range_nm": [
+          7.0,
+          17.0
+        ],
+        "z_half": "below_center",
+        "volume_nm3": 141.3716694115407,
+        "fraction_of_device_power": 0.5
+      },
+      {
+        "center_xz_nm": [
+          39.0,
+          44.0
+        ],
+        "radius_nm": 3.0,
+        "y_range_nm": [
+          7.0,
+          17.0
+        ],
+        "z_half": "below_center",
+        "volume_nm3": 141.3716694115407,
+        "fraction_of_device_power": 0.5
+      }
+    ]
+  }
+}

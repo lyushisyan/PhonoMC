@@ -1,0 +1,55 @@
+# 中文手册配套输入；所有数值为教学起点，尚未认证收敛。
+# 原始示例：example/input_top_gaussian_square_heat.toml
+[geometry]
+model = "box"
+sizes = [100, 100, 100]
+
+[simulation]
+particle_count = 20000
+time_step = 0.1
+iterations = 500
+convergence_write_interval = 1
+random_seed = 24680
+compute_kappa = false
+initial_temperature = 300
+background_temperature = 300
+lifetime_temperature = "local"
+grid_xyz = [16, 16, 16]
+progress_temperature_summary_only = true
+
+[boundary]
+boundary_position = [
+  [-0.01, 0, 0, 0.01, 1, 1],
+  [0.99, 0, 0, 1.01, 1, 1],
+  [0, -0.01, 0, 1, 0.01, 1],
+  [0, 0.99, 0, 1, 1.01, 1],
+  [0, 0, -0.01, 1, 1, 0.01],
+  [0, 0, 0.99, 1, 1, 1.01]
+]
+boundary_conditions = ["P", "P", "P", "P", "T", "R"]
+boundary_values = [0, 0, 0, 0, 300, 1.0]
+periodic_pair = [
+  [-0.01, 0, 0, 0.01, 1, 1],
+  [0.99, 0, 0, 1.01, 1, 1],
+  [0, -0.01, 0, 1, 0.01, 1],
+  [0, 0.99, 0, 1, 1.01, 1]
+]
+
+[heat_source]
+enabled = true
+min = [20.0, 20.0, 95.0]
+max = [80.0, 80.0, 100.0]
+
+profile = "gaussian"
+power_density = 1.0e20
+center = [50.0, 50.0, 100.0]
+sigma = [8.0, 8.0, 0.0]
+
+# Square-wave time gate in ps: on for 5 ps every 20 ps.
+time_profile = "square"
+period = 20.0
+on_duration = 5.0
+
+[io]
+material_folder = "../../material/Si"
+output_folder = "../manual_runs/square_source"

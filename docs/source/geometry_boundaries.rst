@@ -49,7 +49,10 @@ robust to floating-point tolerances.
 Every declared selector must match at least one facet. The three arrays
 ``boundary_position``, ``boundary_conditions``, and ``boundary_values`` must
 have identical lengths. When selectors overlap, the later selector determines
-the final condition.
+the final condition **and its value**. A later ``T`` selector replaces the
+reservoir temperature in K; a later ``R`` selector replaces the roughness in nm.
+Roughness is converted to internal Angstrom exactly once; temperatures are
+not scaled.
 
 Thermal reservoirs
 ------------------
@@ -126,3 +129,31 @@ Before a long mesh run:
 4. check thermal-reservoir, rough-facet, and periodic-pair counts in
    ``summary.txt``
 5. render the mesh and temperature slices with ``plot_temperature_3d.py``
+
+Matched FinFET and GAAFET geometry
+----------------------------------------
+
+Run ``python3 tools/generate_matched_fets.py`` from the repository root to
+generate two comparable devices in ``model/matched_fets``. Both have a
+32 nm channel length, identical source/drain blocks, and a common
+52 x 24 x 20 nm substrate. The 10 x 24 x 30 nm source/drain blocks align
+with the substrate edges along both X and Y, with zero margins.
+The FinFET has a 6 x 20 nm fin cross-section; the GAAFET has two
+10 x 6 nm channels with 6 nm vertical gaps. Their total channel
+cross-sectional areas are both 120 nm squared, and their channel volumes
+are both 3840 nm cubed.
+
+The script exports connected union surfaces, separate component meshes,
+dimension metadata, serialized-mesh validation results, and a comparison
+preview. It checks edge incidence, winding, connectivity, and analytic volume.
+It also compares the area, projected boundary edges, and opposite normals
+of exterior X/Y face pairs. Repeat distances are 52 nm along X and 24 nm
+along Y. These checks do not configure or validate solver periodic pairing;
+``P`` boundaries and ``periodic_pair`` still require an explicit transport input.
+Use ``--help`` for dimension overrides and ``--no-preview`` to omit plotting.
+
+These are geometry assets only. The union STL does not encode internal
+material interfaces. Substrate material, interface physics, heat sources,
+and thermal boundaries must be specified separately before transport runs.
+Gate and oxide regions are not included. See ``model/matched_fets/README.md``
+for coordinates and component details.

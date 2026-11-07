@@ -1,0 +1,47 @@
+# 中文手册配套输入；所有数值为教学起点，尚未认证收敛。
+# 原始示例：example/input_finfet_stl_heat1e20.toml
+[geometry]
+model = "../../model/finfet.stl"
+
+[simulation]
+particle_count = 200000
+time_step = 0.05
+iterations = 2000
+random_seed = 12345
+compute_kappa = false
+initial_temperature = 300
+background_temperature = 300
+lifetime_temperature = "local"
+grid_xyz = [22, 36, 30]
+progress_temperature_summary_only = true
+
+[boundary]
+boundary_position = [
+  [0.1, 0.0, 0.0, 0.45, 1.0, 1.0],
+  [0.55, 0.0, 0.0, 0.9, 1.0, 1.0],
+  [-0.01, 0.0, 0.0, 0.01, 1.0, 1.0],
+  [0.99, 0.0, 0.0, 1.01, 1.0, 1.0],
+  [0.0, -0.01, 0.0, 1.0, 0.01, 1.0],
+  [0.0, 0.99, 0.0, 1.0, 1.01, 1.0],
+  [0.0, 0.0, -0.01, 1.0, 1.0, 0.01]
+]
+boundary_conditions = ["R", "R", "P", "P", "P", "P", "T"]
+boundary_values = [1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 300.0]
+periodic_pair = [
+  [-0.01, 0.0, 0.0, 0.01, 1.0, 1.0], [0.99, 0.0, 0.0, 1.01, 1.0, 1.0],
+  [0.0, -0.01, 0.0, 1.0, 0.01, 1.0], [0.0, 0.99, 0.0, 1.0, 1.01, 1.0]
+]
+
+[heat_source]
+enabled = true
+min = [6.6, 21.6, 21.0]
+max = [15.4, 28.8, 30.0]
+power_density = 1.0e20
+
+profile = "gaussian"
+center = [11.0, 25.2, 30.0]
+sigma  = [0.0, 1.44, 3.0]
+
+[io]
+material_folder = "../../material/Si"
+output_folder = "../manual_runs/finfet"

@@ -1,5 +1,6 @@
 #pragma once
 #include "material/ScatteringMatrix.h"
+
 #include <filesystem>
 
 namespace phonomc {

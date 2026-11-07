@@ -1,4 +1,5 @@
 #include "material/MaterialDataReader.h"
+
 #include <H5Cpp.h>
 #include <algorithm>
 #include <cctype>
@@ -14,7 +15,9 @@ using Mat3 = std::array<std::array<double, 3>, 3>;
 using Vec3 = std::array<double, 3>;
 
 // 函数说明：读取 HDF5 数值数据集并展开为一维数组。
-std::vector<double> read_dataset_nd_double(const H5::H5File& file, const std::string& name, std::vector<hsize_t>& dims_out) {
+std::vector<double> read_dataset_nd_double(const H5::H5File& file,
+                                           const std::string& name,
+                                           std::vector<hsize_t>& dims_out) {
     if (H5Lexists(file.getId(), name.c_str(), H5P_DEFAULT) <= 0) {
         throw std::runtime_error("Missing HDF5 dataset: " + name);
     }
@@ -40,20 +43,23 @@ std::vector<double> read_dataset_nd_double(const H5::H5File& file, const std::st
 
 // 函数说明：清理输入文本两端空白，保证配置与数据解析的稳健性。
 std::string trim(const std::string& s) {
-    const auto b = std::find_if_not(s.begin(), s.end(), [](unsigned char c) { return std::isspace(c) != 0; });
+    const auto b = std::find_if_not(s.begin(), s.end(), [](unsigned char c) {
+        return std::isspace(c) != 0;
+    });
     if (b == s.end()) {
         return "";
     }
-    const auto e = std::find_if_not(s.rbegin(), s.rend(), [](unsigned char c) { return std::isspace(c) != 0; }).base();
+    const auto e = std::find_if_not(s.rbegin(), s.rend(), [](unsigned char c) {
+                       return std::isspace(c) != 0;
+                   }).base();
     return std::string(b, e);
 }
 
 // 函数说明：计算 3x3 矩阵逆，用于晶格变换或四面体坐标变换。
 bool inverse3x3(const Mat3& a, Mat3& inv_out) {
-    const double det =
-        a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) -
-        a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0]) +
-        a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
+    const double det = a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) -
+                       a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0]) +
+                       a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
     if (std::abs(det) <= 1e-20) {
         return false;
     }
@@ -96,8 +102,10 @@ LatticeData read_poscar_lattice(const std::filesystem::path& path) {
         throw std::runtime_error("POSCAR has insufficient lines.");
     }
     const double scale = std::stod(lines[1]);
-    if (!std::isfinite(scale)) throw std::runtime_error("Non-finite POSCAR scale.");
-    std::array<std::array<double, 3>, 3> a {};
+    if (!std::isfinite(scale)) {
+        throw std::runtime_error("Non-finite POSCAR scale.");
+    }
+    std::array<std::array<double, 3>, 3> a{};
     for (int i = 0; i < 3; ++i) {
         std::istringstream iss(lines[2 + i]);
         if (!(iss >> a[i][0] >> a[i][1] >> a[i][2])) {
@@ -106,18 +114,21 @@ LatticeData read_poscar_lattice(const std::filesystem::path& path) {
         a[i][0] *= scale;
         a[i][1] *= scale;
         a[i][2] *= scale;
-        for (double x : a[i]) if (!std::isfinite(x)) throw std::runtime_error("Non-finite POSCAR lattice.");
+        for (double x : a[i]) {
+            if (!std::isfinite(x)) {
+                throw std::runtime_error("Non-finite POSCAR lattice.");
+            }
+        }
     }
 
-    const double det =
-        a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) -
-        a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0]) +
-        a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
+    const double det = a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) -
+                       a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0]) +
+                       a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
     lattice.volume_a3 = std::abs(det);
     if (!std::isfinite(lattice.volume_a3) || !(lattice.volume_a3 > 0.0)) {
         throw std::runtime_error("POSCAR unit-cell volume is non-positive.");
     }
-    Mat3 inv {};
+    Mat3 inv{};
     if (!inverse3x3(a, inv)) {
         throw std::runtime_error("Failed to invert POSCAR lattice.");
     }
@@ -126,8 +137,13 @@ LatticeData read_poscar_lattice(const std::filesystem::path& path) {
             lattice.reciprocal[i][j] = inv[i][j] * (2.0 * M_PI);
         }
     }
-    for (const auto& row : lattice.reciprocal)
-        for (double x : row) if (!std::isfinite(x)) throw std::runtime_error("Non-finite reciprocal lattice.");
+    for (const auto& row : lattice.reciprocal) {
+        for (double x : row) {
+            if (!std::isfinite(x)) {
+                throw std::runtime_error("Non-finite reciprocal lattice.");
+            }
+        }
+    }
     return lattice;
 }
 
@@ -135,8 +151,9 @@ MaterialData read_material_data(const std::filesystem::path& folder, std::ostrea
     try {
         namespace fs = std::filesystem;
         MaterialData data;
-        try { data.lattice = read_poscar_lattice(folder / "POSCAR"); }
-        catch (const std::exception& e) {
+        try {
+            data.lattice = read_poscar_lattice(folder / "POSCAR");
+        } catch (const std::exception& e) {
             throw std::runtime_error(std::string("Strict POSCAR loading failed: ") + e.what());
         }
         fs::path hdf_path = folder / "kappa-fbz.hdf5";
@@ -155,14 +172,20 @@ MaterialData read_material_data(const std::filesystem::path& folder, std::ostrea
                 }
             }
             if (candidates.size() > 1) {
-                throw std::runtime_error("Ambiguous HDF5 files: provide kappa-fbz.hdf5 or kappa.hdf5.");
+                throw std::runtime_error(
+                    "Ambiguous HDF5 files: provide kappa-fbz.hdf5 or kappa.hdf5.");
             }
-            if (candidates.size() == 1) hdf_path = candidates.front();
+            if (candidates.size() == 1) {
+                hdf_path = candidates.front();
+            }
         }
         if (!fs::exists(hdf_path)) {
-            throw std::runtime_error("No HDF5 file found under material folder: " + folder.string());
+            throw std::runtime_error("No HDF5 file found under material folder: " +
+                                     folder.string());
         }
-        if (progress) *progress << "PhononMaterial HDF5 file: " << hdf_path.string() << '\n';
+        if (progress) {
+            *progress << "PhononMaterial HDF5 file: " << hdf_path.string() << '\n';
+        }
 
         H5::H5File file(hdf_path.string(), H5F_ACC_RDONLY);
 
@@ -207,8 +230,11 @@ MaterialData read_material_data(const std::filesystem::path& folder, std::ostrea
             std::vector<hsize_t> d_weight;
             const auto weights = read_dataset_nd_double(file, "weight", d_weight);
             if (d_weight.size() != 1 || d_weight[0] != d_omega[0] ||
-                std::any_of(weights.begin(), weights.end(), [](double w) { return w != 1.0; })) {
-                throw std::runtime_error("Full Brillouin-zone data requires one unit weight per qpoint");
+                std::any_of(weights.begin(), weights.end(), [](double w) {
+                    return w != 1.0;
+                })) {
+                throw std::runtime_error(
+                    "Full Brillouin-zone data requires one unit weight per qpoint");
             }
         }
 
@@ -221,8 +247,11 @@ MaterialData read_material_data(const std::filesystem::path& folder, std::ostrea
         data.group_velocity.resize(static_cast<size_t>(nm));
         for (int q = 0; q < data.qpoints; ++q) {
             for (int b = 0; b < data.branches; ++b) {
-                const size_t base = (static_cast<size_t>(q) * static_cast<size_t>(data.branches) + static_cast<size_t>(b)) * 3u;
-                data.group_velocity[static_cast<size_t>(q * data.branches + b)] = {gv[base + 0], gv[base + 1], gv[base + 2]};
+                const size_t base = (static_cast<size_t>(q) * static_cast<size_t>(data.branches) +
+                                     static_cast<size_t>(b)) *
+                                    3u;
+                data.group_velocity[static_cast<size_t>(q * data.branches + b)] = {
+                    gv[base + 0], gv[base + 1], gv[base + 2]};
             }
         }
         std::vector<hsize_t> d_temp;
@@ -233,25 +262,37 @@ MaterialData read_material_data(const std::filesystem::path& folder, std::ostrea
 
         std::vector<hsize_t> d_gamma;
         data.gamma = read_dataset_nd_double(file, "gamma", d_gamma);
-        if (d_gamma.size() != 3 || d_gamma[0] != data.temperatures.size() || d_gamma[1] != static_cast<hsize_t>(data.qpoints) ||
+        if (d_gamma.size() != 3 || d_gamma[0] != data.temperatures.size() ||
+            d_gamma[1] != static_cast<hsize_t>(data.qpoints) ||
             d_gamma[2] != static_cast<hsize_t>(data.branches)) {
             throw std::runtime_error("gamma shape mismatch");
         }
         for (const auto& entry : {std::make_pair("gamma_N", &data.gamma_normal),
                                   std::make_pair("gamma_U", &data.gamma_umklapp)}) {
-            if (H5Lexists(file.getId(), entry.first, H5P_DEFAULT)<=0) continue;
+            if (H5Lexists(file.getId(), entry.first, H5P_DEFAULT) <= 0) {
+                continue;
+            }
             std::vector<hsize_t> dims;
-            *entry.second=read_dataset_nd_double(file,entry.first,dims);
-            if (dims!=d_gamma) throw std::runtime_error(std::string(entry.first)+" shape mismatch");
+            *entry.second = read_dataset_nd_double(file, entry.first, dims);
+            if (dims != d_gamma) {
+                throw std::runtime_error(std::string(entry.first) + " shape mismatch");
+            }
         }
         for (const char* name : {"gamma_isotope", "gamma_impurity", "gamma_defect"}) {
-            if (H5Lexists(file.getId(), name, H5P_DEFAULT) <= 0) continue;
+            if (H5Lexists(file.getId(), name, H5P_DEFAULT) <= 0) {
+                continue;
+            }
             std::vector<hsize_t> dims;
             auto values = read_dataset_nd_double(file, name, dims);
-            if (dims != d_omega && dims != d_gamma)
-                throw std::runtime_error(std::string(name) + " shape mismatch: expected (q, branch) or (temperature, q, branch)");
+            if (dims != d_omega && dims != d_gamma) {
+                throw std::runtime_error(
+                    std::string(name) +
+                    " shape mismatch: expected (q, branch) or (temperature, q, branch)");
+            }
             data.gamma_resistive.emplace(name, std::move(values));
-            if (progress) *progress << "Including resistive linewidth " << name << "\n";
+            if (progress) {
+                *progress << "Including resistive linewidth " << name << "\n";
+            }
         }
         validate_material_data(data);
         return data;

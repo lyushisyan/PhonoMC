@@ -1,0 +1,42 @@
+# 中文手册配套输入；所有数值为教学起点，尚未认证收敛。
+# 原始示例：example/input_cross_100nm.toml
+[geometry]
+model = "box"
+sizes = [100, 100, 100]
+
+[simulation]
+particle_count = 10000
+time_step = 0.1
+iterations = 200
+random_seed = 12345
+compute_kappa = true
+transport_axis = "x"
+initial_temperature = "linear"
+background_temperature = 300
+lifetime_temperature = "local"
+grid_xyz = [10, 1, 1]
+convergence_write_interval = 10
+progress_temperature_summary_only = true
+
+[scattering]
+model = "rta"
+
+[boundary]
+boundary_position = [
+  [-0.01, 0.0, 0.0, 0.01, 1.0, 1.0],
+  [0.99, 0.0, 0.0, 1.01, 1.0, 1.0],
+  [0.0, -0.01, 0.0, 1.0, 0.01, 1.0],
+  [0.0, 0.99, 0.0, 1.0, 1.01, 1.0],
+  [0.0, 0.0, -0.01, 1.0, 1.0, 0.01],
+  [0.0, 0.0, 0.99, 1.0, 1.0, 1.01]
+]
+boundary_conditions = ["T", "T", "P", "P", "P", "P"]
+boundary_values = [301, 299, 0, 0, 0, 0]
+periodic_pair = [
+  [0.0, -0.01, 0.0, 1.0, 0.01, 1.0], [0.0, 0.99, 0.0, 1.0, 1.01, 1.0],
+  [0.0, 0.0, -0.01, 1.0, 1.0, 0.01], [0.0, 0.0, 0.99, 1.0, 1.0, 1.01]
+]
+
+[io]
+material_folder = "../../material/Si"
+output_folder = "../manual_runs/cross_smoke"

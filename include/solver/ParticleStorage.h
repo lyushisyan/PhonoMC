@@ -18,6 +18,7 @@ struct ParticleRecord {
     Vec3 position = {};
     Vec3 velocity = {};
     Vec3 collision_position = {};
+    // Remaining boundary flight time divided by the configured timestep.
     double collision_time = std::numeric_limits<double>::infinity();
     double temperature = 300.0;
     double omega = 0.0;
@@ -37,6 +38,7 @@ struct ParticleRecord {
 class ParticleStorage {
 public:
     int size() const { return static_cast<int>(modes.size()); }
+
     bool aligned() const;
     void reset(int count);
     int append(const ParticleRecord& particle);
@@ -45,9 +47,11 @@ public:
     // Fixed quadrature volumes by material. Empty retains the single-material
     // API default. Multimaterial sampling uses equal physical state weights.
     std::vector<double> material_spatial_volumes_a3;
+
     double spatial_volume(int material, double fallback) const {
-        return material_spatial_volumes_a3.empty() ? fallback :
-            material_spatial_volumes_a3.at(static_cast<size_t>(material));
+        return material_spatial_volumes_a3.empty()
+                   ? fallback
+                   : material_spatial_volumes_a3.at(static_cast<size_t>(material));
     }
 
     std::vector<std::array<int, 2>> modes;
@@ -55,7 +59,7 @@ public:
     std::vector<Vec3> positions;
     std::vector<Vec3> velocities;
     std::vector<Vec3> collision_positions;
-    std::vector<double> collision_times;
+    std::vector<double> collision_times; // dimensionless remaining time / timestep
     std::vector<double> temperatures;
     std::vector<double> omega;
     std::vector<double> occupation;
@@ -68,15 +72,23 @@ public:
 
 private:
     auto payload_arrays() {
-        return std::tie(modes, material_ids, positions, velocities,
-                        collision_positions, collision_times, temperatures,
-                        omega, occupation, energies, grid_ids, collision_facets,
-                        collision_conditions, collision_failed);
+        return std::tie(modes,
+                        material_ids,
+                        positions,
+                        velocities,
+                        collision_positions,
+                        collision_times,
+                        temperatures,
+                        omega,
+                        occupation,
+                        energies,
+                        grid_ids,
+                        collision_facets,
+                        collision_conditions,
+                        collision_failed);
     }
 
-    auto arrays() {
-        return std::tuple_cat(payload_arrays(), std::tie(alive));
-    }
+    auto arrays() { return std::tuple_cat(payload_arrays(), std::tie(alive)); }
 };
 
-}  // namespace phonomc
+} // namespace phonomc

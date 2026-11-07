@@ -1,0 +1,38 @@
+# 非线性合成演示：材料只有 300 K 一行，必须固定 N/R 率查询为 300 K。
+# 中文手册配套输入；所有数值为教学起点，尚未认证收敛。
+# 原始示例：example/input_callaway.toml
+# Runnable SYNTHETIC demonstration, not a material prediction.
+# First run: python tools/create_callaway_demo.py --out docs/manual_runs/callaway_demo_material (from the repository root).
+# Use validated same-run gamma_N/gamma_U data for real materials.
+[geometry]
+model = "box"
+sizes = [20, 10, 10]
+
+[simulation]
+particle_count = 512
+time_step = 0.05
+iterations = 40
+convergence_write_interval = 10
+random_seed = 24680
+grid_xyz = [4, 1, 1]
+background_temperature = 300
+initial_temperature = 301
+lifetime_temperature = 300
+compute_kappa = false
+
+[scattering]
+model = "callaway"
+callaway_formulation = "nonlinear"
+
+[boundary]
+boundary_position = [
+  [-0.01, 0, 0, 0.01, 1, 1], [0.99, 0, 0, 1.01, 1, 1],
+  [0, -0.01, 0, 1, 0.01, 1], [0, 0.99, 0, 1, 1.01, 1],
+  [0, 0, -0.01, 1, 1, 0.01], [0, 0, 0.99, 1, 1, 1.01]
+]
+boundary_conditions = ["T", "T", "R", "R", "R", "R"]
+boundary_values = [302, 298, 0, 0, 0, 0]
+
+[io]
+material_folder = "../manual_runs/callaway_demo_material"
+output_folder = "../manual_runs/callaway_nonlinear"

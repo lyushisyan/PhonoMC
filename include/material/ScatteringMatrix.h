@@ -25,7 +25,9 @@ void validate_scattering_matrix_data(const ScatteringMatrixData& data);
 class ScatteringMatrix {
 public:
     explicit ScatteringMatrix(ScatteringMatrixData data);
+
     const ScatteringMatrixData& data() const noexcept { return data_; }
+
     std::size_t size() const noexcept { return data_.modes.size(); }
 
     // Sparse exponential action exp(dt A) E. No dense propagator is formed,

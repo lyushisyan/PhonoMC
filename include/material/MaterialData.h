@@ -7,16 +7,19 @@
 namespace phonomc {
 using MaterialVec3 = std::array<double, 3>;
 using MaterialMat3 = std::array<MaterialVec3, 3>;
+
 struct LatticeData {
     double volume_a3 = 0;
-    MaterialMat3 reciprocal {};
+    MaterialMat3 reciprocal{};
 };
+
 // Owned source data, not a material model. q-major/branch-minor ordering;
 // gamma is temperature-major, then q, then branch. No HDF5 handles escape.
 struct MaterialData {
     LatticeData lattice;
-    int qpoints = 0, branches = 0;
-    std::array<int, 3> mesh {};
+    int qpoints = 0;
+    int branches = 0;
+    std::array<int, 3> mesh{};
     std::vector<double> frequency_thz; // raw input, including finite negative values
     std::vector<MaterialVec3> qpoint_fractions, group_velocity; // velocity: Angstrom/ps
     std::vector<double> temperatures, gamma; // K; linewidth in THz (not inverse lifetime)

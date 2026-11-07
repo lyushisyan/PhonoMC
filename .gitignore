@@ -10,6 +10,7 @@
 /tests/
 /Testing/
 /docs/build/
+/docs/manual_runs/
 
 # Local campaigns, results, manuscript assets and data archives
 /calculation/
@@ -29,6 +30,10 @@
 
 # Keep a curated set of public TOML examples.
 *.toml
+!docs/user_manual_examples/*.toml
+!model/matched_fets/finfet_heat_source.toml
+!model/matched_fets/gaafet_heat_source.toml
+!model/matched_fets/three_layer_comparison/*.toml
 !example/
 !example/input_cross_100nm.toml
 !example/input_finfet_stl_heat1e20.toml

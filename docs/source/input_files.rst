@@ -51,7 +51,10 @@ The supported sections are:
 ``[sampling]`` and ``[convergence]``
 ------------------------------------
 
-Existing-carrier RTA/Callaway requires ``sampling.resample_interval = 0``.
+Every solver execution path requires ``sampling.resample_interval = 0``.
+The standalone experimental modal resampler is not enabled through TOML.
+``sampling.per_mode_sign`` is retained as an inactive input (integer 1–1024);
+it does not change solver sampling.
 Optional gradient warm starts (``driving.warm_start_ps``) and stationarity
 screens (``convergence.enabled`` and window/tolerance settings) are documented
 in :doc:`temperature_gradient`. They are not available for ordinary
@@ -86,10 +89,12 @@ Example:
 ----------------
 
 ``particle_count``
-   Positive particle count. Default: ``10000``.
+   Finite initial particle count, rounded to the nearest integer; the rounded
+   value must lie in ``[1, INT_MAX]``. Default: ``10000``. An empty or out-of-range
+   population is rejected, not replaced.
 
 ``time_step``
-   Positive time step in ps. Default: ``1.0``.
+   Finite positive time step in ps, used without a lower clamp. Default: ``1.0``.
 
 ``iterations``
    Positive integer number of time steps. Default: ``10000``.
@@ -103,7 +108,7 @@ Example:
    Required positive integer grid dimensions ``[nx,ny,nz]``.
 
 ``initial_temperature``
-   Either an unquoted numeric temperature in K or ``"linear"``. Linear mode
+   Either an unquoted finite non-negative temperature in K or ``"linear"``. Linear mode
    interpolates between the coldest and hottest valid thermal reservoirs.
 
 ``compute_kappa``

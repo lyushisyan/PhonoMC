@@ -1,0 +1,15 @@
+# Heat-source section only; merge into a complete simulation input.
+# Total power is a reference value per FET, not per GAAFET layer.
+# X is Gaussian with the solver's +/-2 sigma cutoff; Y/Z are uniform.
+# Only active material cells are heated; GAAFET gaps are excluded.
+[heat_source]
+enabled = true
+profile = "gaussian"
+center = [39.0, 12.0, 30.0]
+sigma = [1.5, 0.0, 0.0]
+min = [36.0, 9.0, 20.0]
+max = [42.0, 15.0, 40.0]
+total_power = 1e-06
+spectrum = "thermal"
+time_profile = "constant"
+start_time = 0
